@@ -12,6 +12,7 @@ const SUITE_VERSION: &str = "s12-v1";
 #[derive(Debug, Clone)]
 struct BenchSuiteArgs {
     profiles: Vec<String>,
+    scenarios: Vec<String>,
     concurrency_profile: String,
     concurrency_levels: Vec<usize>,
     dataset_path: PathBuf,
@@ -29,6 +30,7 @@ impl Default for BenchSuiteArgs {
     fn default() -> Self {
         Self {
             profiles: vec!["10k".to_string()],
+            scenarios: Vec::new(),
             concurrency_profile: "10k".to_string(),
             concurrency_levels: vec![1, 2, 4],
             dataset_path: PathBuf::from("examples/eval_dataset.json"),
@@ -163,7 +165,7 @@ fn run_profile_matrices(
     for profile in &args.profiles {
         eprintln!("running benchmark matrix profile={profile}");
         let base = profile_to_config(profile).map_err(std::io::Error::other)?;
-        let scenarios = vec![
+        let mut scenarios = vec![
             (
                 "weighted + brute_force".to_string(),
                 runtime_with_mode(args.durability_profile, VectorIndexMode::BruteForce),
@@ -207,6 +209,15 @@ fn run_profile_matrices(
                 },
             ),
         ];
+        if !args.scenarios.is_empty() {
+            scenarios.retain(|(name, _, _)| args.scenarios.contains(name));
+        }
+        if scenarios.is_empty() {
+            return Err(std::io::Error::other(format!(
+                "no benchmark scenarios selected for profile `{profile}`"
+            ))
+            .into());
+        }
 
         let mut runs = Vec::with_capacity(scenarios.len());
         for (name, runtime, config) in scenarios {
@@ -278,6 +289,10 @@ fn parse_args(args: Vec<String>) -> Result<BenchSuiteArgs, String> {
             "--profiles" => {
                 i += 1;
                 cfg.profiles = parse_csv_strings(&args, i, "--profiles")?;
+            }
+            "--scenarios" => {
+                i += 1;
+                cfg.scenarios = parse_csv_strings(&args, i, "--scenarios")?;
             }
             "--concurrency-profile" => {
                 i += 1;
@@ -483,7 +498,7 @@ fn profile_to_config(profile: &str) -> Result<BenchmarkConfig, String> {
             concurrency: 1,
             embedding_dim: 384,
             top_k: 10,
-            candidate_limit: 2000,
+            candidate_limit: 1800,
             alpha: 0.65,
             fusion_strategy: FusionStrategy::Weighted,
             batch_size: 2000,
@@ -495,7 +510,7 @@ fn profile_to_config(profile: &str) -> Result<BenchmarkConfig, String> {
             concurrency: 1,
             embedding_dim: 384,
             top_k: 10,
-            candidate_limit: 4000,
+            candidate_limit: 2400,
             alpha: 0.65,
             fusion_strategy: FusionStrategy::Weighted,
             batch_size: 4000,
@@ -525,7 +540,7 @@ fn index_mode_name(mode: VectorIndexMode) -> &'static str {
 }
 
 fn usage() -> String {
-    "usage: cargo run --bin sqlrite-bench-suite -- [--profiles quick|10k|100k|1m|10m,...] [--concurrency-profile quick|10k|100k|1m|10m] [--concurrency-levels N,N,...] [--dataset PATH] [--dataset-id ID] [--embedding-model NAME] [--hardware-class NAME] [--durability balanced|durable|fast_unsafe] [--rrf-k F] [--eval-index-modes brute_force|lsh_ann|hnsw_baseline|disabled,...] [--skip-eval] [--output PATH]".to_string()
+    "usage: cargo run --bin sqlrite-bench-suite -- [--profiles quick|10k|100k|1m|10m,...] [--scenarios \"weighted + lsh_ann,weighted + hnsw_baseline,...\"] [--concurrency-profile quick|10k|100k|1m|10m] [--concurrency-levels N,N,...] [--dataset PATH] [--dataset-id ID] [--embedding-model NAME] [--hardware-class NAME] [--durability balanced|durable|fast_unsafe] [--rrf-k F] [--eval-index-modes brute_force|lsh_ann|hnsw_baseline|disabled,...] [--skip-eval] [--output PATH]".to_string()
 }
 
 fn print_human_summary(report: &BenchSuiteReport) {

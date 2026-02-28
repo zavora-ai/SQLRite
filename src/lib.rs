@@ -48,6 +48,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 const LATEST_SCHEMA_VERSION: i64 = 3;
+const HYBRID_FTS_SCORE_LOOKUP_SKIP_CANDIDATE_LIMIT: usize = 512;
 const DOC_UPSERT_SQL: &str = "
     INSERT INTO documents (id, source, metadata) VALUES (?1, ?2, '{}')
     ON CONFLICT(id) DO UPDATE SET source = COALESCE(excluded.source, documents.source)
@@ -875,6 +876,12 @@ impl SqlRite {
         if let Some(text) = query_text
             && self.fts_enabled
             && text_scores.is_empty()
+            && !should_skip_fts_score_lookup(
+                use_vector,
+                self.fts_enabled,
+                vector_candidate_ids.len(),
+                request.candidate_limit,
+            )
         {
             let candidate_ids: Vec<String> =
                 candidates.iter().map(|chunk| chunk.id.clone()).collect();
@@ -1532,6 +1539,19 @@ fn merge_candidate_ids(
     }
 
     merged
+}
+
+fn should_skip_fts_score_lookup(
+    use_vector: bool,
+    fts_enabled: bool,
+    vector_candidate_count: usize,
+    candidate_limit: usize,
+) -> bool {
+    if !use_vector || !fts_enabled {
+        return false;
+    }
+    candidate_limit >= HYBRID_FTS_SCORE_LOOKUP_SKIP_CANDIDATE_LIMIT
+        && vector_candidate_count >= candidate_limit
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2823,5 +2843,29 @@ mod tests {
         )?;
         assert_eq!(rrf[0].chunk_id, "b");
         Ok(())
+    }
+
+    #[test]
+    fn skip_fts_score_lookup_for_large_vector_hybrid_candidates() {
+        assert!(should_skip_fts_score_lookup(
+            true,
+            true,
+            HYBRID_FTS_SCORE_LOOKUP_SKIP_CANDIDATE_LIMIT,
+            HYBRID_FTS_SCORE_LOOKUP_SKIP_CANDIDATE_LIMIT
+        ));
+        assert!(should_skip_fts_score_lookup(
+            true,
+            true,
+            2000,
+            HYBRID_FTS_SCORE_LOOKUP_SKIP_CANDIDATE_LIMIT
+        ));
+    }
+
+    #[test]
+    fn keep_fts_score_lookup_for_small_or_non_vector_queries() {
+        assert!(!should_skip_fts_score_lookup(true, true, 50, 50));
+        assert!(!should_skip_fts_score_lookup(false, true, 1000, 1000));
+        assert!(!should_skip_fts_score_lookup(true, false, 1000, 1000));
+        assert!(!should_skip_fts_score_lookup(true, true, 100, 1000));
     }
 }

@@ -1,0 +1,711 @@
+{
+  "metadata": {
+    "suite_version": "s12-v1",
+    "generated_at_unix_seconds": 1772300633,
+    "embedding_model": "deterministic-local-v1",
+    "dataset_id": "examples/eval_dataset.json",
+    "dataset_path": "/Users/jameskaranja/Developer/projects/SQLRight/examples/eval_dataset.json",
+    "hardware_class": "local-Darwin-arm64",
+    "host_os": "macos",
+    "host_arch": "aarch64",
+    "host_cpu_threads": 10
+  },
+  "benchmark_profiles": [
+    {
+      "profile": "100k",
+      "runs": [
+        {
+          "name": "weighted + lsh_ann",
+          "report": {
+            "corpus_size": 100000,
+            "query_count": 1000,
+            "warmup_queries": 200,
+            "concurrency": 1,
+            "embedding_dim": 256,
+            "top_k": 10,
+            "candidate_limit": 1000,
+            "alpha": 0.65,
+            "fusion_strategy": "weighted",
+            "vector_index_mode": "lsh_ann",
+            "vector_storage_kind": "f32",
+            "sqlite_mmap_size_bytes": 268435456,
+            "sqlite_cache_size_kib": 65536,
+            "ingest_duration_ms": 8696.741333,
+            "query_duration_ms": 24495.906958,
+            "total_duration_ms": 38072.567,
+            "qps": 40.82314656544753,
+            "top1_hit_rate": 1.0,
+            "latency": {
+              "avg_ms": 24.476889163,
+              "p50_ms": 24.852375,
+              "p95_ms": 26.240583,
+              "p99_ms": 30.595416,
+              "min_ms": 20.487584,
+              "max_ms": 39.257915999999994
+            },
+            "ingest_chunks_per_sec": 11498.559767501365,
+            "embedding_bytes": 102400000,
+            "content_bytes": 5301390,
+            "dataset_payload_bytes": 107701390,
+            "vector_index_entries": 100000,
+            "vector_index_dimension": 256,
+            "vector_index_estimated_memory_bytes": 117563856,
+            "approx_working_set_bytes": 225265246
+          }
+        },
+        {
+          "name": "weighted + hnsw_baseline",
+          "report": {
+            "corpus_size": 100000,
+            "query_count": 1000,
+            "warmup_queries": 200,
+            "concurrency": 1,
+            "embedding_dim": 256,
+            "top_k": 10,
+            "candidate_limit": 1000,
+            "alpha": 0.65,
+            "fusion_strategy": "weighted",
+            "vector_index_mode": "hnsw_baseline",
+            "vector_storage_kind": "f32",
+            "sqlite_mmap_size_bytes": 268435456,
+            "sqlite_cache_size_kib": 65536,
+            "ingest_duration_ms": 10414.093542,
+            "query_duration_ms": 25887.640874999997,
+            "total_duration_ms": 41264.801209,
+            "qps": 38.628471587216424,
+            "top1_hit_rate": 1.0,
+            "latency": {
+              "avg_ms": 25.868022058000015,
+              "p50_ms": 25.230791,
+              "p95_ms": 32.754917,
+              "p99_ms": 46.446417,
+              "min_ms": 20.706875,
+              "max_ms": 64.52025
+            },
+            "ingest_chunks_per_sec": 9602.371977618635,
+            "embedding_bytes": 102400000,
+            "content_bytes": 5301390,
+            "dataset_payload_bytes": 107701390,
+            "vector_index_entries": 100000,
+            "vector_index_dimension": 256,
+            "vector_index_estimated_memory_bytes": 120870936,
+            "approx_working_set_bytes": 228572326
+          }
+        }
+      ]
+    },
+    {
+      "profile": "1m",
+      "runs": [
+        {
+          "name": "weighted + lsh_ann",
+          "report": {
+            "corpus_size": 1000000,
+            "query_count": 2000,
+            "warmup_queries": 500,
+            "concurrency": 1,
+            "embedding_dim": 384,
+            "top_k": 10,
+            "candidate_limit": 1800,
+            "alpha": 0.65,
+            "fusion_strategy": "weighted",
+            "vector_index_mode": "lsh_ann",
+            "vector_storage_kind": "f32",
+            "sqlite_mmap_size_bytes": 268435456,
+            "sqlite_cache_size_kib": 65536,
+            "ingest_duration_ms": 110132.02870800001,
+            "query_duration_ms": 141472.596875,
+            "total_duration_ms": 281610.191334,
+            "qps": 14.13701341587111,
+            "top1_hit_rate": 0.8085,
+            "latency": {
+              "avg_ms": 70.69962180949987,
+              "p50_ms": 63.317625,
+              "p95_ms": 115.123125,
+              "p99_ms": 144.776792,
+              "min_ms": 46.520708,
+              "max_ms": 199.846833
+            },
+            "ingest_chunks_per_sec": 9080.010708341377,
+            "embedding_bytes": 1536000000,
+            "content_bytes": 54013890,
+            "dataset_payload_bytes": 1590013890,
+            "vector_index_entries": 1000000,
+            "vector_index_dimension": 384,
+            "vector_index_estimated_memory_bytes": 1686368856,
+            "approx_working_set_bytes": 3276382746
+          }
+        },
+        {
+          "name": "weighted + hnsw_baseline",
+          "report": {
+            "corpus_size": 1000000,
+            "query_count": 2000,
+            "warmup_queries": 500,
+            "concurrency": 1,
+            "embedding_dim": 384,
+            "top_k": 10,
+            "candidate_limit": 1800,
+            "alpha": 0.65,
+            "fusion_strategy": "weighted",
+            "vector_index_mode": "hnsw_baseline",
+            "vector_storage_kind": "f32",
+            "sqlite_mmap_size_bytes": 268435456,
+            "sqlite_cache_size_kib": 65536,
+            "ingest_duration_ms": 149135.828542,
+            "query_duration_ms": 125826.1905,
+            "total_duration_ms": 305202.193333,
+            "qps": 15.894941999376513,
+            "top1_hit_rate": 0.8655,
+            "latency": {
+              "avg_ms": 62.880143077,
+              "p50_ms": 60.3355,
+              "p95_ms": 81.51937500000001,
+              "p99_ms": 113.360333,
+              "min_ms": 47.009875,
+              "max_ms": 183.215833
+            },
+            "ingest_chunks_per_sec": 6705.296840982631,
+            "embedding_bytes": 1536000000,
+            "content_bytes": 54013890,
+            "dataset_payload_bytes": 1590013890,
+            "vector_index_entries": 1000000,
+            "vector_index_dimension": 384,
+            "vector_index_estimated_memory_bytes": 1718719304,
+            "approx_working_set_bytes": 3308733194
+          }
+        }
+      ]
+    }
+  ],
+  "concurrency_sweep": {
+    "profile": "quick",
+    "scenario": "weighted + brute_force",
+    "runs": [
+      {
+        "concurrency": 1,
+        "report": {
+          "corpus_size": 3000,
+          "query_count": 200,
+          "warmup_queries": 50,
+          "concurrency": 1,
+          "embedding_dim": 64,
+          "top_k": 10,
+          "candidate_limit": 300,
+          "alpha": 0.65,
+          "fusion_strategy": "weighted",
+          "vector_index_mode": "brute_force",
+          "vector_storage_kind": "f32",
+          "sqlite_mmap_size_bytes": 268435456,
+          "sqlite_cache_size_kib": 65536,
+          "ingest_duration_ms": 110.248375,
+          "query_duration_ms": 1386.277583,
+          "total_duration_ms": 1822.757625,
+          "qps": 144.27125018294404,
+          "top1_hit_rate": 1.0,
+          "latency": {
+            "avg_ms": 6.920960454999999,
+            "p50_ms": 6.5403329999999995,
+            "p95_ms": 8.568125,
+            "p99_ms": 11.794625,
+            "min_ms": 6.024083,
+            "max_ms": 23.392625
+          },
+          "ingest_chunks_per_sec": 27211.28542710947,
+          "embedding_bytes": 768000,
+          "content_bytes": 155265,
+          "dataset_payload_bytes": 923265,
+          "vector_index_entries": 3000,
+          "vector_index_dimension": 64,
+          "vector_index_estimated_memory_bytes": 930000,
+          "approx_working_set_bytes": 1853265
+        }
+      },
+      {
+        "concurrency": 2,
+        "report": {
+          "corpus_size": 3000,
+          "query_count": 200,
+          "warmup_queries": 50,
+          "concurrency": 2,
+          "embedding_dim": 64,
+          "top_k": 10,
+          "candidate_limit": 300,
+          "alpha": 0.65,
+          "fusion_strategy": "weighted",
+          "vector_index_mode": "brute_force",
+          "vector_storage_kind": "f32",
+          "sqlite_mmap_size_bytes": 268435456,
+          "sqlite_cache_size_kib": 65536,
+          "ingest_duration_ms": 126.75804199999999,
+          "query_duration_ms": 2624.724375,
+          "total_duration_ms": 3072.951,
+          "qps": 76.1984770305644,
+          "top1_hit_rate": 1.0,
+          "latency": {
+            "avg_ms": 6.269505205000005,
+            "p50_ms": 6.258208000000001,
+            "p95_ms": 6.433542,
+            "p99_ms": 6.4795419999999995,
+            "min_ms": 6.129916,
+            "max_ms": 6.493167000000001
+          },
+          "ingest_chunks_per_sec": 23667.137427067548,
+          "embedding_bytes": 768000,
+          "content_bytes": 155265,
+          "dataset_payload_bytes": 923265,
+          "vector_index_entries": 3000,
+          "vector_index_dimension": 64,
+          "vector_index_estimated_memory_bytes": 930000,
+          "approx_working_set_bytes": 1853265
+        }
+      }
+    ]
+  },
+  "eval_runs": [
+    {
+      "index_mode": "brute_force",
+      "report": {
+        "summary": {
+          "corpus_size": 5,
+          "query_count": 3,
+          "k_values": [
+            1,
+            3,
+            5
+          ]
+        },
+        "aggregate_metrics_at_k": {
+          "3": {
+            "recall": 1.0,
+            "precision": 0.44444445,
+            "mrr": 1.0,
+            "ndcg": 0.9732403,
+            "hit_rate": 1.0
+          },
+          "5": {
+            "recall": 1.0,
+            "precision": 0.26666668,
+            "mrr": 1.0,
+            "ndcg": 0.9732403,
+            "hit_rate": 1.0
+          },
+          "1": {
+            "recall": 0.8333333,
+            "precision": 1.0,
+            "mrr": 1.0,
+            "ndcg": 1.0,
+            "hit_rate": 1.0
+          }
+        },
+        "per_query": [
+          {
+            "query_id": "q1",
+            "retrieved_chunk_ids": [
+              "c1",
+              "c2",
+              "c4",
+              "c5",
+              "c3"
+            ],
+            "relevant_chunk_ids": [
+              "c1"
+            ],
+            "metrics_at_k": {
+              "3": {
+                "recall": 1.0,
+                "precision": 0.33333334,
+                "mrr": 1.0,
+                "ndcg": 1.0,
+                "hit_rate": 1.0
+              },
+              "5": {
+                "recall": 1.0,
+                "precision": 0.2,
+                "mrr": 1.0,
+                "ndcg": 1.0,
+                "hit_rate": 1.0
+              },
+              "1": {
+                "recall": 1.0,
+                "precision": 1.0,
+                "mrr": 1.0,
+                "ndcg": 1.0,
+                "hit_rate": 1.0
+              }
+            }
+          },
+          {
+            "query_id": "q2",
+            "retrieved_chunk_ids": [
+              "c4",
+              "c5",
+              "c2",
+              "c1",
+              "c3"
+            ],
+            "relevant_chunk_ids": [
+              "c4",
+              "c2"
+            ],
+            "metrics_at_k": {
+              "1": {
+                "recall": 0.5,
+                "precision": 1.0,
+                "mrr": 1.0,
+                "ndcg": 1.0,
+                "hit_rate": 1.0
+              },
+              "3": {
+                "recall": 1.0,
+                "precision": 0.6666667,
+                "mrr": 1.0,
+                "ndcg": 0.9197208,
+                "hit_rate": 1.0
+              },
+              "5": {
+                "recall": 1.0,
+                "precision": 0.4,
+                "mrr": 1.0,
+                "ndcg": 0.9197208,
+                "hit_rate": 1.0
+              }
+            }
+          },
+          {
+            "query_id": "q3",
+            "retrieved_chunk_ids": [
+              "c5",
+              "c4",
+              "c3",
+              "c1",
+              "c2"
+            ],
+            "relevant_chunk_ids": [
+              "c5"
+            ],
+            "metrics_at_k": {
+              "1": {
+                "recall": 1.0,
+                "precision": 1.0,
+                "mrr": 1.0,
+                "ndcg": 1.0,
+                "hit_rate": 1.0
+              },
+              "3": {
+                "recall": 1.0,
+                "precision": 0.33333334,
+                "mrr": 1.0,
+                "ndcg": 1.0,
+                "hit_rate": 1.0
+              },
+              "5": {
+                "recall": 1.0,
+                "precision": 0.2,
+                "mrr": 1.0,
+                "ndcg": 1.0,
+                "hit_rate": 1.0
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "index_mode": "lsh_ann",
+      "report": {
+        "summary": {
+          "corpus_size": 5,
+          "query_count": 3,
+          "k_values": [
+            1,
+            3,
+            5
+          ]
+        },
+        "aggregate_metrics_at_k": {
+          "3": {
+            "recall": 1.0,
+            "precision": 0.44444445,
+            "mrr": 1.0,
+            "ndcg": 0.9732403,
+            "hit_rate": 1.0
+          },
+          "5": {
+            "recall": 1.0,
+            "precision": 0.26666668,
+            "mrr": 1.0,
+            "ndcg": 0.9732403,
+            "hit_rate": 1.0
+          },
+          "1": {
+            "recall": 0.8333333,
+            "precision": 1.0,
+            "mrr": 1.0,
+            "ndcg": 1.0,
+            "hit_rate": 1.0
+          }
+        },
+        "per_query": [
+          {
+            "query_id": "q1",
+            "retrieved_chunk_ids": [
+              "c1",
+              "c2",
+              "c4",
+              "c5",
+              "c3"
+            ],
+            "relevant_chunk_ids": [
+              "c1"
+            ],
+            "metrics_at_k": {
+              "5": {
+                "recall": 1.0,
+                "precision": 0.2,
+                "mrr": 1.0,
+                "ndcg": 1.0,
+                "hit_rate": 1.0
+              },
+              "1": {
+                "recall": 1.0,
+                "precision": 1.0,
+                "mrr": 1.0,
+                "ndcg": 1.0,
+                "hit_rate": 1.0
+              },
+              "3": {
+                "recall": 1.0,
+                "precision": 0.33333334,
+                "mrr": 1.0,
+                "ndcg": 1.0,
+                "hit_rate": 1.0
+              }
+            }
+          },
+          {
+            "query_id": "q2",
+            "retrieved_chunk_ids": [
+              "c4",
+              "c5",
+              "c2",
+              "c1",
+              "c3"
+            ],
+            "relevant_chunk_ids": [
+              "c4",
+              "c2"
+            ],
+            "metrics_at_k": {
+              "5": {
+                "recall": 1.0,
+                "precision": 0.4,
+                "mrr": 1.0,
+                "ndcg": 0.9197208,
+                "hit_rate": 1.0
+              },
+              "1": {
+                "recall": 0.5,
+                "precision": 1.0,
+                "mrr": 1.0,
+                "ndcg": 1.0,
+                "hit_rate": 1.0
+              },
+              "3": {
+                "recall": 1.0,
+                "precision": 0.6666667,
+                "mrr": 1.0,
+                "ndcg": 0.9197208,
+                "hit_rate": 1.0
+              }
+            }
+          },
+          {
+            "query_id": "q3",
+            "retrieved_chunk_ids": [
+              "c5",
+              "c4",
+              "c3",
+              "c1",
+              "c2"
+            ],
+            "relevant_chunk_ids": [
+              "c5"
+            ],
+            "metrics_at_k": {
+              "3": {
+                "recall": 1.0,
+                "precision": 0.33333334,
+                "mrr": 1.0,
+                "ndcg": 1.0,
+                "hit_rate": 1.0
+              },
+              "1": {
+                "recall": 1.0,
+                "precision": 1.0,
+                "mrr": 1.0,
+                "ndcg": 1.0,
+                "hit_rate": 1.0
+              },
+              "5": {
+                "recall": 1.0,
+                "precision": 0.2,
+                "mrr": 1.0,
+                "ndcg": 1.0,
+                "hit_rate": 1.0
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "index_mode": "hnsw_baseline",
+      "report": {
+        "summary": {
+          "corpus_size": 5,
+          "query_count": 3,
+          "k_values": [
+            1,
+            3,
+            5
+          ]
+        },
+        "aggregate_metrics_at_k": {
+          "1": {
+            "recall": 0.8333333,
+            "precision": 1.0,
+            "mrr": 1.0,
+            "ndcg": 1.0,
+            "hit_rate": 1.0
+          },
+          "3": {
+            "recall": 1.0,
+            "precision": 0.44444445,
+            "mrr": 1.0,
+            "ndcg": 0.9732403,
+            "hit_rate": 1.0
+          },
+          "5": {
+            "recall": 1.0,
+            "precision": 0.26666668,
+            "mrr": 1.0,
+            "ndcg": 0.9732403,
+            "hit_rate": 1.0
+          }
+        },
+        "per_query": [
+          {
+            "query_id": "q1",
+            "retrieved_chunk_ids": [
+              "c1",
+              "c2",
+              "c4",
+              "c5",
+              "c3"
+            ],
+            "relevant_chunk_ids": [
+              "c1"
+            ],
+            "metrics_at_k": {
+              "1": {
+                "recall": 1.0,
+                "precision": 1.0,
+                "mrr": 1.0,
+                "ndcg": 1.0,
+                "hit_rate": 1.0
+              },
+              "5": {
+                "recall": 1.0,
+                "precision": 0.2,
+                "mrr": 1.0,
+                "ndcg": 1.0,
+                "hit_rate": 1.0
+              },
+              "3": {
+                "recall": 1.0,
+                "precision": 0.33333334,
+                "mrr": 1.0,
+                "ndcg": 1.0,
+                "hit_rate": 1.0
+              }
+            }
+          },
+          {
+            "query_id": "q2",
+            "retrieved_chunk_ids": [
+              "c4",
+              "c5",
+              "c2",
+              "c1",
+              "c3"
+            ],
+            "relevant_chunk_ids": [
+              "c4",
+              "c2"
+            ],
+            "metrics_at_k": {
+              "3": {
+                "recall": 1.0,
+                "precision": 0.6666667,
+                "mrr": 1.0,
+                "ndcg": 0.9197208,
+                "hit_rate": 1.0
+              },
+              "5": {
+                "recall": 1.0,
+                "precision": 0.4,
+                "mrr": 1.0,
+                "ndcg": 0.9197208,
+                "hit_rate": 1.0
+              },
+              "1": {
+                "recall": 0.5,
+                "precision": 1.0,
+                "mrr": 1.0,
+                "ndcg": 1.0,
+                "hit_rate": 1.0
+              }
+            }
+          },
+          {
+            "query_id": "q3",
+            "retrieved_chunk_ids": [
+              "c5",
+              "c4",
+              "c3",
+              "c1",
+              "c2"
+            ],
+            "relevant_chunk_ids": [
+              "c5"
+            ],
+            "metrics_at_k": {
+              "3": {
+                "recall": 1.0,
+                "precision": 0.33333334,
+                "mrr": 1.0,
+                "ndcg": 1.0,
+                "hit_rate": 1.0
+              },
+              "5": {
+                "recall": 1.0,
+                "precision": 0.2,
+                "mrr": 1.0,
+                "ndcg": 1.0,
+                "hit_rate": 1.0
+              },
+              "1": {
+                "recall": 1.0,
+                "precision": 1.0,
+                "mrr": 1.0,
+                "ndcg": 1.0,
+                "hit_rate": 1.0
+              }
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

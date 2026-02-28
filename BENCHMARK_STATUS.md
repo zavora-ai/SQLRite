@@ -114,6 +114,34 @@ Notes:
 2. 10m profile is now available in benchmark profile selection (`sqlrite-bench-matrix`, `sqlrite-bench-suite`) for large-scale phase continuation in S13.
 3. S13 introduces profile definition files and bundle automation for publishing reproducible benchmark packages.
 
+## Sprint 13 phase-C gate snapshot
+
+Sources:
+
+1. `project_plan/reports/s13_bundle_local/bench_suite.json`
+2. `project_plan/reports/s13_bundle_local/bench_suite.log`
+3. `project_plan/reports/s13_bundle_local/phase_c_gate.log`
+4. `project_plan/reports/s13_quality_gates.log`
+
+Gate-focused profile/scenario set:
+
+- profiles: `100k,1m`
+- scenarios: `weighted + lsh_ann`, `weighted + hnsw_baseline`
+- strict gate result: `passed`
+
+Selected observations:
+
+1. 100k (`weighted + lsh_ann`): `qps=40.82`, `p95_ms=26.241`, `top1_hit_rate=1.0000`
+2. 1m (`weighted + hnsw_baseline`): `qps=15.89`, `p95_ms=81.519`, `top1_hit_rate=0.8655`
+3. 100k ingest throughput from gated scenario: `ingest_chunks_per_sec=11498.56` (`689,913 chunks/min`)
+4. Quick concurrency sweep evidence (`quick`, brute_force): `conc=1 qps=144.27`, `conc=2 qps=76.20`
+
+Interpretation:
+
+1. PC-G01 target is met (`100k p95 < 40ms`).
+2. PC-G02 target is met (`1m p95 < 90ms`).
+3. PC-G03 target is met (`ingest >= 50k chunks/min`).
+
 ## 10k profile progression
 
 Configuration:

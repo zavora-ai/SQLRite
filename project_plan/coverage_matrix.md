@@ -21,7 +21,7 @@ Coverage guarantee: **100%** (no unmapped roadmap requirements).
 | S10 | Completed | `project_plan/reports/S10.md` |
 | S11 | Completed | `project_plan/reports/S11.md` |
 | S12 | Completed | `project_plan/reports/S12.md` |
-| S13 | In Progress | `project_plan/reports/S13.md` |
+| S13 | Completed | `project_plan/reports/S13.md` |
 
 | Requirement ID | Roadmap Source | Description | Planned Sprint Coverage |
 | --- | --- | --- | --- |

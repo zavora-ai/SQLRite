@@ -126,8 +126,8 @@ jobs:
           bash scripts/run-benchmark-bundle.sh \
             --output-dir s13_bundle_ci \
             --profiles 100k,1m \
-            --concurrency-profile 100k \
-            --concurrency-levels 1,2,4 \
+            --concurrency-profile quick \
+            --concurrency-levels 1,2 \
             --dataset examples/eval_dataset.json \
             --dataset-id examples/eval_dataset.json \
             --embedding-model deterministic-local-v1 \

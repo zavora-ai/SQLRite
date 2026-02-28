@@ -1,0 +1,4 @@
+   Compiling sqlrite v0.1.0 (/Users/jameskaranja/Developer/projects/SQLRight)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.88s
+     Running `target/debug/sqlrite-bench-suite-assert --suite project_plan/reports/s13_bundle_local/bench_suite.json --rule 'profile=100k,scenario=weighted + lsh_ann,max_p95_ms=40,min_top1=0.99,min_ingest_cpm=50000' --rule 'profile=1m,scenario=weighted + hnsw_baseline,max_p95_ms=90,min_top1=0.75' --eval-rule index_mode=brute_force,min_recall_k1=0.80,min_mrr_k1=0.95,min_ndcg_k1=0.95 --eval-rule index_mode=lsh_ann,min_recall_k1=0.80,min_mrr_k1=0.95,min_ndcg_k1=0.95 --eval-rule index_mode=hnsw_baseline,min_recall_k1=0.80,min_mrr_k1=0.95,min_ndcg_k1=0.95`
+suite assertions passed: bench_rules=2, eval_rules=3

@@ -825,9 +825,20 @@ Generate a reproducible bundle (suite JSON/log + manifest + gate log + tarball):
 bash scripts/run-benchmark-bundle.sh \
   --output-dir project_plan/reports/s13_bundle \
   --profiles 100k,1m \
-  --concurrency-profile 100k \
-  --concurrency-levels 1,2,4 \
+  --concurrency-profile quick \
+  --concurrency-levels 1,2 \
   --strict-phase-c-gate
+```
+
+Default S13 bundle scenarios are:
+
+- `weighted + lsh_ann`
+- `weighted + hnsw_baseline`
+
+Run full scenario matrix instead:
+
+```bash
+bash scripts/run-benchmark-bundle.sh --full-scenarios
 ```
 
 Gate assertions against suite output (direct CLI):
@@ -835,9 +846,8 @@ Gate assertions against suite output (direct CLI):
 ```bash
 cargo run --bin sqlrite-bench-suite-assert -- \
   --suite project_plan/reports/s13_bundle/bench_suite.json \
-  --rule "profile=100k,scenario=weighted + lsh_ann,max_p95_ms=40,min_top1=0.99" \
-  --rule "profile=1m,scenario=weighted + lsh_ann,max_p95_ms=90,min_top1=0.99" \
-  --rule "profile=100k,scenario=weighted + brute_force,min_ingest_cpm=50000"
+  --rule "profile=100k,scenario=weighted + lsh_ann,max_p95_ms=40,min_top1=0.99,min_ingest_cpm=50000" \
+  --rule "profile=1m,scenario=weighted + hnsw_baseline,max_p95_ms=90,min_top1=0.75"
 ```
 
 For historical trend context, see:

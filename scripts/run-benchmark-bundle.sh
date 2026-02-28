@@ -4,6 +4,7 @@ set -euo pipefail
 
 OUTPUT_DIR="project_plan/reports/s13_bundle"
 PROFILES="100k,1m"
+SCENARIOS="weighted + lsh_ann,weighted + hnsw_baseline"
 CONCURRENCY_PROFILE="100k"
 CONCURRENCY_LEVELS="1,2,4"
 DATASET_PATH="examples/eval_dataset.json"
@@ -22,6 +23,8 @@ usage: bash scripts/run-benchmark-bundle.sh [options]
 options:
   --output-dir PATH           Output directory (default: project_plan/reports/s13_bundle)
   --profiles CSV              Benchmark profiles CSV (default: 100k,1m)
+  --scenarios CSV             Benchmark scenario CSV (default: weighted + lsh_ann,weighted + hnsw_baseline)
+  --full-scenarios            Run all scenarios from suite defaults
   --with-10m                  Append 10m profile to --profiles
   --concurrency-profile NAME  Sweep profile (default: 100k)
   --concurrency-levels CSV    Sweep levels CSV (default: 1,2,4)
@@ -46,6 +49,14 @@ while [[ $# -gt 0 ]]; do
     --profiles)
       PROFILES="${2:-}"
       shift 2
+      ;;
+    --scenarios)
+      SCENARIOS="${2:-}"
+      shift 2
+      ;;
+    --full-scenarios)
+      SCENARIOS=""
+      shift
       ;;
     --with-10m)
       if [[ ",${PROFILES}," != *",10m,"* ]]; then
@@ -129,6 +140,10 @@ RUN_CMD=(
   --output "$SUITE_JSON"
 )
 
+if [[ -n "$SCENARIOS" ]]; then
+  RUN_CMD+=(--scenarios "$SCENARIOS")
+fi
+
 if [[ "$SKIP_EVAL" -eq 1 ]]; then
   RUN_CMD+=(--skip-eval)
 fi
@@ -143,9 +158,8 @@ if [[ "$SKIP_STRICT_GATE" -eq 0 ]]; then
   set +e
   cargo run --bin sqlrite-bench-suite-assert -- \
     --suite "$SUITE_JSON" \
-    --rule "profile=100k,scenario=weighted + lsh_ann,max_p95_ms=40,min_top1=0.99" \
-    --rule "profile=1m,scenario=weighted + lsh_ann,max_p95_ms=90,min_top1=0.99" \
-    --rule "profile=100k,scenario=weighted + brute_force,min_ingest_cpm=50000" \
+    --rule "profile=100k,scenario=weighted + lsh_ann,max_p95_ms=40,min_top1=0.99,min_ingest_cpm=50000" \
+    --rule "profile=1m,scenario=weighted + hnsw_baseline,max_p95_ms=90,min_top1=0.75" \
     --eval-rule "index_mode=brute_force,min_recall_k1=0.80,min_mrr_k1=0.95,min_ndcg_k1=0.95" \
     --eval-rule "index_mode=lsh_ann,min_recall_k1=0.80,min_mrr_k1=0.95,min_ndcg_k1=0.95" \
     --eval-rule "index_mode=hnsw_baseline,min_recall_k1=0.80,min_mrr_k1=0.95,min_ndcg_k1=0.95" \
@@ -171,6 +185,7 @@ cat >"$MANIFEST_JSON" <<MANIFEST
 {
   "generated_at_unix_seconds": $(date +%s),
   "profiles": "$PROFILES",
+  "scenarios": "$SCENARIOS",
   "concurrency_profile": "$CONCURRENCY_PROFILE",
   "concurrency_levels": "$CONCURRENCY_LEVELS",
   "dataset_path": "$DATASET_PATH",

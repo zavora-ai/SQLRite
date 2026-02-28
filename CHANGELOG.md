@@ -110,6 +110,11 @@ The format is based on Keep a Changelog.
   - reproducible bundle script `scripts/run-benchmark-bundle.sh`
   - suite assertion CLI `sqlrite-bench-suite-assert`
   - benchmark profile reference docs in `benchmarks/README.md`
+  - strict gate evidence artifacts:
+    - `project_plan/reports/S13.md`
+    - `project_plan/reports/s13_bundle_local/bench_suite.json`
+    - `project_plan/reports/s13_bundle_local/phase_c_gate.log`
+    - `project_plan/reports/s13_quality_gates.log`
 - Reproducible benchmark/eval suite CLI:
   - `sqlrite-bench-suite`
   - profile matrix support (`quick`, `10k`, `100k`, `1m`, `10m`)
@@ -119,6 +124,11 @@ The format is based on Keep a Changelog.
   - benchmark smoke matrix on Linux/macOS/Windows
   - target-check matrix on Linux/macOS/Windows x64/arm64 triples
 - Performance workflow now includes manual-dispatch phase-C benchmark bundle generation with uploaded artifacts.
+- Hybrid search now skips expensive FTS score lookup for large vector-covered candidate sets, reducing high-scale p95 latency in benchmark workloads.
+- `sqlrite-bench-suite` now supports `--scenarios` filtering for targeted reproducible gate runs.
+- S13 profile tuning updated high-scale candidate limits:
+  - `1m` candidate_limit `2000 -> 1800`
+  - `10m` candidate_limit `4000 -> 2400`
 
 ### Changed
 
