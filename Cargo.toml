@@ -4,9 +4,10 @@ version = "0.1.0"
 edition = "2024"
 description = "RAG-oriented SQLite wrapper for AI agent workloads"
 license = "MIT"
+default-run = "sqlrite"
 
 [dependencies]
-rusqlite = { version = "0.33", features = ["bundled"] }
+rusqlite = { version = "0.33", features = ["bundled", "functions"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 thiserror = "2.0"

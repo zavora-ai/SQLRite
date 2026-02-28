@@ -19,6 +19,25 @@ jobs:
         run: cargo clippy --all-targets --all-features -- -D warnings
       - name: Rust test
         run: cargo test
+      - name: Unified CLI smoke test
+        run: |
+          cargo run -- --help
+          cargo run -- init --db ci_smoke.db --seed-demo --profile balanced --index-mode brute_force
+          cargo run -- query --db ci_smoke.db --text "local agent memory" --top-k 2
+          cargo run -- doctor --db ci_smoke.db
+          cargo run -- quickstart \
+            --db ci_quickstart.db \
+            --runs 5 \
+            --max-median-ms 180000 \
+            --min-success-rate 0.95 \
+            --json \
+            --output quickstart_ci.json
+
+      - name: Upload quickstart report
+        uses: actions/upload-artifact@v4
+        with:
+          name: quickstart-ci-report
+          path: quickstart_ci.json
 
   benchmark-gate:
     runs-on: ubuntu-latest

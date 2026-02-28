@@ -1365,7 +1365,7 @@ fn run_migrations(conn: &mut Connection) -> Result<i64> {
         let tx = conn.transaction()?;
         tx.execute_batch(migration.sql)?;
         tx.execute(
-            "INSERT INTO schema_migrations (version, name) VALUES (?1, ?2)",
+            "INSERT OR IGNORE INTO schema_migrations (version, name) VALUES (?1, ?2)",
             params![migration.version, migration.name],
         )?;
         tx.commit()?;

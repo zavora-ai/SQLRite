@@ -1,0 +1,14 @@
+name: sqlrite
+arch: ${ARCH}
+platform: linux
+version: ${VERSION}
+section: utils
+priority: optional
+maintainer: Zavora AI <opensource@zavora.ai>
+description: |
+  SQLRite is a Rust-first SQLite adaptation for AI agent retrieval workloads.
+license: MIT
+homepage: https://github.com/zavora-ai/SQLRite
+contents:
+  - src: ./target/release/sqlrite
+    dst: /usr/local/bin/sqlrite

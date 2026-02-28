@@ -1,0 +1,92 @@
+name: Packaging Channels
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  release-archives:
+    name: Release archive (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Build archive
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF:-}" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/v}"
+          else
+            VERSION="0.0.0-dev"
+          fi
+
+          TARGET="$(rustc -vV | awk -F': ' '/host:/ {print $2}')"
+          bash scripts/create-release-archive.sh --version "$VERSION" --target "$TARGET"
+
+      - name: Upload archives
+        uses: actions/upload-artifact@v4
+        with:
+          name: sqlrite-archives-${{ matrix.os }}
+          path: dist/*
+
+  linux-deb-rpm:
+    name: Linux deb/rpm package
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install nfpm
+        run: |
+          go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest
+          echo "$HOME/go/bin" >> "$GITHUB_PATH"
+
+      - name: Build Linux packages
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF:-}" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/v}"
+          else
+            VERSION="0.0.0-dev"
+          fi
+          bash scripts/package-linux.sh --version "$VERSION"
+
+      - name: Upload Linux packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: sqlrite-linux-packages
+          path: dist/*
+
+  docker-image:
+    name: Docker image smoke
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: docker build -t sqlrite:ci .
+
+      - name: Docker CLI smoke
+        run: docker run --rm sqlrite:ci --help
+
+      - name: Export Docker image artifact
+        run: docker save sqlrite:ci | gzip > dist-sqlrite-image.tar.gz
+
+      - name: Upload Docker image artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sqlrite-docker-image
+          path: dist-sqlrite-image.tar.gz

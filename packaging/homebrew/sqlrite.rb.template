@@ -1,0 +1,34 @@
+class Sqlrite < Formula
+  desc "Rust-first SQLite adaptation for AI agent retrieval workloads"
+  homepage "https://github.com/zavora-ai/SQLRite"
+  version "__VERSION__"
+  license "MIT"
+
+  on_macos do
+    if Hardware::CPU.arm?
+      url "__MACOS_ARM64_URL__"
+      sha256 "__MACOS_ARM64_SHA__"
+    else
+      url "__MACOS_AMD64_URL__"
+      sha256 "__MACOS_AMD64_SHA__"
+    end
+  end
+
+  on_linux do
+    if Hardware::CPU.arm?
+      url "__LINUX_ARM64_URL__"
+      sha256 "__LINUX_ARM64_SHA__"
+    else
+      url "__LINUX_AMD64_URL__"
+      sha256 "__LINUX_AMD64_SHA__"
+    end
+  end
+
+  def install
+    bin.install "sqlrite"
+  end
+
+  test do
+    assert_match "sqlrite unified CLI", shell_output("#{bin}/sqlrite --help")
+  end
+end

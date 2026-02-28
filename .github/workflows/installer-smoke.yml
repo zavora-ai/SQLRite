@@ -1,0 +1,52 @@
+name: Installer Smoke
+
+on:
+  push:
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  smoke:
+    name: Install smoke (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Global install script smoke
+        shell: bash
+        run: |
+          bash scripts/sqlrite-global-install.sh --mode copy
+          BIN="$HOME/.local/bin/sqlrite"
+          if [[ ! -f "$BIN" ]]; then
+            BIN="$HOME/.local/bin/sqlrite.exe"
+          fi
+          "$BIN" --help
+          "$BIN" init --db smoke_cli.db --seed-demo --profile balanced --index-mode brute_force
+          "$BIN" query --db smoke_cli.db --text "local" --top-k 1
+          "$BIN" doctor --db smoke_cli.db --json
+          "$BIN" quickstart \
+            --db smoke_quickstart.db \
+            --runs 5 \
+            --max-median-ms 180000 \
+            --min-success-rate 0.95 \
+            --json \
+            --output "quickstart_${{ matrix.os }}.json"
+
+      - name: Global update script smoke (quick)
+        shell: bash
+        run: |
+          bash scripts/sqlrite-global-update.sh --quick
+
+      - name: Upload quickstart install report
+        uses: actions/upload-artifact@v4
+        with:
+          name: quickstart-install-${{ matrix.os }}
+          path: quickstart_${{ matrix.os }}.json

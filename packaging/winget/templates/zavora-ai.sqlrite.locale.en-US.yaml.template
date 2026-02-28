@@ -1,0 +1,11 @@
+PackageIdentifier: zavora-ai.sqlrite
+PackageVersion: __VERSION__
+PackageLocale: en-US
+Publisher: Zavora AI
+PublisherUrl: https://github.com/zavora-ai
+PackageName: SQLRite
+ShortDescription: SQL-native local-first retrieval database for AI agent workloads.
+License: MIT
+LicenseUrl: https://github.com/zavora-ai/SQLRite/blob/main/LICENSE
+ManifestType: defaultLocale
+ManifestVersion: 1.6.0

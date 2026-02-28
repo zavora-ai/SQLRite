@@ -29,7 +29,38 @@ It is designed for developers who want:
 
 ## 5-Minute Start
 
-### 1) Seed a local DB
+### 0) Inspect the unified CLI
+
+```bash
+cargo run -- --help
+```
+
+### 1) One-command quickstart (init -> query + timing gates)
+
+```bash
+cargo run -- quickstart \
+  --db sqlrite_quickstart.db \
+  --runs 5 \
+  --max-median-ms 180000 \
+  --min-success-rate 0.95 \
+  --json \
+  --output project_plan/reports/quickstart_local.json
+```
+
+Sample output:
+
+```json
+{
+  "runs": 5,
+  "successful_runs": 5,
+  "success_rate": 1.0,
+  "median_total_ms": 2.36,
+  "gate_max_median_ms_passed": true,
+  "gate_min_success_rate_passed": true
+}
+```
+
+### 2) Seed a local DB (explicit init path)
 
 ```bash
 cargo run
@@ -37,10 +68,10 @@ cargo run
 
 This creates `sqlrite_demo.db` with 3 chunks (`demo-1`, `demo-2`, `demo-3`).
 
-### 2) Run a query from CLI
+### 3) Run a query from CLI
 
 ```bash
-cargo run --bin sqlrite-query -- --db sqlrite_demo.db --text "agents local memory" --top-k 3
+cargo run -- query --db sqlrite_demo.db --text "agents local memory" --top-k 3
 ```
 
 Sample output:
@@ -55,6 +86,149 @@ results=3
    Batching and metadata filters keep RAG pipelines deterministic.
 ```
 
+## Global CLI Install (No Cargo Run)
+
+Install globally (default path: `~/.local/bin/sqlrite`):
+
+```bash
+bash scripts/sqlrite-global-install.sh
+```
+
+Then run directly:
+
+```bash
+sqlrite --help
+sqlrite init --db sqlrite_demo.db --seed-demo
+sqlrite quickstart --db sqlrite_quickstart.db --runs 5 --max-median-ms 180000 --min-success-rate 0.95
+sqlrite query --db sqlrite_demo.db --text "local" --top-k 3
+```
+
+If `sqlrite` is not found, add this to your shell config:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+## Global Update With Tests
+
+Update the global install while validating progress:
+
+```bash
+bash scripts/sqlrite-global-update.sh
+```
+
+Default update flow runs:
+
+1. `cargo fmt --all --check`
+2. `cargo clippy --all-targets --all-features -- -D warnings`
+3. `cargo test`
+4. global reinstall + smoke tests
+
+Quick update (skip full gates, still reinstall + smoke test):
+
+```bash
+bash scripts/sqlrite-global-update.sh --quick
+```
+
+Install from GitHub Release assets (curl-friendly):
+
+```bash
+bash scripts/sqlrite-install.sh --version 0.5.0
+```
+
+## Quickstart Gate (Sprint 3)
+
+`sqlrite quickstart` runs `init -> query` and reports timing/success telemetry.
+
+Gate command (fails with non-zero exit on threshold miss):
+
+```bash
+cargo run -- quickstart \
+  --db sprint3_quickstart.db \
+  --runs 5 \
+  --max-median-ms 180000 \
+  --min-success-rate 0.95 \
+  --json \
+  --output project_plan/reports/quickstart_local.json
+```
+
+Human-readable mode:
+
+```bash
+cargo run -- quickstart --db sprint3_quickstart.db --runs 3
+```
+
+Key flags:
+
+- `--runs N` repeated init/query runs for stability checks
+- `--max-median-ms F` median total time gate (Phase A target: `< 180000`)
+- `--min-success-rate F` required run success ratio (Phase A target: `>= 0.95`)
+- `--json` machine-readable output for CI/reporting
+- `--output PATH` write report payload to disk
+
+## Interactive SQL Shell
+
+Start shell mode (no `--execute` needed):
+
+```bash
+cargo run -- sql --db sqlrite_demo.db
+```
+
+Shell helpers:
+
+- `.help`
+- `.tables`
+- `.schema [table]`
+- `.example`
+- `.example lexical --run`
+- `.exit`
+
+One-shot SQL still works:
+
+```bash
+cargo run -- sql --db sqlrite_demo.db --execute "SELECT id, doc_id FROM chunks LIMIT 3;"
+```
+
+## SQL-Native Vector Operators
+
+`sqlrite sql` now supports pgvector-style distance operators and vector literal helpers:
+
+- `<->` L2 distance
+- `<=>` cosine distance
+- `<#>` negative inner product
+- `vector('0.1,0.2,0.3')` or `vector('[0.1,0.2,0.3]')`
+
+Example:
+
+```bash
+cargo run -- sql --db sqlrite_demo.db --execute "
+SELECT id,
+       embedding <-> vector('0.95,0.05,0.0') AS l2,
+       embedding <=> vector('0.95,0.05,0.0') AS cosine_distance,
+       embedding <#> vector('0.95,0.05,0.0') AS neg_inner
+FROM chunks
+ORDER BY l2 ASC, id ASC
+LIMIT 3;"
+```
+
+Sample output:
+
+```text
+[
+  {"id":"demo-1","l2":0.0424,"cosine_distance":0.0006,"neg_inner":-0.8780},
+  {"id":"demo-2","l2":0.4243,"cosine_distance":0.0958,"neg_inner":-0.6350},
+  {"id":"demo-3","l2":0.9192,"cosine_distance":0.5583,"neg_inner":-0.3200}
+]
+```
+
+Helper SQL functions:
+
+- `l2_distance(lhs, rhs)`
+- `cosine_distance(lhs, rhs)`
+- `neg_inner_product(lhs, rhs)`
+- `vec_dims(vector_expr)`
+- `vec_to_json(vector_expr)`
+
 ## Query Cookbook (Real Use Cases)
 
 All commands below assume `sqlrite_demo.db` from `cargo run`.
@@ -62,19 +236,19 @@ All commands below assume `sqlrite_demo.db` from `cargo run`.
 ### Text-only retrieval
 
 ```bash
-cargo run --bin sqlrite-query -- --db sqlrite_demo.db --text "keyword signals retrieval" --top-k 3
+cargo run -- query --db sqlrite_demo.db --text "keyword signals retrieval" --top-k 3
 ```
 
 ### Vector-only retrieval
 
 ```bash
-cargo run --bin sqlrite-query -- --db sqlrite_demo.db --vector 0.95,0.05,0.0 --top-k 3
+cargo run -- query --db sqlrite_demo.db --vector 0.95,0.05,0.0 --top-k 3
 ```
 
 ### Hybrid retrieval (text + vector)
 
 ```bash
-cargo run --bin sqlrite-query -- \
+cargo run -- query \
   --db sqlrite_demo.db \
   --text "local" \
   --vector 0.95,0.05,0.0 \
@@ -94,7 +268,7 @@ results=3
 ### Metadata filter (tenant + topic)
 
 ```bash
-cargo run --bin sqlrite-query -- \
+cargo run -- query \
   --db sqlrite_demo.db \
   --text "retrieval" \
   --filter tenant=demo \
@@ -105,7 +279,7 @@ cargo run --bin sqlrite-query -- \
 ### Doc-scoped retrieval
 
 ```bash
-cargo run --bin sqlrite-query -- \
+cargo run -- query \
   --db sqlrite_demo.db \
   --text "deterministic" \
   --doc-id doc-c \
@@ -115,7 +289,7 @@ cargo run --bin sqlrite-query -- \
 ### RRF fusion
 
 ```bash
-cargo run --bin sqlrite-query -- \
+cargo run -- query \
   --db sqlrite_demo.db \
   --text "hybrid" \
   --vector 0.60,0.40,0.0 \
@@ -127,7 +301,7 @@ cargo run --bin sqlrite-query -- \
 ### Candidate-limit tuning
 
 ```bash
-cargo run --bin sqlrite-query -- \
+cargo run -- query \
   --db sqlrite_demo.db \
   --text "agents" \
   --vector 0.90,0.10,0.0 \
@@ -283,31 +457,35 @@ cargo run --bin sqlrite-reindex -- \
 ### Health
 
 ```bash
-cargo run --bin sqlrite-ops -- health --db sqlrite_demo.db
+cargo run -- doctor --db sqlrite_demo.db
 ```
 
 Sample output:
 
 ```text
-health:
+sqlrite doctor
+- version=0.1.0
+- supported_profiles=balanced,durable,fast_unsafe
+- supported_index_modes=brute_force,lsh_ann,disabled
+- in_memory_integrity_ok=true
+- db_path=sqlrite_demo.db
 - integrity_ok=true
 - chunk_count=3
 - schema_version=2
 - index_mode=brute_force
-- index_entries=3
 ```
 
 ### Backup + verify
 
 ```bash
-cargo run --bin sqlrite-ops -- backup --source sqlrite_demo.db --dest sqlrite_backup.db
-cargo run --bin sqlrite-ops -- verify --path sqlrite_backup.db
+cargo run -- backup --source sqlrite_demo.db --dest sqlrite_backup.db
+cargo run -- backup verify --path sqlrite_backup.db
 ```
 
 ## Server Mode (Health/Readiness/Metrics)
 
 ```bash
-cargo run --bin sqlrite-serve -- --db sqlrite_demo.db --bind 127.0.0.1:8099
+cargo run -- serve --db sqlrite_demo.db --bind 127.0.0.1:8099
 ```
 
 Endpoints:
@@ -333,7 +511,7 @@ Response:
 ### Single benchmark run
 
 ```bash
-cargo run --bin sqlrite-bench -- \
+cargo run -- benchmark \
   --corpus 3000 \
   --queries 200 \
   --warmup 50 \
@@ -436,6 +614,40 @@ fn demo() -> Result<()> {
 }
 ```
 
+## Packaging and Distribution
+
+Build release archives:
+
+```bash
+bash scripts/create-release-archive.sh --version 0.5.0
+```
+
+Build Linux packages (`.deb`, `.rpm`) when `nfpm` is installed:
+
+```bash
+bash scripts/package-linux.sh --version 0.5.0
+```
+
+Build Docker image:
+
+```bash
+docker build -t sqlrite:local .
+docker run --rm sqlrite:local --help
+```
+
+Generate Homebrew formula and winget manifests:
+
+```bash
+bash scripts/generate-homebrew-formula.sh --help
+bash scripts/generate-winget-manifests.sh --help
+```
+
+Detailed channel documentation:
+
+- `docs/packaging_channels.md`
+- `.github/workflows/installer-smoke.yml`
+- `.github/workflows/packaging-channels.yml`
+
 ## Development Workflow
 
 ```bash
@@ -447,6 +659,7 @@ cargo test --examples
 
 ## Repository Map
 
+- `CHANGELOG.md` - release and sprint-level change history
 - `src/lib.rs` - core DB API and retrieval pipeline
 - `src/ingest.rs` - ingestion worker + embedding providers
 - `src/reindex.rs` - reindex orchestration
@@ -454,6 +667,8 @@ cargo test --examples
 - `src/ops.rs` - health/backup/verify
 - `src/server.rs` - health/readiness/metrics HTTP server
 - `src/bin/` - operational CLIs
+- `scripts/` - install, update, packaging, and release tooling
+- `packaging/` - Homebrew/winget/nfpm packaging assets
 - `examples/` - runnable workflows
 
 ## Notes
