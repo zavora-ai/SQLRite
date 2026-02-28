@@ -1,0 +1,17 @@
+{
+  "before_chunks": 21286,
+  "after_chunks": 21286,
+  "removed_chunks": 0,
+  "deduplicated_chunks": 0,
+  "before_documents": 1,
+  "after_documents": 1,
+  "orphan_documents_removed": 0,
+  "wal_checkpoint_applied": true,
+  "analyze_applied": true,
+  "vacuum_applied": true,
+  "vector_index_rebuilt": false,
+  "database_size_before_bytes": 54239232,
+  "database_size_after_bytes": 53534720,
+  "reclaimed_bytes": 704512,
+  "duration_ms": 190.394458
+}

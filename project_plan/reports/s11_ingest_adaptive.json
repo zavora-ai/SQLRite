@@ -1,0 +1,15 @@
+{
+  "total_chunks": 21286,
+  "processed_chunks": 21286,
+  "failed_chunks": 0,
+  "resumed_from_chunk": 0,
+  "duration_ms": 1435.283041,
+  "throughput_chunks_per_minute": 889831.4572923321,
+  "average_batch_size": 788.3703703703703,
+  "peak_batch_size": 1024,
+  "batch_count": 27,
+  "adaptive_batching": true,
+  "provider": "deterministic_local",
+  "model_version": "det-v1",
+  "source": "/var/folders/6r/n_qn86p536z5lp0d64x66bbm0000gn/T/tmp.aMNTm6YTrB/s11_source.txt"
+}

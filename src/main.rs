@@ -5,9 +5,9 @@ use rusqlite::types::ValueRef;
 use serde::Serialize;
 use serde_json::{Map, Value, json};
 use sqlrite::{
-    BenchmarkConfig, ChunkInput, DurabilityProfile, FusionStrategy, RuntimeConfig, SearchRequest,
-    ServerConfig, SqlRite, VectorIndexMode, VectorStorageKind, backup_file, build_health_report,
-    run_benchmark, serve_health_endpoints, verify_backup_file,
+    BenchmarkConfig, ChunkInput, CompactionOptions, DurabilityProfile, FusionStrategy,
+    RuntimeConfig, SearchRequest, ServerConfig, SqlRite, VectorIndexMode, VectorStorageKind,
+    backup_file, build_health_report, run_benchmark, serve_health_endpoints, verify_backup_file,
 };
 use std::collections::{HashMap, HashSet};
 use std::env;
@@ -35,6 +35,7 @@ fn dispatch_command(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>>
         "quickstart" => cmd_quickstart(&args[1..]),
         "serve" => cmd_serve(&args[1..]),
         "backup" => cmd_backup(&args[1..]),
+        "compact" => cmd_compact(&args[1..]),
         "benchmark" => cmd_benchmark(&args[1..]),
         "doctor" => cmd_doctor(&args[1..]),
         "help" | "--help" | "-h" => {
@@ -1163,6 +1164,139 @@ fn cmd_backup_verify(args: &[String]) -> Result<(), Box<dyn std::error::Error>> 
     println!("- schema_version={}", report.schema_version);
     println!("- index_mode={}", report.vector_index_mode);
     Ok(())
+}
+
+#[derive(Debug)]
+struct CompactArgs {
+    db_path: PathBuf,
+    profile: DurabilityProfile,
+    index_mode: VectorIndexMode,
+    dedupe_by_content_hash: bool,
+    prune_orphan_documents: bool,
+    wal_checkpoint_truncate: bool,
+    analyze: bool,
+    vacuum: bool,
+    json_output: bool,
+}
+
+impl Default for CompactArgs {
+    fn default() -> Self {
+        Self {
+            db_path: PathBuf::from("sqlrite.db"),
+            profile: DurabilityProfile::Balanced,
+            index_mode: VectorIndexMode::BruteForce,
+            dedupe_by_content_hash: true,
+            prune_orphan_documents: true,
+            wal_checkpoint_truncate: true,
+            analyze: true,
+            vacuum: true,
+            json_output: false,
+        }
+    }
+}
+
+fn cmd_compact(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    let args = parse_compact_args(args).map_err(std::io::Error::other)?;
+    let runtime = runtime_config(args.profile, args.index_mode);
+    let db = SqlRite::open_with_config(&args.db_path, runtime)?;
+    let report = db.compact(CompactionOptions {
+        dedupe_by_content_hash: args.dedupe_by_content_hash,
+        prune_orphan_documents: args.prune_orphan_documents,
+        wal_checkpoint_truncate: args.wal_checkpoint_truncate,
+        analyze: args.analyze,
+        vacuum: args.vacuum,
+    })?;
+
+    if args.json_output {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+        return Ok(());
+    }
+
+    println!("sqlrite compact");
+    println!("- db_path={}", args.db_path.display());
+    println!(
+        "- options=dedupe_by_content_hash:{}, prune_orphan_documents:{}, wal_checkpoint_truncate:{}, analyze:{}, vacuum:{}",
+        args.dedupe_by_content_hash,
+        args.prune_orphan_documents,
+        args.wal_checkpoint_truncate,
+        args.analyze,
+        args.vacuum
+    );
+    println!(
+        "- chunks(before={}, after={}, removed={}, deduplicated={})",
+        report.before_chunks,
+        report.after_chunks,
+        report.removed_chunks,
+        report.deduplicated_chunks
+    );
+    println!(
+        "- documents(before={}, after={}, orphan_removed={})",
+        report.before_documents, report.after_documents, report.orphan_documents_removed
+    );
+    println!(
+        "- maintenance(wal_checkpoint_applied={}, analyze_applied={}, vacuum_applied={}, vector_index_rebuilt={})",
+        report.wal_checkpoint_applied,
+        report.analyze_applied,
+        report.vacuum_applied,
+        report.vector_index_rebuilt
+    );
+    println!(
+        "- storage(size_before_bytes={:?}, size_after_bytes={:?}, reclaimed_bytes={:?})",
+        report.database_size_before_bytes, report.database_size_after_bytes, report.reclaimed_bytes
+    );
+    println!("- duration_ms={:.2}", report.duration_ms);
+    Ok(())
+}
+
+fn parse_compact_args(args: &[String]) -> Result<CompactArgs, String> {
+    let mut out = CompactArgs::default();
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--db" => {
+                i += 1;
+                out.db_path = PathBuf::from(parse_string(args, i, "--db")?);
+            }
+            "--profile" => {
+                i += 1;
+                out.profile = parse_profile(&parse_string(args, i, "--profile")?)?;
+            }
+            "--index-mode" => {
+                i += 1;
+                out.index_mode = parse_index_mode(&parse_string(args, i, "--index-mode")?)?;
+            }
+            "--no-dedupe-by-content-hash" => {
+                out.dedupe_by_content_hash = false;
+            }
+            "--no-prune-orphan-documents" => {
+                out.prune_orphan_documents = false;
+            }
+            "--no-wal-checkpoint" => {
+                out.wal_checkpoint_truncate = false;
+            }
+            "--no-analyze" => {
+                out.analyze = false;
+            }
+            "--no-vacuum" => {
+                out.vacuum = false;
+            }
+            "--json" => {
+                out.json_output = true;
+            }
+            "--help" | "-h" => {
+                return Err("usage: sqlrite compact [--db PATH] [--profile balanced|durable|fast_unsafe] [--index-mode brute_force|lsh_ann|hnsw_baseline|disabled] [--no-dedupe-by-content-hash] [--no-prune-orphan-documents] [--no-wal-checkpoint] [--no-analyze] [--no-vacuum] [--json]".to_string());
+            }
+            other => {
+                return Err(format!(
+                    "unknown argument `{other}`\nusage: sqlrite compact [--db PATH] [--profile balanced|durable|fast_unsafe] [--index-mode brute_force|lsh_ann|hnsw_baseline|disabled] [--no-dedupe-by-content-hash] [--no-prune-orphan-documents] [--no-wal-checkpoint] [--no-analyze] [--no-vacuum] [--json]"
+                ));
+            }
+        }
+        i += 1;
+    }
+
+    Ok(out)
 }
 
 #[derive(Debug)]
@@ -3530,7 +3664,7 @@ fn sql_value_to_json(value: ValueRef<'_>) -> Value {
 }
 
 fn usage() -> &'static str {
-    "sqlrite unified CLI\n\nusage:\n  sqlrite <command> [options]\n\ncommands:\n  init       Create/open a SQLRite database and apply runtime profile\n  sql        Execute SQL or enter interactive SQL shell\n  ingest     Ingest a single chunk directly from CLI flags\n  query      Run text/vector/hybrid retrieval query\n  quickstart Run init->query UX flow with telemetry/gates\n  serve      Start health/metrics HTTP server\n  backup     Create or verify backup files\n  benchmark  Run synthetic retrieval benchmark\n  doctor     Run environment and database health checks\n\nenv overrides:\n  SQLRITE_VECTOR_STORAGE=f32|f16|int8\n  SQLRITE_ANN_MIN_CANDIDATES=<int>\n  SQLRITE_ANN_MAX_HAMMING_RADIUS=<int>\n  SQLRITE_ANN_MAX_CANDIDATE_MULTIPLIER=<int>\n  SQLRITE_ENABLE_ANN_PERSISTENCE=true|false\n  SQLRITE_SQLITE_MMAP_SIZE=<bytes>\n  SQLRITE_SQLITE_CACHE_SIZE_KIB=<kib>\n\nexamples:\n  sqlrite init --db sqlrite_demo.db --seed-demo\n  sqlrite quickstart --db sqlrite_demo.db --runs 5 --max-median-ms 180000 --min-success-rate 0.95\n  sqlrite query --db sqlrite_demo.db --text \"agents local memory\" --top-k 3\n  sqlrite doctor --db sqlrite_demo.db --json\n  sqlrite sql --db sqlrite_demo.db\n  sqlrite sql --db sqlrite_demo.db --execute \"SELECT id, doc_id FROM chunks LIMIT 3;\""
+    "sqlrite unified CLI\n\nusage:\n  sqlrite <command> [options]\n\ncommands:\n  init       Create/open a SQLRite database and apply runtime profile\n  sql        Execute SQL or enter interactive SQL shell\n  ingest     Ingest a single chunk directly from CLI flags\n  query      Run text/vector/hybrid retrieval query\n  quickstart Run init->query UX flow with telemetry/gates\n  serve      Start health/metrics HTTP server\n  backup     Create or verify backup files\n  compact    Run ingestion-compaction maintenance workflow\n  benchmark  Run synthetic retrieval benchmark\n  doctor     Run environment and database health checks\n\nenv overrides:\n  SQLRITE_VECTOR_STORAGE=f32|f16|int8\n  SQLRITE_ANN_MIN_CANDIDATES=<int>\n  SQLRITE_ANN_MAX_HAMMING_RADIUS=<int>\n  SQLRITE_ANN_MAX_CANDIDATE_MULTIPLIER=<int>\n  SQLRITE_ENABLE_ANN_PERSISTENCE=true|false\n  SQLRITE_SQLITE_MMAP_SIZE=<bytes>\n  SQLRITE_SQLITE_CACHE_SIZE_KIB=<kib>\n\nexamples:\n  sqlrite init --db sqlrite_demo.db --seed-demo\n  sqlrite quickstart --db sqlrite_demo.db --runs 5 --max-median-ms 180000 --min-success-rate 0.95\n  sqlrite query --db sqlrite_demo.db --text \"agents local memory\" --top-k 3\n  sqlrite compact --db sqlrite_demo.db --json\n  sqlrite doctor --db sqlrite_demo.db --json\n  sqlrite sql --db sqlrite_demo.db\n  sqlrite sql --db sqlrite_demo.db --execute \"SELECT id, doc_id FROM chunks LIMIT 3;\""
 }
 
 #[cfg(test)]
@@ -3602,6 +3736,38 @@ mod tests {
         assert_eq!(parse_boolish("false"), Some(false));
         assert_eq!(parse_boolish("0"), Some(false));
         assert_eq!(parse_boolish("not-a-bool"), None);
+    }
+
+    #[test]
+    fn compact_args_defaults_to_safe_maintenance_actions() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let parsed = parse_compact_args(&[]).map_err(std::io::Error::other)?;
+        assert!(parsed.dedupe_by_content_hash);
+        assert!(parsed.prune_orphan_documents);
+        assert!(parsed.wal_checkpoint_truncate);
+        assert!(parsed.analyze);
+        assert!(parsed.vacuum);
+        Ok(())
+    }
+
+    #[test]
+    fn compact_args_support_disabling_actions() -> Result<(), Box<dyn std::error::Error>> {
+        let args = vec![
+            "--no-dedupe-by-content-hash".to_string(),
+            "--no-prune-orphan-documents".to_string(),
+            "--no-wal-checkpoint".to_string(),
+            "--no-analyze".to_string(),
+            "--no-vacuum".to_string(),
+            "--json".to_string(),
+        ];
+        let parsed = parse_compact_args(&args).map_err(std::io::Error::other)?;
+        assert!(!parsed.dedupe_by_content_hash);
+        assert!(!parsed.prune_orphan_documents);
+        assert!(!parsed.wal_checkpoint_truncate);
+        assert!(!parsed.analyze);
+        assert!(!parsed.vacuum);
+        assert!(parsed.json_output);
+        Ok(())
     }
 
     #[test]

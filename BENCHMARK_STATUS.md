@@ -49,6 +49,35 @@ SQLite tuning comparison (`hnsw_baseline`, corpus=8000, queries=350):
 | default | 268435456 | 65536 | 134.16 | 9.06 |
 | tuned | 536870912 | 131072 | 141.45 | 7.74 |
 
+## Sprint 11 ingestion/compaction snapshot
+
+Sources:
+
+1. `project_plan/reports/s11_ingest_no_adaptive.json`
+2. `project_plan/reports/s11_ingest_adaptive.json`
+3. `project_plan/reports/s11_compaction.json`
+4. `project_plan/reports/s11_compaction_dedupe.json`
+5. `project_plan/reports/s11_benchmark.json`
+
+Ingestion throughput (fixed chunking, 4.6MB source):
+
+| Mode | total_chunks | duration_ms | chunks_per_min | avg_batch | peak_batch |
+|---|---:|---:|---:|---:|---:|
+| no adaptive | 21286 | 1678.90 | 760711.65 | 63.92 | 64 |
+| adaptive | 21286 | 1435.28 | 889831.46 | 788.37 | 1024 |
+
+Observed:
+
+1. Adaptive batching improved throughput by ~16.97%.
+2. Current run exceeds the S11 floor (`50000 chunks/min`) by ~17.8x.
+
+Compaction evidence:
+
+| Scenario | before_chunks | after_chunks | deduplicated_chunks | reclaimed_bytes | duration_ms |
+|---|---:|---:|---:|---:|---:|
+| maintenance run | 21286 | 21286 | 0 | 704512 | 190.39 |
+| dedupe smoke | 3 | 2 | 1 | 0 | 5.98 |
+
 ## 10k profile progression
 
 Configuration:

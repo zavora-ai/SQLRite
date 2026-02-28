@@ -5,7 +5,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone)]
 pub enum IngestionSource {
@@ -397,7 +397,25 @@ pub struct IngestionRequest {
     pub metadata: Value,
     pub chunking: ChunkingStrategy,
     pub batch_size: usize,
+    pub batch_tuning: IngestionBatchTuning,
     pub continue_on_partial_failure: bool,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct IngestionBatchTuning {
+    pub adaptive: bool,
+    pub max_batch_size: usize,
+    pub target_batch_ms: u64,
+}
+
+impl Default for IngestionBatchTuning {
+    fn default() -> Self {
+        Self {
+            adaptive: true,
+            max_batch_size: 1024,
+            target_batch_ms: 80,
+        }
+    }
 }
 
 impl IngestionRequest {
@@ -419,6 +437,7 @@ impl IngestionRequest {
             metadata: json!({}),
             chunking: ChunkingStrategy::default(),
             batch_size: 64,
+            batch_tuning: IngestionBatchTuning::default(),
             continue_on_partial_failure: false,
         }
     }
@@ -439,6 +458,7 @@ impl IngestionRequest {
             metadata: json!({}),
             chunking: ChunkingStrategy::default(),
             batch_size: 64,
+            batch_tuning: IngestionBatchTuning::default(),
             continue_on_partial_failure: false,
         }
     }
@@ -459,6 +479,7 @@ impl IngestionRequest {
             metadata: json!({}),
             chunking: ChunkingStrategy::default(),
             batch_size: 64,
+            batch_tuning: IngestionBatchTuning::default(),
             continue_on_partial_failure: false,
         }
     }
@@ -478,6 +499,26 @@ impl IngestionRequest {
         self
     }
 
+    pub fn with_batch_tuning(mut self, batch_tuning: IngestionBatchTuning) -> Self {
+        self.batch_tuning = batch_tuning;
+        self
+    }
+
+    pub fn with_adaptive_batching(mut self, enabled: bool) -> Self {
+        self.batch_tuning.adaptive = enabled;
+        self
+    }
+
+    pub fn with_max_batch_size(mut self, max_batch_size: usize) -> Self {
+        self.batch_tuning.max_batch_size = max_batch_size.max(1);
+        self
+    }
+
+    pub fn with_target_batch_ms(mut self, target_batch_ms: u64) -> Self {
+        self.batch_tuning.target_batch_ms = target_batch_ms.max(1);
+        self
+    }
+
     pub fn with_continue_on_partial_failure(mut self, enabled: bool) -> Self {
         self.continue_on_partial_failure = enabled;
         self
@@ -490,6 +531,12 @@ pub struct IngestionReport {
     pub processed_chunks: usize,
     pub failed_chunks: usize,
     pub resumed_from_chunk: usize,
+    pub duration_ms: f64,
+    pub throughput_chunks_per_minute: f64,
+    pub average_batch_size: f64,
+    pub peak_batch_size: usize,
+    pub batch_count: usize,
+    pub adaptive_batching: bool,
     pub provider: String,
     pub model_version: String,
     pub source: String,
@@ -549,7 +596,18 @@ impl<'a, P: EmbeddingProvider> IngestionWorker<'a, P> {
                 "ingestion batch_size must be >= 1".to_string(),
             ));
         }
+        if request.batch_tuning.max_batch_size == 0 {
+            return Err(SqlRiteError::InvalidBenchmarkConfig(
+                "ingestion max_batch_size must be >= 1".to_string(),
+            ));
+        }
+        if request.batch_tuning.target_batch_ms == 0 {
+            return Err(SqlRiteError::InvalidBenchmarkConfig(
+                "ingestion target_batch_ms must be >= 1".to_string(),
+            ));
+        }
 
+        let ingest_started = Instant::now();
         let source_content = request.source.load_content()?;
         let segments = chunk_content(&source_content, &request.chunking);
 
@@ -561,10 +619,23 @@ impl<'a, P: EmbeddingProvider> IngestionWorker<'a, P> {
         let mut processed_chunks = 0usize;
         let mut failed_chunks = 0usize;
         let mut cursor = resumed_from_chunk;
+        let mut batch_count = 0usize;
+        let mut peak_batch_size = 0usize;
+        let mut total_batch_size = 0usize;
+        let mut next_batch_size = request
+            .batch_size
+            .max(1)
+            .min(request.batch_tuning.max_batch_size);
 
         while cursor < segments.len() {
-            let end = (cursor + request.batch_size).min(segments.len());
+            let batch_started = Instant::now();
+            let remaining = segments.len().saturating_sub(cursor);
+            let planned_batch = next_batch_size.min(remaining).max(1);
+            let end = (cursor + planned_batch).min(segments.len());
             let batch = &segments[cursor..end];
+            batch_count += 1;
+            peak_batch_size = peak_batch_size.max(batch.len());
+            total_batch_size += batch.len();
             let texts = batch
                 .iter()
                 .map(|segment| segment.content.clone())
@@ -572,9 +643,11 @@ impl<'a, P: EmbeddingProvider> IngestionWorker<'a, P> {
 
             let embedded = self.embed_with_retry(&texts)?;
             let mut upserts = Vec::with_capacity(batch.len());
+            let mut batch_failed_chunks = 0usize;
 
             for (idx, segment) in batch.iter().enumerate() {
                 let Some(embedding) = embedded[idx].clone() else {
+                    batch_failed_chunks += 1;
                     failed_chunks += 1;
                     continue;
                 };
@@ -617,21 +690,51 @@ impl<'a, P: EmbeddingProvider> IngestionWorker<'a, P> {
 
             cursor = end;
             self.save_checkpoint(&request.job_id, &request.source_id, cursor)?;
+            let batch_duration_ms = batch_started.elapsed().as_secs_f64() * 1000.0;
 
-            if failed_chunks > 0 && !request.continue_on_partial_failure {
+            if batch_failed_chunks > 0 && !request.continue_on_partial_failure {
                 return Err(SqlRiteError::EmbeddingBatchPartialFailure {
                     failed: failed_chunks,
                 });
             }
+
+            if request.batch_tuning.adaptive {
+                let target_ms = request.batch_tuning.target_batch_ms as f64;
+                if batch_failed_chunks == 0 && batch_duration_ms <= target_ms * 0.60 {
+                    let grown = next_batch_size
+                        .saturating_add(next_batch_size / 2)
+                        .saturating_add(1);
+                    next_batch_size = grown.min(request.batch_tuning.max_batch_size).max(1);
+                } else if batch_duration_ms > target_ms || batch_failed_chunks > 0 {
+                    next_batch_size = (next_batch_size / 2).max(1);
+                }
+            }
         }
 
         self.clear_checkpoint()?;
+        let duration_ms = ingest_started.elapsed().as_secs_f64() * 1000.0;
+        let throughput_chunks_per_minute = if duration_ms > 0.0 {
+            (processed_chunks as f64 / (duration_ms / 1000.0)) * 60.0
+        } else {
+            0.0
+        };
+        let average_batch_size = if batch_count > 0 {
+            total_batch_size as f64 / batch_count as f64
+        } else {
+            0.0
+        };
 
         Ok(IngestionReport {
             total_chunks: segments.len(),
             processed_chunks,
             failed_chunks,
             resumed_from_chunk,
+            duration_ms,
+            throughput_chunks_per_minute,
+            average_batch_size,
+            peak_batch_size,
+            batch_count,
+            adaptive_batching: request.batch_tuning.adaptive,
             provider: self.provider.provider_name().to_string(),
             model_version: self.provider.model_version().to_string(),
             source: request.source.source_label(),
@@ -1103,8 +1206,12 @@ mod tests {
                 overlap_chars: 20,
             })
             .with_batch_size(32)
+            .with_max_batch_size(256)
+            .with_target_batch_ms(120)
             .with_continue_on_partial_failure(true);
         assert_eq!(req.batch_size, 32);
+        assert_eq!(req.batch_tuning.max_batch_size, 256);
+        assert_eq!(req.batch_tuning.target_batch_ms, 120);
         assert!(req.continue_on_partial_failure);
         assert!(matches!(req.source, IngestionSource::File { .. }));
     }
@@ -1176,6 +1283,7 @@ mod tests {
                 overlap_chars: 5,
             },
             batch_size: 4,
+            batch_tuning: IngestionBatchTuning::default(),
             continue_on_partial_failure: false,
         };
 
@@ -1220,12 +1328,47 @@ mod tests {
                 overlap_chars: 0,
             },
             batch_size: 2,
+            batch_tuning: IngestionBatchTuning::default(),
             continue_on_partial_failure: false,
         };
 
         let report = worker.ingest(request)?;
         assert!(report.resumed_from_chunk >= 1);
         assert!(IngestionCheckpoint::load(&checkpoint_path)?.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn ingestion_reports_throughput_and_adaptive_batching_stats() -> Result<()> {
+        let db = SqlRite::open_in_memory_with_config(RuntimeConfig::default())?;
+        let provider = DeterministicEmbeddingProvider::new(64, "det-v1")?;
+        let worker = IngestionWorker::new(&db, provider);
+
+        let request = IngestionRequest::from_direct(
+            "job-batch-stats",
+            "doc-batch-stats",
+            "source-batch-stats",
+            "acme",
+            "# A\nRust SQLite agents.\n\n# B\nAdaptive batching for ingestion throughput.",
+        )
+        .with_chunking(ChunkingStrategy::HeadingAware {
+            max_chars: 24,
+            overlap_chars: 4,
+        })
+        .with_batch_size(2)
+        .with_batch_tuning(IngestionBatchTuning {
+            adaptive: true,
+            max_batch_size: 8,
+            target_batch_ms: 100,
+        });
+
+        let report = worker.ingest(request)?;
+        assert!(report.duration_ms >= 0.0);
+        assert!(report.throughput_chunks_per_minute >= 0.0);
+        assert!(report.batch_count > 0);
+        assert!(report.average_batch_size >= 1.0);
+        assert!(report.peak_batch_size >= 1);
+        assert!(report.adaptive_batching);
         Ok(())
     }
 }

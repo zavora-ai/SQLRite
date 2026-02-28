@@ -25,6 +25,8 @@ pub enum SqlRiteError {
     InvalidEvaluationDataset(String),
     #[error("invalid benchmark config: {0}")]
     InvalidBenchmarkConfig(String),
+    #[error("invalid compaction config: {0}")]
+    InvalidCompactionConfig(String),
     #[error("embedding dimension mismatch: expected {expected}, found {found}")]
     EmbeddingDimensionMismatch { expected: usize, found: usize },
     #[error("top_k must be at least 1")]

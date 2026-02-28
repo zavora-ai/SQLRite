@@ -2,6 +2,7 @@ use sqlrite::{
     ChunkingStrategy, DeterministicEmbeddingProvider, IngestionRequest, IngestionSource,
     IngestionWorker, RuntimeConfig, SqlRite,
 };
+use std::fs;
 use std::path::PathBuf;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -55,23 +56,48 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             },
         },
         batch_size: args.batch_size,
+        batch_tuning: sqlrite::IngestionBatchTuning {
+            adaptive: args.adaptive_batching,
+            max_batch_size: args.max_batch_size.max(1),
+            target_batch_ms: args.target_batch_ms.max(1),
+        },
         continue_on_partial_failure: args.continue_on_partial_failure,
     };
 
     let report = worker.ingest(request)?;
-    println!("SQLRite ingestion complete");
-    println!(
-        "chunks(total={}, processed={}, failed={}, resumed_from={})",
-        report.total_chunks,
-        report.processed_chunks,
-        report.failed_chunks,
-        report.resumed_from_chunk
-    );
-    println!(
-        "provider={} model={}",
-        report.provider, report.model_version
-    );
-    println!("source={}", report.source);
+    let payload = serde_json::to_string_pretty(&report)?;
+    if let Some(path) = args.output_path {
+        fs::write(path, &payload)?;
+    }
+
+    if args.json_output {
+        println!("{payload}");
+    } else {
+        println!("SQLRite ingestion complete");
+        println!(
+            "chunks(total={}, processed={}, failed={}, resumed_from={})",
+            report.total_chunks,
+            report.processed_chunks,
+            report.failed_chunks,
+            report.resumed_from_chunk
+        );
+        println!(
+            "timing(duration_ms={:.2}, throughput_chunks_per_minute={:.2})",
+            report.duration_ms, report.throughput_chunks_per_minute
+        );
+        println!(
+            "batching(adaptive={}, avg_batch_size={:.2}, peak_batch_size={}, batches={})",
+            report.adaptive_batching,
+            report.average_batch_size,
+            report.peak_batch_size,
+            report.batch_count
+        );
+        println!(
+            "provider={} model={}",
+            report.provider, report.model_version
+        );
+        println!("source={}", report.source);
+    }
     Ok(())
 }
 
@@ -93,6 +119,11 @@ struct Args {
     max_chars: usize,
     overlap_chars: usize,
     batch_size: usize,
+    adaptive_batching: bool,
+    max_batch_size: usize,
+    target_batch_ms: u64,
+    json_output: bool,
+    output_path: Option<PathBuf>,
     continue_on_partial_failure: bool,
 }
 
@@ -114,6 +145,11 @@ fn parse_args(args: Vec<String>) -> Result<Args, String> {
         max_chars: 1200,
         overlap_chars: 120,
         batch_size: 64,
+        adaptive_batching: true,
+        max_batch_size: 1024,
+        target_batch_ms: 80,
+        json_output: false,
+        output_path: None,
         continue_on_partial_failure: false,
     };
 
@@ -183,6 +219,27 @@ fn parse_args(args: Vec<String>) -> Result<Args, String> {
                 i += 1;
                 out.batch_size = parse_usize(&args, i, "--batch-size")?;
             }
+            "--adaptive-batching" => {
+                out.adaptive_batching = true;
+            }
+            "--no-adaptive-batching" => {
+                out.adaptive_batching = false;
+            }
+            "--max-batch-size" => {
+                i += 1;
+                out.max_batch_size = parse_usize(&args, i, "--max-batch-size")?;
+            }
+            "--target-batch-ms" => {
+                i += 1;
+                out.target_batch_ms = parse_u64(&args, i, "--target-batch-ms")?;
+            }
+            "--json" => {
+                out.json_output = true;
+            }
+            "--output" => {
+                i += 1;
+                out.output_path = Some(PathBuf::from(parse_string(&args, i, "--output")?));
+            }
             "--continue-on-partial-failure" => {
                 out.continue_on_partial_failure = true;
             }
@@ -207,6 +264,12 @@ fn parse_usize(args: &[String], index: usize, flag: &str) -> Result<usize, Strin
         .map_err(|_| format!("invalid integer for {flag}: `{raw}`\n{}", usage()))
 }
 
+fn parse_u64(args: &[String], index: usize, flag: &str) -> Result<u64, String> {
+    let raw = parse_string(args, index, flag)?;
+    raw.parse::<u64>()
+        .map_err(|_| format!("invalid integer for {flag}: `{raw}`\n{}", usage()))
+}
+
 fn usage() -> String {
-    "usage: cargo run --bin sqlrite-ingest -- [--db PATH] [--job-id ID] [--doc-id ID] [--source-id ID] [--tenant TENANT] (--file PATH|--url URL|--content TEXT) [--checkpoint PATH] [--embedding-dim N] [--model-version STR] [--chunking heading|fixed|semantic] [--max-chars N] [--overlap-chars N] [--batch-size N] [--continue-on-partial-failure]".to_string()
+    "usage: cargo run --bin sqlrite-ingest -- [--db PATH] [--job-id ID] [--doc-id ID] [--source-id ID] [--tenant TENANT] (--file PATH|--url URL|--content TEXT) [--checkpoint PATH] [--embedding-dim N] [--model-version STR] [--chunking heading|fixed|semantic] [--max-chars N] [--overlap-chars N] [--batch-size N] [--adaptive-batching|--no-adaptive-batching] [--max-batch-size N] [--target-batch-ms N] [--json] [--output PATH] [--continue-on-partial-failure]".to_string()
 }

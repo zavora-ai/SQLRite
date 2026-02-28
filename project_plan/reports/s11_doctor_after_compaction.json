@@ -1,0 +1,46 @@
+{
+  "version": "0.1.0",
+  "os": "macos",
+  "arch": "aarch64",
+  "cwd": "/Users/jameskaranja/Developer/projects/SQLRight",
+  "binary_path": "/Users/jameskaranja/Developer/projects/SQLRight/target/debug/sqlrite",
+  "path_contains_local_bin": true,
+  "local_bin": "/Users/jameskaranja/.local/bin",
+  "rustc_version": "rustc 1.92.0 (ded5c06cf 2025-12-08)",
+  "cargo_version": "cargo 1.92.0 (344c4567c 2025-10-21)",
+  "supported_profiles": [
+    "balanced",
+    "durable",
+    "fast_unsafe"
+  ],
+  "supported_index_modes": [
+    "brute_force",
+    "lsh_ann",
+    "hnsw_baseline",
+    "disabled"
+  ],
+  "supported_vector_storage": [
+    "f32",
+    "f16",
+    "int8"
+  ],
+  "in_memory_integrity_ok": true,
+  "db": {
+    "path": "/var/folders/6r/n_qn86p536z5lp0d64x66bbm0000gn/T/tmp.aMNTm6YTrB/adaptive.db",
+    "existed_before": true,
+    "parent_writable": true,
+    "profile": "balanced",
+    "requested_index_mode": "hnsw_baseline",
+    "requested_vector_storage": "f32",
+    "integrity_ok": true,
+    "schema_version": 3,
+    "chunk_count": 21286,
+    "active_index_mode": "hnsw_baseline",
+    "active_storage_kind": "f32",
+    "index_entries": 21286,
+    "index_estimated_memory_bytes": 26028406,
+    "sqlite_mmap_size_bytes": 268435456,
+    "sqlite_cache_size_kib": 65536
+  },
+  "recommendations": []
+}

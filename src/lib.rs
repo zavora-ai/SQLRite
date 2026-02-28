@@ -18,8 +18,9 @@ pub use eval::{
 };
 pub use ingest::{
     ChunkingStrategy, CustomHttpEmbeddingProvider, DeterministicEmbeddingProvider,
-    EmbeddingProvider, EmbeddingRetryPolicy, IngestionCheckpoint, IngestionReport,
-    IngestionRequest, IngestionSource, IngestionWorker, OpenAiCompatibleEmbeddingProvider,
+    EmbeddingProvider, EmbeddingRetryPolicy, IngestionBatchTuning, IngestionCheckpoint,
+    IngestionReport, IngestionRequest, IngestionSource, IngestionWorker,
+    OpenAiCompatibleEmbeddingProvider,
 };
 pub use ops::{HealthReport, backup_file, build_health_report, verify_backup_file};
 pub use reindex::{ReindexCheckpoint, ReindexOptions, ReindexReport, reindex_embeddings};
@@ -44,7 +45,7 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const LATEST_SCHEMA_VERSION: i64 = 3;
 const DOC_UPSERT_SQL: &str = "
@@ -446,6 +447,46 @@ pub struct VectorIndexStats {
     pub estimated_memory_bytes: usize,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct CompactionOptions {
+    pub dedupe_by_content_hash: bool,
+    pub prune_orphan_documents: bool,
+    pub wal_checkpoint_truncate: bool,
+    pub analyze: bool,
+    pub vacuum: bool,
+}
+
+impl Default for CompactionOptions {
+    fn default() -> Self {
+        Self {
+            dedupe_by_content_hash: true,
+            prune_orphan_documents: true,
+            wal_checkpoint_truncate: true,
+            analyze: true,
+            vacuum: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompactionReport {
+    pub before_chunks: usize,
+    pub after_chunks: usize,
+    pub removed_chunks: usize,
+    pub deduplicated_chunks: usize,
+    pub before_documents: usize,
+    pub after_documents: usize,
+    pub orphan_documents_removed: usize,
+    pub wal_checkpoint_applied: bool,
+    pub analyze_applied: bool,
+    pub vacuum_applied: bool,
+    pub vector_index_rebuilt: bool,
+    pub database_size_before_bytes: Option<u64>,
+    pub database_size_after_bytes: Option<u64>,
+    pub reclaimed_bytes: Option<u64>,
+    pub duration_ms: f64,
+}
+
 #[derive(Debug)]
 pub struct SqlRite {
     conn: Connection,
@@ -515,6 +556,92 @@ impl SqlRite {
             .conn
             .query_row("PRAGMA integrity_check;", [], |row| row.get(0))?;
         Ok(result.eq_ignore_ascii_case("ok"))
+    }
+
+    pub fn compact(&self, options: CompactionOptions) -> Result<CompactionReport> {
+        if !options.dedupe_by_content_hash
+            && !options.prune_orphan_documents
+            && !options.wal_checkpoint_truncate
+            && !options.analyze
+            && !options.vacuum
+        {
+            return Err(SqlRiteError::InvalidCompactionConfig(
+                "at least one compaction action must be enabled".to_string(),
+            ));
+        }
+
+        let started = Instant::now();
+        let before_chunks = self.chunk_count()?;
+        let before_documents = self.document_count()?;
+        let database_size_before_bytes = self.database_file_size_bytes();
+
+        let deduplicated_chunks = if options.dedupe_by_content_hash {
+            self.delete_content_hash_duplicates()?
+        } else {
+            0
+        };
+
+        let orphan_documents_removed = if options.prune_orphan_documents {
+            self.conn.execute(
+                "DELETE FROM documents
+                 WHERE NOT EXISTS (
+                    SELECT 1 FROM chunks
+                    WHERE chunks.doc_id = documents.id
+                 )",
+                [],
+            )?
+        } else {
+            0
+        };
+
+        let mut vector_index_rebuilt = false;
+        if deduplicated_chunks > 0 {
+            self.rebuild_vector_index()?;
+            self.persist_ann_snapshot_if_enabled()?;
+            vector_index_rebuilt = true;
+        }
+
+        let wal_checkpoint_applied = options.wal_checkpoint_truncate;
+        if wal_checkpoint_applied {
+            self.conn
+                .execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
+        }
+
+        let analyze_applied = options.analyze;
+        if analyze_applied {
+            self.conn.execute_batch("ANALYZE;")?;
+        }
+
+        let vacuum_applied = options.vacuum && self.db_path.is_some();
+        if vacuum_applied {
+            self.conn.execute_batch("VACUUM;")?;
+        }
+
+        let after_chunks = self.chunk_count()?;
+        let after_documents = self.document_count()?;
+        let database_size_after_bytes = self.database_file_size_bytes();
+        let reclaimed_bytes = match (database_size_before_bytes, database_size_after_bytes) {
+            (Some(before), Some(after)) if before >= after => Some(before - after),
+            _ => None,
+        };
+
+        Ok(CompactionReport {
+            before_chunks,
+            after_chunks,
+            removed_chunks: before_chunks.saturating_sub(after_chunks),
+            deduplicated_chunks,
+            before_documents,
+            after_documents,
+            orphan_documents_removed,
+            wal_checkpoint_applied,
+            analyze_applied,
+            vacuum_applied,
+            vector_index_rebuilt,
+            database_size_before_bytes,
+            database_size_after_bytes,
+            reclaimed_bytes,
+            duration_ms: started.elapsed().as_secs_f64() * 1000.0,
+        })
     }
 
     pub fn delete_chunks_by_metadata(&self, key: &str, value: &str) -> Result<usize> {
@@ -1185,6 +1312,54 @@ impl SqlRite {
                 .or_insert(normalized);
         }
         Ok(scores)
+    }
+
+    fn document_count(&self) -> Result<usize> {
+        let count = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM documents", [], |row| {
+                row.get::<_, i64>(0)
+            })?;
+        Ok(count as usize)
+    }
+
+    fn database_file_size_bytes(&self) -> Option<u64> {
+        self.db_path
+            .as_ref()
+            .and_then(|path| fs::metadata(path).ok())
+            .map(|meta| meta.len())
+    }
+
+    fn delete_content_hash_duplicates(&self) -> Result<usize> {
+        let deleted = self.conn.execute(
+            "
+            DELETE FROM chunks
+            WHERE rowid IN (
+                SELECT c.rowid
+                FROM chunks AS c
+                JOIN (
+                    SELECT
+                        doc_id,
+                        COALESCE(json_extract(metadata, '$.tenant'), '') AS tenant,
+                        json_extract(metadata, '$.content_hash') AS content_hash,
+                        MAX(rowid) AS keep_rowid
+                    FROM chunks
+                    WHERE json_extract(metadata, '$.content_hash') IS NOT NULL
+                    GROUP BY
+                        doc_id,
+                        COALESCE(json_extract(metadata, '$.tenant'), ''),
+                        json_extract(metadata, '$.content_hash')
+                    HAVING COUNT(*) > 1
+                ) AS dup
+                ON c.doc_id = dup.doc_id
+                AND COALESCE(json_extract(c.metadata, '$.tenant'), '') = dup.tenant
+                AND json_extract(c.metadata, '$.content_hash') = dup.content_hash
+                WHERE c.rowid <> dup.keep_rowid
+            )
+            ",
+            [],
+        )?;
+        Ok(deleted)
     }
 
     fn validate_ingest_chunks(&self, chunks: &[ChunkInput]) -> Result<()> {
@@ -2307,6 +2482,88 @@ mod tests {
                 .all(|entry| matches!(entry.vector, AnnSnapshotVector::Int8 { .. })),
             "expected int8 encoded vectors"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn compaction_deduplicates_chunks_and_rebuilds_index() -> Result<()> {
+        let db = SqlRite::open_in_memory_with_config(
+            RuntimeConfig::default().with_vector_index_mode(VectorIndexMode::BruteForce),
+        )?;
+        db.ingest_chunks(&[
+            ChunkInput {
+                id: "c1".to_string(),
+                doc_id: "d1".to_string(),
+                content: "same-content-a".to_string(),
+                embedding: vec![1.0, 0.0],
+                metadata: json!({"tenant": "acme", "content_hash": "hash-1"}),
+                source: None,
+            },
+            ChunkInput {
+                id: "c2".to_string(),
+                doc_id: "d1".to_string(),
+                content: "same-content-b".to_string(),
+                embedding: vec![0.9, 0.1],
+                metadata: json!({"tenant": "acme", "content_hash": "hash-1"}),
+                source: None,
+            },
+            ChunkInput {
+                id: "c3".to_string(),
+                doc_id: "d1".to_string(),
+                content: "different-content".to_string(),
+                embedding: vec![0.0, 1.0],
+                metadata: json!({"tenant": "acme", "content_hash": "hash-2"}),
+                source: None,
+            },
+        ])?;
+
+        let report = db.compact(CompactionOptions {
+            dedupe_by_content_hash: true,
+            prune_orphan_documents: false,
+            wal_checkpoint_truncate: false,
+            analyze: false,
+            vacuum: false,
+        })?;
+        assert_eq!(report.before_chunks, 3);
+        assert_eq!(report.after_chunks, 2);
+        assert_eq!(report.removed_chunks, 1);
+        assert_eq!(report.deduplicated_chunks, 1);
+        assert!(report.vector_index_rebuilt);
+        assert_eq!(
+            db.vector_index_stats()
+                .map(|stats| stats.entries)
+                .unwrap_or(0),
+            2
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn compaction_prunes_orphan_documents() -> Result<()> {
+        let db = SqlRite::open_in_memory_with_config(RuntimeConfig::default())?;
+        db.ingest_chunk(&ChunkInput {
+            id: "c1".to_string(),
+            doc_id: "d1".to_string(),
+            content: "active".to_string(),
+            embedding: vec![1.0, 0.0],
+            metadata: json!({"tenant": "acme", "content_hash": "hash-1"}),
+            source: None,
+        })?;
+        db.conn.execute(
+            "INSERT INTO documents (id, source, metadata) VALUES (?1, ?2, '{}')",
+            params!["orphan-doc", Option::<String>::None],
+        )?;
+
+        let report = db.compact(CompactionOptions {
+            dedupe_by_content_hash: false,
+            prune_orphan_documents: true,
+            wal_checkpoint_truncate: false,
+            analyze: false,
+            vacuum: false,
+        })?;
+        assert_eq!(report.before_documents, 2);
+        assert_eq!(report.after_documents, 1);
+        assert_eq!(report.orphan_documents_removed, 1);
         Ok(())
     }
 

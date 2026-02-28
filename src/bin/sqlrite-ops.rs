@@ -1,4 +1,6 @@
-use sqlrite::{RuntimeConfig, SqlRite, backup_file, build_health_report, verify_backup_file};
+use sqlrite::{
+    CompactionOptions, RuntimeConfig, SqlRite, backup_file, build_health_report, verify_backup_file,
+};
 use std::path::PathBuf;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -35,6 +37,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("- index_mode={}", report.vector_index_mode);
             println!("- index_entries={}", report.vector_index_entries);
         }
+        "compact" => {
+            let db_path = arg_value(&args, "--db")?;
+            let db = SqlRite::open_with_config(PathBuf::from(&db_path), RuntimeConfig::default())?;
+            let report = db.compact(CompactionOptions::default())?;
+            if arg_exists(&args, "--json") {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!("compaction:");
+                println!(
+                    "- chunks(before={}, after={}, removed={}, deduplicated={})",
+                    report.before_chunks,
+                    report.after_chunks,
+                    report.removed_chunks,
+                    report.deduplicated_chunks
+                );
+                println!(
+                    "- documents(before={}, after={}, orphan_removed={})",
+                    report.before_documents,
+                    report.after_documents,
+                    report.orphan_documents_removed
+                );
+                println!(
+                    "- duration_ms={:.2}, reclaimed_bytes={:?}",
+                    report.duration_ms, report.reclaimed_bytes
+                );
+            }
+        }
         _ => {
             return Err(std::io::Error::other(usage()).into());
         }
@@ -53,7 +82,11 @@ fn arg_value(args: &[String], flag: &str) -> Result<String, std::io::Error> {
         .ok_or_else(|| std::io::Error::other(format!("missing value for {flag}\n{}", usage())))
 }
 
+fn arg_exists(args: &[String], flag: &str) -> bool {
+    args.iter().any(|arg| arg == flag)
+}
+
 fn usage() -> String {
-    "usage:\n  cargo run --bin sqlrite-ops -- backup --source <db_path> --dest <backup_path>\n  cargo run --bin sqlrite-ops -- verify --path <backup_path>\n  cargo run --bin sqlrite-ops -- health --db <db_path>"
+    "usage:\n  cargo run --bin sqlrite-ops -- backup --source <db_path> --dest <backup_path>\n  cargo run --bin sqlrite-ops -- verify --path <backup_path>\n  cargo run --bin sqlrite-ops -- health --db <db_path>\n  cargo run --bin sqlrite-ops -- compact --db <db_path> [--json]"
         .to_string()
 }

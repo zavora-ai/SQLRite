@@ -25,7 +25,7 @@ It is designed for developers who want:
   - custom HTTP provider
 - reindex pipeline for embedding model/version migration
 - tenant-aware secure wrapper with audit logging and key-rotation workflow
-- operations tooling: backup, verify, health checks
+- operations tooling: backup, verify, health checks, compaction
 - benchmark/eval CLIs with CI-gate integration
 - ANN snapshot persistence for faster ANN index warm-start on file-backed databases
 - SQLite mmap/cache tuning controls for performance experiments and profile hardening
@@ -527,16 +527,27 @@ cargo run --bin sqlrite-ingest -- \
   --chunking heading \
   --max-chars 1200 \
   --overlap-chars 120 \
-  --batch-size 64
+  --batch-size 64 \
+  --adaptive-batching \
+  --max-batch-size 1024 \
+  --target-batch-ms 80 \
+  --json \
+  --output ingest_report.json
 ```
 
 Output shape:
 
-```text
-SQLRite ingestion complete
-chunks(total=..., processed=..., failed=..., resumed_from=...)
-provider=... model=...
-source=...
+```json
+{
+  "total_chunks": 21286,
+  "processed_chunks": 21286,
+  "duration_ms": 1435.283041,
+  "throughput_chunks_per_minute": 889831.4572923321,
+  "average_batch_size": 788.3703703703703,
+  "peak_batch_size": 1024,
+  "batch_count": 27,
+  "adaptive_batching": true
+}
 ```
 
 ## Security Workflow
@@ -643,6 +654,26 @@ sqlrite doctor
 ```bash
 cargo run -- backup --source sqlrite_demo.db --dest sqlrite_backup.db
 cargo run -- backup verify --path sqlrite_backup.db
+```
+
+### Compaction maintenance
+
+```bash
+cargo run -- compact --db sqlrite_demo.db --index-mode hnsw_baseline --json
+```
+
+Sample output:
+
+```json
+{
+  "before_chunks": 21286,
+  "after_chunks": 21286,
+  "deduplicated_chunks": 0,
+  "wal_checkpoint_applied": true,
+  "analyze_applied": true,
+  "vacuum_applied": true,
+  "reclaimed_bytes": 704512
+}
 ```
 
 ## Server Mode (Health/Readiness/Metrics)

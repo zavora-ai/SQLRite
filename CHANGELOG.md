@@ -9,7 +9,7 @@ The format is based on Keep a Changelog.
 ### Added
 
 - Unified `sqlrite` umbrella CLI with subcommands:
-  - `init`, `sql`, `ingest`, `query`, `quickstart`, `serve`, `backup`, `benchmark`, `doctor`
+  - `init`, `sql`, `ingest`, `query`, `quickstart`, `serve`, `backup`, `compact`, `benchmark`, `doctor`
 - Cross-platform installation and packaging channels:
   - source install/update scripts, release installer script, Homebrew/winget/nfpm assets, Docker image workflow
 - Interactive SQL shell helpers:
@@ -84,6 +84,22 @@ The format is based on Keep a Changelog.
   - `project_plan/reports/s10_quickstart_tuned.json`
   - `project_plan/reports/s10_doctor_tuned.json`
   - `project_plan/reports/s10_memory_dashboard.md`
+- Ingestion throughput optimizer and telemetry:
+  - adaptive batch tuning (`IngestionBatchTuning`)
+  - ingestion report fields for throughput/duration/batch profile
+  - `sqlrite-ingest` flags: adaptive toggle, max batch, target batch latency, JSON output
+- Compaction tooling:
+  - `SqlRite::compact(CompactionOptions)` with dedupe + orphan prune + maintenance actions
+  - umbrella CLI command: `sqlrite compact`
+  - ops CLI command: `sqlrite-ops compact`
+- Sprint 11 evidence artifacts:
+  - `project_plan/reports/S11.md`
+  - `project_plan/reports/s11_ingest_no_adaptive.json`
+  - `project_plan/reports/s11_ingest_adaptive.json`
+  - `project_plan/reports/s11_compaction.json`
+  - `project_plan/reports/s11_compaction_dedupe.json`
+  - `project_plan/reports/s11_benchmark.json`
+  - `project_plan/reports/s11_eval.json`
 
 ### Changed
 
@@ -96,6 +112,7 @@ The format is based on Keep a Changelog.
   - `sqlite_mmap_size_bytes`
   - `sqlite_cache_size_kib`
 - `sqlrite-bench-matrix` now includes `weighted + hnsw_baseline` scenario.
+- Benchmark CLI human output now includes runtime storage/cache settings and ingestion payload/index footprint metrics.
 
 ## [0.1.0] - 2026-02-28
 
