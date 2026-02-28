@@ -309,6 +309,31 @@ created text retrieval index `idx_chunks_content_fts` on chunks(content) using F
 ]
 ```
 
+Planner fallback behavior (Sprint 6):
+
+- If ANN/index candidates are unavailable or unhealthy, SQLRite falls back to brute-force vector scoring from stored embeddings.
+- Deterministic tie-break order is always by `chunk_id` when scores are equal.
+
+Fallback smoke command:
+
+```bash
+cargo run -- query \
+  --db s06_fallback.db \
+  --profile balanced \
+  --index-mode disabled \
+  --vector 1,0 \
+  --top-k 1 \
+  --candidate-limit 1
+```
+
+Sample output:
+
+```text
+results=1
+1. best | doc=d1 | hybrid=1.000 | vector=1.000 | text=0.000
+   best match
+```
+
 ## Query Cookbook (Real Use Cases)
 
 All commands below assume `sqlrite_demo.db` from `cargo run`.

@@ -623,7 +623,7 @@ impl SqlRite {
         let use_text = query_text.is_some();
 
         let vector_candidates = if let Some(query_vector) = query_embedding {
-            self.vector_candidates(query_vector, request.candidate_limit)?
+            self.vector_candidates(query_vector, &request)?
         } else {
             Vec::new()
         };
@@ -880,20 +880,84 @@ impl SqlRite {
     fn vector_candidates(
         &self,
         query_embedding: &[f32],
-        candidate_limit: usize,
+        request: &SearchRequest,
     ) -> Result<Vec<VectorCandidate>> {
-        if let Some(index) = &self.vector_index {
+        let indexed_candidates = if let Some(index) = &self.vector_index {
             let index = index.borrow();
-            let Some(index_dim) = index.dimension() else {
-                return Ok(Vec::new());
-            };
-            if index_dim != query_embedding.len() {
-                return Ok(Vec::new());
+            if index.dimension() != Some(query_embedding.len()) {
+                None
+            } else {
+                match index.query(query_embedding, request.candidate_limit) {
+                    Ok(candidates) if !candidates.is_empty() || index.len() == 0 => {
+                        Some(candidates)
+                    }
+                    Ok(_) | Err(_) => None,
+                }
             }
-            index.query(query_embedding, candidate_limit)
         } else {
-            Ok(Vec::new())
+            None
+        };
+
+        if let Some(candidates) = indexed_candidates {
+            return Ok(candidates);
         }
+
+        self.brute_force_vector_candidates(query_embedding, request)
+    }
+
+    fn brute_force_vector_candidates(
+        &self,
+        query_embedding: &[f32],
+        request: &SearchRequest,
+    ) -> Result<Vec<VectorCandidate>> {
+        let mut sql = String::from("SELECT id, embedding, embedding_dim FROM chunks");
+        let mut clauses = Vec::new();
+        let mut params = Vec::new();
+
+        if let Some(doc_id) = &request.doc_id {
+            clauses.push("doc_id = ?".to_string());
+            params.push(SqlValue::from(doc_id.clone()));
+        }
+
+        for (key, value) in &request.metadata_filters {
+            let safe_key = sanitize_metadata_key(key)?;
+            clauses.push(format!("json_extract(metadata, '$.{}') = ?", safe_key));
+            params.push(SqlValue::from(value.clone()));
+        }
+
+        if !clauses.is_empty() {
+            sql.push_str(" WHERE ");
+            sql.push_str(&clauses.join(" AND "));
+        }
+
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(params_from_iter(params), |row| {
+            let chunk_id: String = row.get(0)?;
+            let embedding_blob: Vec<u8> = row.get(1)?;
+            let embedding_dim: i64 = row.get(2)?;
+            Ok((chunk_id, embedding_blob, embedding_dim))
+        })?;
+
+        let mut candidates = Vec::new();
+        for row in rows {
+            let (chunk_id, embedding_blob, embedding_dim) = row?;
+            if embedding_dim <= 0 || embedding_dim as usize != query_embedding.len() {
+                continue;
+            }
+
+            let embedding = decode_embedding(&embedding_blob, embedding_dim as usize)?;
+            let score = cosine_similarity(query_embedding, &embedding);
+            candidates.push(VectorCandidate { chunk_id, score });
+        }
+
+        candidates.sort_by(|left, right| {
+            right
+                .score
+                .total_cmp(&left.score)
+                .then_with(|| left.chunk_id.cmp(&right.chunk_id))
+        });
+        candidates.truncate(request.candidate_limit);
+        Ok(candidates)
     }
 
     fn fts_text_candidates(
@@ -1754,6 +1818,45 @@ mod tests {
     }
 
     #[test]
+    fn deterministic_order_is_stable_across_repeated_runs() -> Result<()> {
+        let db = SqlRite::open_in_memory()?;
+        db.ingest_chunks(&[
+            ChunkInput {
+                id: "a-chunk".to_string(),
+                doc_id: "d1".to_string(),
+                content: "same".to_string(),
+                embedding: vec![1.0, 0.0],
+                metadata: json!({}),
+                source: None,
+            },
+            ChunkInput {
+                id: "b-chunk".to_string(),
+                doc_id: "d2".to_string(),
+                content: "same".to_string(),
+                embedding: vec![1.0, 0.0],
+                metadata: json!({}),
+                source: None,
+            },
+        ])?;
+
+        let request = SearchRequest::builder()
+            .query_text("same")
+            .query_embedding(vec![1.0, 0.0])
+            .alpha(0.5)
+            .top_k(2)
+            .candidate_limit(2)
+            .build()?;
+
+        for _ in 0..5 {
+            let results = db.search(request.clone())?;
+            let ids: Vec<&str> = results.iter().map(|item| item.chunk_id.as_str()).collect();
+            assert_eq!(ids, vec!["a-chunk", "b-chunk"]);
+        }
+
+        Ok(())
+    }
+
+    #[test]
     fn index_mode_rejects_mixed_embedding_dimensions() -> Result<()> {
         let db = SqlRite::open_in_memory_with_config(
             RuntimeConfig::default().with_vector_index_mode(VectorIndexMode::BruteForce),
@@ -1837,6 +1940,101 @@ mod tests {
             err,
             SqlRiteError::EmbeddingDimensionMismatch { .. }
         ));
+        Ok(())
+    }
+
+    #[test]
+    fn vector_search_falls_back_to_bruteforce_when_index_absent() -> Result<()> {
+        let db = SqlRite::open_in_memory_with_config(
+            RuntimeConfig::default().with_vector_index_mode(VectorIndexMode::Disabled),
+        )?;
+        db.ingest_chunk(&ChunkInput {
+            id: "best".to_string(),
+            doc_id: "d1".to_string(),
+            content: "best".to_string(),
+            embedding: vec![1.0, 0.0],
+            metadata: json!({}),
+            source: None,
+        })?;
+        db.ingest_chunk(&ChunkInput {
+            id: "recent-noise".to_string(),
+            doc_id: "d2".to_string(),
+            content: "noise".to_string(),
+            embedding: vec![0.0, 1.0],
+            metadata: json!({}),
+            source: None,
+        })?;
+
+        let results = db.search(
+            SearchRequest::builder()
+                .query_embedding(vec![1.0, 0.0])
+                .candidate_limit(1)
+                .top_k(1)
+                .build()?,
+        )?;
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].chunk_id, "best");
+        Ok(())
+    }
+
+    #[test]
+    fn vector_search_falls_back_to_bruteforce_on_index_dimension_mismatch() -> Result<()> {
+        let db = SqlRite::open_in_memory_with_config(
+            RuntimeConfig::default().with_vector_index_mode(VectorIndexMode::BruteForce),
+        )?;
+
+        db.ingest_chunk(&ChunkInput {
+            id: "indexed-3d".to_string(),
+            doc_id: "d-indexed".to_string(),
+            content: "indexed".to_string(),
+            embedding: vec![1.0, 0.0, 0.0],
+            metadata: json!({}),
+            source: None,
+        })?;
+
+        db.conn.execute(
+            "INSERT INTO documents (id, source, metadata) VALUES (?1, ?2, '{}')
+             ON CONFLICT(id) DO UPDATE SET source = excluded.source",
+            params!["d-raw-1", Option::<String>::None],
+        )?;
+        db.conn.execute(
+            "INSERT INTO chunks (id, doc_id, content, metadata, embedding, embedding_dim)
+             VALUES (?1, ?2, ?3, '{}', ?4, ?5)",
+            params![
+                "target-2d",
+                "d-raw-1",
+                "target",
+                encode_embedding(&[1.0, 0.0]),
+                2
+            ],
+        )?;
+
+        db.conn.execute(
+            "INSERT INTO documents (id, source, metadata) VALUES (?1, ?2, '{}')
+             ON CONFLICT(id) DO UPDATE SET source = excluded.source",
+            params!["d-raw-2", Option::<String>::None],
+        )?;
+        db.conn.execute(
+            "INSERT INTO chunks (id, doc_id, content, metadata, embedding, embedding_dim)
+             VALUES (?1, ?2, ?3, '{}', ?4, ?5)",
+            params![
+                "recent-noise-2d",
+                "d-raw-2",
+                "noise",
+                encode_embedding(&[0.0, 1.0]),
+                2
+            ],
+        )?;
+
+        let results = db.search(
+            SearchRequest::builder()
+                .query_embedding(vec![1.0, 0.0])
+                .candidate_limit(1)
+                .top_k(1)
+                .build()?,
+        )?;
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].chunk_id, "target-2d");
         Ok(())
     }
 

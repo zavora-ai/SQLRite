@@ -28,18 +28,27 @@ The format is based on Keep a Changelog.
 - Retrieval index metadata catalog migration:
   - schema version `3`
   - `retrieval_indexes` table + `retrieval_index_catalog` view
+- Hybrid planner fallback hardening:
+  - vector retrieval now falls back to brute-force scoring when ANN/index candidates are absent or unhealthy
+  - deterministic repeated-run ordering validated for fixed data/version
 - Sprint execution reports and evidence artifacts under `project_plan/reports/`.
 - Sprint 5 evidence artifacts:
   - `project_plan/reports/S05.md`
   - `project_plan/reports/s05_sql_smoke.log`
   - `project_plan/reports/s05_benchmark.json`
   - `project_plan/reports/s05_eval.json`
+- Sprint 6 evidence artifacts:
+  - `project_plan/reports/S06.md`
+  - `project_plan/reports/s06_sql_smoke.log`
+  - `project_plan/reports/s06_benchmark.json`
+  - `project_plan/reports/s06_eval.json`
 
 ### Changed
 
 - `sqlrite doctor` diagnostics now include structured JSON output and improved writable-path detection.
 - CLI help and README now document SQL-native retrieval usage and quickstart gates.
 - `sqlrite sql` now bootstraps database migrations before executing statements, ensuring catalog tables/views exist in non-init SQL sessions.
+- Search planner behavior now guarantees vector brute-force fallback semantics when ANN/index paths are unavailable, with deterministic tie-break ordering.
 
 ## [0.1.0] - 2026-02-28
 
