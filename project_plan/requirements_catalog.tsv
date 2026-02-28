@@ -1,0 +1,94 @@
+ID|Source|Description
+SD-01|3.1|Ship a single sqlrite umbrella CLI with init/sql/ingest/query/serve/backup/benchmark/doctor commands.
+SD-02|3.1|Ship installers for Homebrew, winget, apt/rpm, curl install script, and Docker image.
+SD-03|3.1|Ship first-class SDKs for Rust, Python, and TypeScript.
+SD-04|3.1|Ship interactive SQL shell with retrieval-aware helpers and examples.
+SD-05|3.2|Support vector distance operators (<->, <=>, <#>) in SQL.
+SD-06|3.2|Support retrieval SQL functions (vector, embed, bm25_score, hybrid_score).
+SD-07|3.2|Support retrieval index DDL for vector and text indexes.
+SD-08|3.2|Planner fallback to brute-force when ANN is absent or unhealthy.
+SD-09|3.2|Provide EXPLAIN RETRIEVAL with score and execution breakdown.
+SD-10|3.2|Provide SEARCH table-valued function for concise hybrid queries.
+SD-11|3.2|Provide reranking hooks (cross-encoder optional).
+SD-12|3.2|Provide query profile hints for recall/latency tradeoffs.
+SD-13|3.3|Embedded mode default: single-file DB, WAL profile, local-first performance.
+SD-14|3.3|Server HA profile: multi-node deployment, replicated writes, automatic failover.
+SD-15|3.3|Embedded durability target: crash-safe restart with verified recovery.
+SD-16|3.3|HA availability target: 99.95% monthly in reference profile.
+MR-01|4.1|Install and first query in under five minutes.
+MR-02|4.1|SQL cookbook covers at least 80 percent of RAG retrieval patterns.
+MR-03|4.1|Built-in agent interoperability (MCP manifest and tool server mode).
+MR-04|4.1|Reproducible benchmark and evaluation tooling.
+MR-05|4.1|Migration paths from SQLite, pgvector, and API-first vector databases.
+MR-06|4.1|Built-in observability: health/readiness/metrics/query traces.
+MR-07|4.1|Security defaults: tenant isolation, encryption options, audit logs.
+XP-01|4.2|Linux x86_64 and arm64 distribution support.
+XP-02|4.2|macOS universal binary distribution support.
+XP-03|4.2|Windows x64 and arm64 distribution support.
+XP-04|4.2|Docker image support for server mode.
+XP-05|4.2|WASM or edge read/query support story.
+XP-06|4.2|SDK test matrix green on all supported platforms.
+SQ-01|4.3|Hybrid retrieval expressible in one SQL statement.
+SQ-02|4.3|Same retrieval SQL semantics in embedded and server modes.
+SQ-03|4.3|EXPLAIN indicates ANN or brute-force execution path.
+SQ-04|4.3|Deterministic ordering for repeated runs on fixed data/version.
+PA-D01|Phase A|Consolidated sqlrite binary with subcommands.
+PA-D02|Phase A|Packaging pipeline for Homebrew/winget/apt.
+PA-D03|Phase A|sqlrite doctor environment diagnostics.
+PA-D04|Phase A|Quickstart path (init then query).
+PA-G01|Phase A|Median time-to-first-query under 3 minutes.
+PA-G02|Phase A|Install success rate greater than 95 percent across OS matrix.
+PB-D01|Phase B|Distance operators and vector helper functions.
+PB-D02|Phase B|CREATE VECTOR INDEX USING HNSW support.
+PB-D03|Phase B|Hybrid scoring with deterministic tie-breaks.
+PB-D04|Phase B|Retrieval EXPLAIN output with score attribution.
+PB-D05|Phase B|SQL cookbook for semantic/lexical/hybrid/filter/tenant/rerank-ready patterns.
+PB-G01|Phase B|All documented retrieval patterns runnable via SQL only.
+PB-G02|Phase B|Planner correctness across indexed and non-indexed paths.
+PC-D01|Phase C|ANN tuning controls with brute-force fallback.
+PC-D02|Phase C|Vector datatype options and quantization controls.
+PC-D03|Phase C|Memory-mapped index/page optimizations.
+PC-D04|Phase C|Batch ingestion optimizer and compaction tooling.
+PC-D05|Phase C|Public benchmark harness for 10k/100k/1M/10M profiles.
+PC-G01|Phase C|p95 hybrid latency under 40ms at 100k profile.
+PC-G02|Phase C|p95 hybrid latency under 90ms at 1M profile.
+PC-G03|Phase C|Ingestion throughput at or above 50k chunks/min on 8 vCPU reference.
+PD-D01|Phase D|Server replication profile and reference architecture.
+PD-D02|Phase D|Automatic leader failover test harness.
+PD-D03|Phase D|Backup/restore and snapshot policy tooling.
+PD-D04|Phase D|SLO dashboards and alert templates.
+PD-D05|Phase D|Disaster recovery game-day scripts.
+PD-G01|Phase D|Monthly availability at or above 99.95 percent in soak test.
+PD-G02|Phase D|RPO at or below 60 seconds in HA reference profile.
+PD-G03|Phase D|Chaos scenarios validated (node crash, disk-full, partition subset).
+PE-D01|Phase E|Built-in MCP tool server mode.
+PE-D02|Phase E|OpenAPI and gRPC query endpoints.
+PE-D03|Phase E|Python and TypeScript SDK feature parity with Rust core.
+PE-D04|Phase E|First-party integrations and examples for common agent stacks.
+PE-D05|Phase E|Deterministic tool contract tests for agent workflows.
+PE-G01|Phase E|Reference integrations validated in CI.
+PE-G02|Phase E|Agent memory sample setup under 15 minutes.
+PF-D01|Phase F|API freeze and compatibility contract.
+PF-D02|Phase F|Secure multi-tenant policy framework (RBAC hooks/audit/key hardening).
+PF-D03|Phase F|Compliance documentation and updated threat model.
+PF-D04|Phase F|Long-term support branch and release policy.
+PF-D05|Phase F|Migration guides from pgvector/libSQL/Qdrant/Weaviate/Milvus patterns.
+PF-G01|Phase F|Zero open P0/P1 defects at release cut.
+PF-G02|Phase F|Full release quality gates green.
+PF-G03|Phase F|Published v1.0 benchmark and reliability report.
+BE-01|6.1|Track latency (p50/p95/p99) by workload profile for each release.
+BE-02|6.1|Track throughput (QPS) by concurrency level for each release.
+BE-03|6.1|Track retrieval quality metrics (Recall@k, MRR, nDCG).
+BE-04|6.1|Track cost efficiency (memory and storage overhead).
+BE-05|6.1|Track operational resilience (failover and restore times).
+BE-06|6.2|Use the same embedding model and datasets for competitor comparisons.
+BE-07|6.2|Use the same hardware classes for competitor comparisons.
+BE-08|6.2|Publish benchmark configurations and scripts for reproducibility.
+N90-01|11|Deliver unified sqlrite CLI and packaging pipeline in first 90 days.
+N90-02|11|Implement SQL operators/functions and retrieval index DDL in first 90 days.
+N90-03|11|Publish SQL cookbook with real output examples in first 90 days.
+N90-04|11|Stand up benchmark harness and initial competitor baseline runs in first 90 days.
+N90-05|11|Ship SQLite and pgvector migration guides in first 90 days.
+GV-01|9|Run weekly roadmap burn-down, benchmark drift review, and bug triage.
+GV-02|9|Run monthly release-gate review across performance, quality, and security.
+GV-03|9|Run quarterly competitor baseline review and target recalibration.
