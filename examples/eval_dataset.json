@@ -1,0 +1,80 @@
+{
+  "k_values": [1, 3, 5],
+  "corpus": [
+    {
+      "id": "c1",
+      "doc_id": "doc-rust",
+      "content": "Rust powers safe AI agent backends.",
+      "embedding": [1.0, 0.0, 0.0],
+      "metadata": { "tenant": "demo", "topic": "rust" },
+      "source": "docs/rust.md"
+    },
+    {
+      "id": "c2",
+      "doc_id": "doc-sqlite",
+      "content": "SQLite provides local-first storage for embedded systems.",
+      "embedding": [0.7, 0.3, 0.0],
+      "metadata": { "tenant": "demo", "topic": "sqlite" },
+      "source": "docs/sqlite.md"
+    },
+    {
+      "id": "c3",
+      "doc_id": "doc-postgres",
+      "content": "PostgreSQL offers robust relational transactions.",
+      "embedding": [0.0, 1.0, 0.0],
+      "metadata": { "tenant": "demo", "topic": "postgres" },
+      "source": "docs/postgres.md"
+    },
+    {
+      "id": "c4",
+      "doc_id": "doc-rag",
+      "content": "Hybrid retrieval combines vector similarity and lexical scoring.",
+      "embedding": [0.6, 0.4, 0.0],
+      "metadata": { "tenant": "demo", "topic": "retrieval" },
+      "source": "docs/rag.md"
+    },
+    {
+      "id": "c5",
+      "doc_id": "doc-ops",
+      "content": "Metadata filters improve tenant-safe retrieval for SaaS agents.",
+      "embedding": [0.4, 0.6, 0.0],
+      "metadata": { "tenant": "demo", "topic": "ops" },
+      "source": "docs/ops.md"
+    }
+  ],
+  "queries": [
+    {
+      "id": "q1",
+      "query_text": "rust ai backends",
+      "query_embedding": [0.95, 0.05, 0.0],
+      "relevant_chunk_ids": ["c1"],
+      "metadata_filters": { "tenant": "demo" },
+      "doc_id": null,
+      "alpha": 0.6,
+      "candidate_limit": 20,
+      "top_k": 5
+    },
+    {
+      "id": "q2",
+      "query_text": "hybrid retrieval vector lexical",
+      "query_embedding": [0.62, 0.38, 0.0],
+      "relevant_chunk_ids": ["c4", "c2"],
+      "metadata_filters": { "tenant": "demo" },
+      "doc_id": null,
+      "alpha": 0.5,
+      "candidate_limit": 20,
+      "top_k": 5
+    },
+    {
+      "id": "q3",
+      "query_text": "tenant safe metadata filtering",
+      "query_embedding": [0.35, 0.65, 0.0],
+      "relevant_chunk_ids": ["c5"],
+      "metadata_filters": { "tenant": "demo" },
+      "doc_id": null,
+      "alpha": 0.5,
+      "candidate_limit": 20,
+      "top_k": 5
+    }
+  ]
+}

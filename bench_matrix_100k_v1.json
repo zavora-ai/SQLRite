@@ -1,0 +1,145 @@
+{
+  "profile": "100k",
+  "runs": [
+    {
+      "name": "weighted + brute_force",
+      "report": {
+        "corpus_size": 100000,
+        "query_count": 1000,
+        "warmup_queries": 200,
+        "embedding_dim": 256,
+        "top_k": 10,
+        "candidate_limit": 1000,
+        "alpha": 0.65,
+        "fusion_strategy": "weighted",
+        "vector_index_mode": "brute_force",
+        "ingest_duration_ms": 4501.658541000001,
+        "query_duration_ms": 106506.94824999999,
+        "total_duration_ms": 132468.439083,
+        "qps": 9.389058802555637,
+        "top1_hit_rate": 1.0,
+        "latency": {
+          "avg_ms": 106.48542924899995,
+          "p50_ms": 104.570792,
+          "p95_ms": 110.885833,
+          "p99_ms": 130.189125,
+          "min_ms": 102.196833,
+          "max_ms": 338.965083
+        },
+        "ingest_chunks_per_sec": 22214.034913848875,
+        "embedding_bytes": 102400000,
+        "content_bytes": 5301390,
+        "dataset_payload_bytes": 107701390,
+        "vector_index_entries": 100000,
+        "vector_index_dimension": 256,
+        "vector_index_estimated_memory_bytes": 107800000,
+        "approx_working_set_bytes": 215501390
+      }
+    },
+    {
+      "name": "rrf(k=60) + brute_force",
+      "report": {
+        "corpus_size": 100000,
+        "query_count": 1000,
+        "warmup_queries": 200,
+        "embedding_dim": 256,
+        "top_k": 10,
+        "candidate_limit": 1000,
+        "alpha": 0.65,
+        "fusion_strategy": "rrf(rank_constant=60)",
+        "vector_index_mode": "brute_force",
+        "ingest_duration_ms": 4589.119417,
+        "query_duration_ms": 108586.252292,
+        "total_duration_ms": 135066.404917,
+        "qps": 9.209268934992743,
+        "top1_hit_rate": 0.058,
+        "latency": {
+          "avg_ms": 108.56497709299992,
+          "p50_ms": 106.596625,
+          "p95_ms": 113.166583,
+          "p99_ms": 134.290875,
+          "min_ms": 103.96137499999999,
+          "max_ms": 346.355
+        },
+        "ingest_chunks_per_sec": 21790.672874965632,
+        "embedding_bytes": 102400000,
+        "content_bytes": 5301390,
+        "dataset_payload_bytes": 107701390,
+        "vector_index_entries": 100000,
+        "vector_index_dimension": 256,
+        "vector_index_estimated_memory_bytes": 107800000,
+        "approx_working_set_bytes": 215501390
+      }
+    },
+    {
+      "name": "weighted + lsh_ann",
+      "report": {
+        "corpus_size": 100000,
+        "query_count": 1000,
+        "warmup_queries": 200,
+        "embedding_dim": 256,
+        "top_k": 10,
+        "candidate_limit": 1000,
+        "alpha": 0.65,
+        "fusion_strategy": "weighted",
+        "vector_index_mode": "lsh_ann",
+        "ingest_duration_ms": 20913.709625,
+        "query_duration_ms": 92529.728208,
+        "total_duration_ms": 129012.40737500001,
+        "qps": 10.807337483495832,
+        "top1_hit_rate": 0.995,
+        "latency": {
+          "avg_ms": 92.50054066499997,
+          "p50_ms": 80.177166,
+          "p95_ms": 165.933667,
+          "p99_ms": 302.542459,
+          "min_ms": 58.747708,
+          "max_ms": 700.536125
+        },
+        "ingest_chunks_per_sec": 4781.552474098674,
+        "embedding_bytes": 102400000,
+        "content_bytes": 5301390,
+        "dataset_payload_bytes": 107701390,
+        "vector_index_entries": 100000,
+        "vector_index_dimension": 256,
+        "vector_index_estimated_memory_bytes": 119881272,
+        "approx_working_set_bytes": 227582662
+      }
+    },
+    {
+      "name": "weighted + disabled_index",
+      "report": {
+        "corpus_size": 100000,
+        "query_count": 1000,
+        "warmup_queries": 200,
+        "embedding_dim": 256,
+        "top_k": 10,
+        "candidate_limit": 1000,
+        "alpha": 0.65,
+        "fusion_strategy": "weighted",
+        "vector_index_mode": "disabled",
+        "ingest_duration_ms": 4219.269833,
+        "query_duration_ms": 83318.565459,
+        "total_duration_ms": 104084.198542,
+        "qps": 12.002126950830512,
+        "top1_hit_rate": 0.077,
+        "latency": {
+          "avg_ms": 83.29514990400007,
+          "p50_ms": 81.29054099999999,
+          "p95_ms": 88.642083,
+          "p99_ms": 109.854625,
+          "min_ms": 78.378584,
+          "max_ms": 345.010833
+        },
+        "ingest_chunks_per_sec": 23700.783300910065,
+        "embedding_bytes": 102400000,
+        "content_bytes": 5301390,
+        "dataset_payload_bytes": 107701390,
+        "vector_index_entries": 0,
+        "vector_index_dimension": null,
+        "vector_index_estimated_memory_bytes": 0,
+        "approx_working_set_bytes": 107701390
+      }
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+[package]
+name = "sqlrite"
+version = "0.1.0"
+edition = "2024"
+description = "RAG-oriented SQLite wrapper for AI agent workloads"
+license = "MIT"
+
+[dependencies]
+rusqlite = { version = "0.33", features = ["bundled"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "2.0"
+rayon = "1.10"
+
+[dev-dependencies]
+tempfile = "3.12"

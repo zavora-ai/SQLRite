@@ -1,0 +1,67 @@
+name: Performance Nightly
+
+on:
+  schedule:
+    - cron: "0 8 * * 1"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  bench-10k:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Run 10k benchmark matrix
+        run: |
+          cargo run --bin sqlrite-bench-matrix -- \
+            --profile 10k \
+            --durability balanced \
+            --output bench_matrix_10k_nightly.json
+      - name: Assert 10k thresholds
+        run: |
+          cargo run --bin sqlrite-bench-assert -- \
+            --matrix bench_matrix_10k_nightly.json \
+            --scenario "weighted + brute_force" \
+            --scenario "weighted + lsh_ann" \
+            --min-qps 70 \
+            --max-p95-ms 20 \
+            --min-top1 0.99 \
+            --min-ingest-cps 5000 \
+            --max-working-set-bytes 16000000
+      - name: Upload 10k report
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-matrix-10k-nightly
+          path: bench_matrix_10k_nightly.json
+
+  bench-100k:
+    runs-on: ubuntu-latest
+    needs: bench-10k
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Run 100k benchmark matrix
+        run: |
+          cargo run --bin sqlrite-bench-matrix -- \
+            --profile 100k \
+            --durability balanced \
+            --output bench_matrix_100k_nightly.json
+      - name: Assert 100k thresholds
+        run: |
+          cargo run --bin sqlrite-bench-assert -- \
+            --matrix bench_matrix_100k_nightly.json \
+            --scenario "weighted + brute_force" \
+            --scenario "weighted + lsh_ann" \
+            --min-qps 8 \
+            --max-p95-ms 140 \
+            --min-top1 0.99 \
+            --min-ingest-cps 8000 \
+            --max-working-set-bytes 240000000
+      - name: Upload 100k report
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-matrix-100k-nightly
+          path: bench_matrix_100k_nightly.json

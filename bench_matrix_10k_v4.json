@@ -1,0 +1,113 @@
+{
+  "profile": "10k",
+  "runs": [
+    {
+      "name": "weighted + brute_force",
+      "report": {
+        "corpus_size": 10000,
+        "query_count": 500,
+        "warmup_queries": 100,
+        "embedding_dim": 128,
+        "top_k": 10,
+        "candidate_limit": 500,
+        "alpha": 0.65,
+        "fusion_strategy": "weighted",
+        "vector_index_mode": "brute_force",
+        "ingest_duration_ms": 667.0952500000001,
+        "query_duration_ms": 5818.221542,
+        "total_duration_ms": 7688.415792,
+        "qps": 85.93691326303917,
+        "top1_hit_rate": 1.0,
+        "latency": {
+          "avg_ms": 11.623295664000002,
+          "p50_ms": 11.548458,
+          "p95_ms": 12.241083,
+          "p99_ms": 13.806875,
+          "min_ms": 10.768583,
+          "max_ms": 21.972334
+        }
+      }
+    },
+    {
+      "name": "rrf(k=60) + brute_force",
+      "report": {
+        "corpus_size": 10000,
+        "query_count": 500,
+        "warmup_queries": 100,
+        "embedding_dim": 128,
+        "top_k": 10,
+        "candidate_limit": 500,
+        "alpha": 0.65,
+        "fusion_strategy": "rrf(rank_constant=60)",
+        "vector_index_mode": "brute_force",
+        "ingest_duration_ms": 673.287792,
+        "query_duration_ms": 6890.724042000001,
+        "total_duration_ms": 8820.382958,
+        "qps": 72.56131532077394,
+        "top1_hit_rate": 0.056,
+        "latency": {
+          "avg_ms": 13.76624199200001,
+          "p50_ms": 12.479083000000001,
+          "p95_ms": 22.371208,
+          "p99_ms": 40.885875,
+          "min_ms": 11.667874999999999,
+          "max_ms": 71.305459
+        }
+      }
+    },
+    {
+      "name": "weighted + lsh_ann",
+      "report": {
+        "corpus_size": 10000,
+        "query_count": 500,
+        "warmup_queries": 100,
+        "embedding_dim": 128,
+        "top_k": 10,
+        "candidate_limit": 500,
+        "alpha": 0.65,
+        "fusion_strategy": "weighted",
+        "vector_index_mode": "lsh_ann",
+        "ingest_duration_ms": 1443.709625,
+        "query_duration_ms": 5002.421584000001,
+        "total_duration_ms": 7438.287875,
+        "qps": 99.9515917649215,
+        "top1_hit_rate": 0.996,
+        "latency": {
+          "avg_ms": 9.992408231999995,
+          "p50_ms": 9.956292,
+          "p95_ms": 10.93475,
+          "p99_ms": 11.464584,
+          "min_ms": 8.847125,
+          "max_ms": 12.469792
+        }
+      }
+    },
+    {
+      "name": "weighted + disabled_index",
+      "report": {
+        "corpus_size": 10000,
+        "query_count": 500,
+        "warmup_queries": 100,
+        "embedding_dim": 128,
+        "top_k": 10,
+        "candidate_limit": 500,
+        "alpha": 0.65,
+        "fusion_strategy": "weighted",
+        "vector_index_mode": "disabled",
+        "ingest_duration_ms": 682.704875,
+        "query_duration_ms": 5292.6666669999995,
+        "total_duration_ms": 7025.042042,
+        "qps": 94.47033630844751,
+        "top1_hit_rate": 0.072,
+        "latency": {
+          "avg_ms": 10.572384904000003,
+          "p50_ms": 10.285582999999999,
+          "p95_ms": 11.253499999999999,
+          "p99_ms": 15.965041999999999,
+          "min_ms": 10.04725,
+          "max_ms": 32.428459
+        }
+      }
+    }
+  ]
+}

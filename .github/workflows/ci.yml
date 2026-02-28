@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Rust fmt
+        run: cargo fmt --all --check
+      - name: Rust clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+      - name: Rust test
+        run: cargo test
+
+  benchmark-gate:
+    runs-on: ubuntu-latest
+    needs: quality
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Run quick benchmark matrix
+        run: |
+          cargo run --bin sqlrite-bench-matrix -- \
+            --profile quick \
+            --durability balanced \
+            --output bench_matrix_quick_ci.json
+      - name: Assert benchmark thresholds
+        run: |
+          cargo run --bin sqlrite-bench-assert -- \
+            --matrix bench_matrix_quick_ci.json \
+            --scenario "weighted + brute_force" \
+            --scenario "weighted + lsh_ann" \
+            --min-qps 40 \
+            --max-p95-ms 45 \
+            --min-top1 0.99 \
+            --min-ingest-cps 3000

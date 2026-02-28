@@ -1,0 +1,24 @@
+{
+  "corpus_size": 3000,
+  "query_count": 200,
+  "warmup_queries": 50,
+  "embedding_dim": 64,
+  "top_k": 10,
+  "candidate_limit": 300,
+  "alpha": 0.65,
+  "fusion_strategy": "weighted",
+  "vector_index_mode": "brute_force",
+  "ingest_duration_ms": 190.0935,
+  "query_duration_ms": 1978.085625,
+  "total_duration_ms": 2648.4541249999997,
+  "qps": 101.10785775514648,
+  "top1_hit_rate": 1.0,
+  "latency": {
+    "avg_ms": 9.882480815000001,
+    "p50_ms": 9.554333,
+    "p95_ms": 10.540042,
+    "p99_ms": 16.280375,
+    "min_ms": 9.275208,
+    "max_ms": 27.579833
+  }
+}

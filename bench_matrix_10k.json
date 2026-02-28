@@ -1,0 +1,86 @@
+{
+  "profile": "10k",
+  "runs": [
+    {
+      "name": "weighted + brute_force",
+      "report": {
+        "corpus_size": 10000,
+        "query_count": 500,
+        "warmup_queries": 100,
+        "embedding_dim": 128,
+        "top_k": 10,
+        "candidate_limit": 500,
+        "alpha": 0.65,
+        "fusion_strategy": "weighted",
+        "vector_index_mode": "brute_force",
+        "ingest_duration_ms": 759.454833,
+        "query_duration_ms": 30921.300124999998,
+        "total_duration_ms": 37825.319958,
+        "qps": 16.170083339922307,
+        "top1_hit_rate": 1.0,
+        "latency": {
+          "avg_ms": 61.82359492000001,
+          "p50_ms": 54.728834,
+          "p95_ms": 100.438375,
+          "p99_ms": 149.496875,
+          "min_ms": 47.484708,
+          "max_ms": 180.039917
+        }
+      }
+    },
+    {
+      "name": "rrf(k=60) + brute_force",
+      "report": {
+        "corpus_size": 10000,
+        "query_count": 500,
+        "warmup_queries": 100,
+        "embedding_dim": 128,
+        "top_k": 10,
+        "candidate_limit": 500,
+        "alpha": 0.65,
+        "fusion_strategy": "rrf(rank_constant=60)",
+        "vector_index_mode": "brute_force",
+        "ingest_duration_ms": 638.493458,
+        "query_duration_ms": 25305.865,
+        "total_duration_ms": 30999.238459,
+        "qps": 19.758265524612575,
+        "top1_hit_rate": 0.056,
+        "latency": {
+          "avg_ms": 50.598556034,
+          "p50_ms": 49.265583,
+          "p95_ms": 54.438708000000005,
+          "p99_ms": 76.560208,
+          "min_ms": 48.183792000000004,
+          "max_ms": 128.327916
+        }
+      }
+    },
+    {
+      "name": "weighted + disabled_index",
+      "report": {
+        "corpus_size": 10000,
+        "query_count": 500,
+        "warmup_queries": 100,
+        "embedding_dim": 128,
+        "top_k": 10,
+        "candidate_limit": 500,
+        "alpha": 0.65,
+        "fusion_strategy": "weighted",
+        "vector_index_mode": "disabled",
+        "ingest_duration_ms": 632.589333,
+        "query_duration_ms": 5601.5036660000005,
+        "total_duration_ms": 7279.319292,
+        "qps": 89.26174645477774,
+        "top1_hit_rate": 0.072,
+        "latency": {
+          "avg_ms": 11.189923364,
+          "p50_ms": 10.562708,
+          "p95_ms": 11.444208000000001,
+          "p99_ms": 28.003875,
+          "min_ms": 10.3055,
+          "max_ms": 64.94624999999999
+        }
+      }
+    }
+  ]
+}
