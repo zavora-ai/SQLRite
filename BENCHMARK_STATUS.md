@@ -1,6 +1,6 @@
 # SQLRite Benchmark Status
 
-Last updated: February 22, 2026
+Last updated: February 28, 2026
 
 ## Current benchmark posture
 
@@ -13,6 +13,41 @@ SQLRite now has:
 - assertion CLI (`sqlrite-bench-assert`) for automated regression gates
 - CI workflow gate (`.github/workflows/ci.yml`) that runs quick profile assertions
 - scheduled perf workflow (`.github/workflows/perf-nightly.yml`) for 10k/100k trend checks
+- `hnsw_baseline` benchmark matrix scenario
+- vector storage telemetry (`f32`/`f16`/`int8`) in benchmark JSON
+- sqlite runtime telemetry (`sqlite_mmap_size_bytes`, `sqlite_cache_size_kib`) in benchmark JSON
+
+## Sprint 8-10 snapshot
+
+Sources:
+
+1. `project_plan/reports/s08_bench_matrix.json`
+2. `project_plan/reports/s09_benchmark_f32.json`
+3. `project_plan/reports/s09_benchmark_f16.json`
+4. `project_plan/reports/s09_benchmark_int8.json`
+5. `project_plan/reports/s10_benchmark_default.json`
+6. `project_plan/reports/s10_benchmark_tuned.json`
+
+| Scenario | QPS | p95 (ms) | top1_hit_rate |
+|---|---:|---:|---:|
+| weighted + hnsw_baseline (quick matrix) | 221.50 | 5.38 | 1.0000 |
+| weighted + lsh_ann (quick matrix) | 243.34 | 4.30 | 1.0000 |
+| weighted + brute_force (quick matrix) | 152.46 | 8.05 | 1.0000 |
+
+Storage-kind impact (`hnsw_baseline`, corpus=5000, queries=250):
+
+| Storage | QPS | p95 (ms) | index_estimated_memory_bytes |
+|---|---:|---:|---:|
+| f32 | 190.30 | 5.44 | 2236392 |
+| f16 | 186.93 | 5.85 | 1596392 |
+| int8 | 161.18 | 7.54 | 1296392 |
+
+SQLite tuning comparison (`hnsw_baseline`, corpus=8000, queries=350):
+
+| Profile | mmap_size_bytes | cache_size_kib | QPS | p95 (ms) |
+|---|---:|---:|---:|---:|
+| default | 268435456 | 65536 | 134.16 | 9.06 |
+| tuned | 536870912 | 131072 | 141.45 | 7.74 |
 
 ## 10k profile progression
 

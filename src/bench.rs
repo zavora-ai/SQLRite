@@ -67,6 +67,9 @@ pub struct BenchmarkReport {
     pub alpha: f32,
     pub fusion_strategy: String,
     pub vector_index_mode: String,
+    pub vector_storage_kind: String,
+    pub sqlite_mmap_size_bytes: i64,
+    pub sqlite_cache_size_kib: i64,
     pub ingest_duration_ms: f64,
     pub query_duration_ms: f64,
     pub total_duration_ms: f64,
@@ -144,6 +147,10 @@ pub fn run_benchmark(
     };
     let vector_index_entries = vector_stats.as_ref().map_or(0, |stats| stats.entries);
     let vector_index_dimension = vector_stats.as_ref().and_then(|stats| stats.dimension);
+    let vector_storage_kind = vector_stats
+        .as_ref()
+        .map(|stats| stats.storage_kind.clone())
+        .unwrap_or_else(|| runtime_config.vector_storage_kind.as_str().to_string());
     let vector_index_estimated_memory_bytes = vector_stats
         .as_ref()
         .map_or(0, |stats| stats.estimated_memory_bytes);
@@ -160,6 +167,9 @@ pub fn run_benchmark(
         alpha: config.alpha,
         fusion_strategy: fusion_label(config.fusion_strategy),
         vector_index_mode: vector_index_mode_label(runtime_config.vector_index_mode),
+        vector_storage_kind,
+        sqlite_mmap_size_bytes: runtime_config.sqlite_mmap_size_bytes,
+        sqlite_cache_size_kib: runtime_config.sqlite_cache_size_kib,
         ingest_duration_ms: ingest_duration.as_secs_f64() * 1000.0,
         query_duration_ms: query_duration.as_secs_f64() * 1000.0,
         total_duration_ms: total_duration.as_secs_f64() * 1000.0,
@@ -391,6 +401,7 @@ fn vector_index_mode_label(mode: crate::VectorIndexMode) -> String {
         crate::VectorIndexMode::Disabled => "disabled".to_string(),
         crate::VectorIndexMode::BruteForce => "brute_force".to_string(),
         crate::VectorIndexMode::LshAnn => "lsh_ann".to_string(),
+        crate::VectorIndexMode::HnswBaseline => "hnsw_baseline".to_string(),
     }
 }
 

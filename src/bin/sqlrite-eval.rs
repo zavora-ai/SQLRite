@@ -43,29 +43,30 @@ fn parse_args(args: Vec<String>) -> Result<EvalCliArgs, String> {
             "--dataset" => {
                 i += 1;
                 let value = args.get(i).ok_or_else(|| {
-                    "missing value for --dataset\nusage: cargo run --bin sqlrite-eval -- --dataset <path> [--output <path>] [--index-mode brute_force|lsh_ann|disabled] [--durability balanced|durable|fast_unsafe]".to_string()
+                    "missing value for --dataset\nusage: cargo run --bin sqlrite-eval -- --dataset <path> [--output <path>] [--index-mode brute_force|lsh_ann|hnsw_baseline|disabled] [--durability balanced|durable|fast_unsafe]".to_string()
                 })?;
                 dataset_path = Some(PathBuf::from(value));
             }
             "--output" => {
                 i += 1;
                 let value = args.get(i).ok_or_else(|| {
-                    "missing value for --output\nusage: cargo run --bin sqlrite-eval -- --dataset <path> [--output <path>] [--index-mode brute_force|lsh_ann|disabled] [--durability balanced|durable|fast_unsafe]".to_string()
+                    "missing value for --output\nusage: cargo run --bin sqlrite-eval -- --dataset <path> [--output <path>] [--index-mode brute_force|lsh_ann|hnsw_baseline|disabled] [--durability balanced|durable|fast_unsafe]".to_string()
                 })?;
                 output_path = Some(PathBuf::from(value));
             }
             "--index-mode" => {
                 i += 1;
                 let value = args.get(i).ok_or_else(|| {
-                    "missing value for --index-mode\nusage: cargo run --bin sqlrite-eval -- --dataset <path> [--output <path>] [--index-mode brute_force|lsh_ann|disabled] [--durability balanced|durable|fast_unsafe]".to_string()
+                    "missing value for --index-mode\nusage: cargo run --bin sqlrite-eval -- --dataset <path> [--output <path>] [--index-mode brute_force|lsh_ann|hnsw_baseline|disabled] [--durability balanced|durable|fast_unsafe]".to_string()
                 })?;
                 index_mode = match value.as_str() {
                     "brute_force" => VectorIndexMode::BruteForce,
                     "disabled" => VectorIndexMode::Disabled,
                     "lsh_ann" => VectorIndexMode::LshAnn,
+                    "hnsw_baseline" | "hnsw" => VectorIndexMode::HnswBaseline,
                     other => {
                         return Err(format!(
-                            "invalid --index-mode `{other}`; expected brute_force, lsh_ann, or disabled"
+                            "invalid --index-mode `{other}`; expected brute_force, lsh_ann, hnsw_baseline, or disabled"
                         ));
                     }
                 };
@@ -73,7 +74,7 @@ fn parse_args(args: Vec<String>) -> Result<EvalCliArgs, String> {
             "--durability" => {
                 i += 1;
                 let value = args.get(i).ok_or_else(|| {
-                    "missing value for --durability\nusage: cargo run --bin sqlrite-eval -- --dataset <path> [--output <path>] [--index-mode brute_force|lsh_ann|disabled] [--durability balanced|durable|fast_unsafe]".to_string()
+                    "missing value for --durability\nusage: cargo run --bin sqlrite-eval -- --dataset <path> [--output <path>] [--index-mode brute_force|lsh_ann|hnsw_baseline|disabled] [--durability balanced|durable|fast_unsafe]".to_string()
                 })?;
                 durability_profile = match value.as_str() {
                     "balanced" => DurabilityProfile::Balanced,
@@ -87,11 +88,11 @@ fn parse_args(args: Vec<String>) -> Result<EvalCliArgs, String> {
                 };
             }
             "--help" | "-h" => {
-                return Err("usage: cargo run --bin sqlrite-eval -- --dataset <path> [--output <path>] [--index-mode brute_force|lsh_ann|disabled] [--durability balanced|durable|fast_unsafe]".to_string());
+                return Err("usage: cargo run --bin sqlrite-eval -- --dataset <path> [--output <path>] [--index-mode brute_force|lsh_ann|hnsw_baseline|disabled] [--durability balanced|durable|fast_unsafe]".to_string());
             }
             other => {
                 return Err(format!(
-                    "unknown argument `{other}`\nusage: cargo run --bin sqlrite-eval -- --dataset <path> [--output <path>] [--index-mode brute_force|lsh_ann|disabled] [--durability balanced|durable|fast_unsafe]"
+                    "unknown argument `{other}`\nusage: cargo run --bin sqlrite-eval -- --dataset <path> [--output <path>] [--index-mode brute_force|lsh_ann|hnsw_baseline|disabled] [--durability balanced|durable|fast_unsafe]"
                 ));
             }
         }
@@ -99,7 +100,7 @@ fn parse_args(args: Vec<String>) -> Result<EvalCliArgs, String> {
     }
 
     let dataset_path = dataset_path.ok_or_else(|| {
-        "missing required --dataset <path>\nusage: cargo run --bin sqlrite-eval -- --dataset <path> [--output <path>] [--index-mode brute_force|lsh_ann|disabled] [--durability balanced|durable|fast_unsafe]".to_string()
+        "missing required --dataset <path>\nusage: cargo run --bin sqlrite-eval -- --dataset <path> [--output <path>] [--index-mode brute_force|lsh_ann|hnsw_baseline|disabled] [--durability balanced|durable|fast_unsafe]".to_string()
     })?;
 
     Ok(EvalCliArgs {

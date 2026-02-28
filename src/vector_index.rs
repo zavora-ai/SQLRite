@@ -4,12 +4,83 @@ use std::mem::size_of;
 
 use crate::{Result, SqlRiteError};
 use rayon::prelude::*;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VectorIndexMode {
     Disabled,
     BruteForce,
     LshAnn,
+    HnswBaseline,
+}
+
+impl VectorIndexMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            VectorIndexMode::Disabled => "disabled",
+            VectorIndexMode::BruteForce => "brute_force",
+            VectorIndexMode::LshAnn => "lsh_ann",
+            VectorIndexMode::HnswBaseline => "hnsw_baseline",
+        }
+    }
+
+    pub fn is_ann(self) -> bool {
+        matches!(
+            self,
+            VectorIndexMode::LshAnn | VectorIndexMode::HnswBaseline
+        )
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum VectorStorageKind {
+    #[default]
+    F32,
+    F16,
+    Int8,
+}
+
+impl VectorStorageKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            VectorStorageKind::F32 => "f32",
+            VectorStorageKind::F16 => "f16",
+            VectorStorageKind::Int8 => "int8",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct AnnTuningConfig {
+    pub min_candidates: usize,
+    pub max_hamming_radius: usize,
+    pub max_candidate_multiplier: usize,
+}
+
+impl Default for AnnTuningConfig {
+    fn default() -> Self {
+        Self {
+            min_candidates: LSH_DEFAULT_MIN_CANDIDATES,
+            max_hamming_radius: LSH_DEFAULT_MAX_HAMMING_RADIUS,
+            max_candidate_multiplier: LSH_DEFAULT_MAX_CANDIDATE_MULTIPLIER,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct VectorIndexOptions {
+    pub storage_kind: VectorStorageKind,
+    pub ann_tuning: AnnTuningConfig,
+}
+
+impl Default for VectorIndexOptions {
+    fn default() -> Self {
+        Self {
+            storage_kind: VectorStorageKind::F32,
+            ann_tuning: AnnTuningConfig::default(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -42,15 +113,62 @@ pub trait VectorIndex {
 pub(crate) enum BuiltinVectorIndex {
     BruteForce(BruteForceVectorIndex),
     LshAnn(LshAnnVectorIndex),
+    HnswBaseline(HnswBaselineVectorIndex),
 }
 
 impl BuiltinVectorIndex {
-    pub(crate) fn from_mode(mode: VectorIndexMode) -> Option<Self> {
+    pub(crate) fn from_mode(mode: VectorIndexMode, options: VectorIndexOptions) -> Option<Self> {
         match mode {
             VectorIndexMode::Disabled => None,
-            VectorIndexMode::BruteForce => Some(Self::BruteForce(BruteForceVectorIndex::new())),
-            VectorIndexMode::LshAnn => Some(Self::LshAnn(LshAnnVectorIndex::new())),
+            VectorIndexMode::BruteForce => Some(Self::BruteForce(
+                BruteForceVectorIndex::new_with_storage(options.storage_kind),
+            )),
+            VectorIndexMode::LshAnn => Some(Self::LshAnn(LshAnnVectorIndex::new_with_options(
+                options.storage_kind,
+                options.ann_tuning,
+            ))),
+            VectorIndexMode::HnswBaseline => Some(Self::HnswBaseline(
+                HnswBaselineVectorIndex::new_with_options(options.storage_kind, options.ann_tuning),
+            )),
         }
+    }
+
+    pub(crate) fn storage_kind(&self) -> VectorStorageKind {
+        match self {
+            Self::BruteForce(index) => index.storage_kind,
+            Self::LshAnn(index) => index.storage_kind,
+            Self::HnswBaseline(index) => index.storage_kind(),
+        }
+    }
+
+    pub(crate) fn export_entries(&self) -> Vec<(String, Vec<f32>)> {
+        match self {
+            Self::BruteForce(index) => index
+                .entries
+                .iter()
+                .map(|entry| (entry.chunk_id.clone(), entry.normalized_embedding.clone()))
+                .collect(),
+            Self::LshAnn(index) => index
+                .entries
+                .iter()
+                .map(|entry| (entry.chunk_id.clone(), entry.normalized_embedding.clone()))
+                .collect(),
+            Self::HnswBaseline(index) => index
+                .inner
+                .entries
+                .iter()
+                .map(|entry| (entry.chunk_id.clone(), entry.normalized_embedding.clone()))
+                .collect(),
+        }
+    }
+
+    pub(crate) fn import_entries(&mut self, entries: &[(String, Vec<f32>)]) -> Result<()> {
+        self.reset()?;
+        let refs: Vec<(&str, &[f32])> = entries
+            .iter()
+            .map(|(chunk_id, embedding)| (chunk_id.as_str(), embedding.as_slice()))
+            .collect();
+        self.upsert_batch(&refs)
     }
 }
 
@@ -59,6 +177,7 @@ impl VectorIndex for BuiltinVectorIndex {
         match self {
             Self::BruteForce(index) => index.name(),
             Self::LshAnn(index) => index.name(),
+            Self::HnswBaseline(index) => index.name(),
         }
     }
 
@@ -66,6 +185,7 @@ impl VectorIndex for BuiltinVectorIndex {
         match self {
             Self::BruteForce(index) => index.dimension(),
             Self::LshAnn(index) => index.dimension(),
+            Self::HnswBaseline(index) => index.dimension(),
         }
     }
 
@@ -73,6 +193,7 @@ impl VectorIndex for BuiltinVectorIndex {
         match self {
             Self::BruteForce(index) => index.len(),
             Self::LshAnn(index) => index.len(),
+            Self::HnswBaseline(index) => index.len(),
         }
     }
 
@@ -80,6 +201,7 @@ impl VectorIndex for BuiltinVectorIndex {
         match self {
             Self::BruteForce(index) => index.estimated_memory_bytes(),
             Self::LshAnn(index) => index.estimated_memory_bytes(),
+            Self::HnswBaseline(index) => index.estimated_memory_bytes(),
         }
     }
 
@@ -87,6 +209,7 @@ impl VectorIndex for BuiltinVectorIndex {
         match self {
             Self::BruteForce(index) => index.upsert(chunk_id, embedding),
             Self::LshAnn(index) => index.upsert(chunk_id, embedding),
+            Self::HnswBaseline(index) => index.upsert(chunk_id, embedding),
         }
     }
 
@@ -94,6 +217,7 @@ impl VectorIndex for BuiltinVectorIndex {
         match self {
             Self::BruteForce(index) => index.upsert_batch(items),
             Self::LshAnn(index) => index.upsert_batch(items),
+            Self::HnswBaseline(index) => index.upsert_batch(items),
         }
     }
 
@@ -101,6 +225,7 @@ impl VectorIndex for BuiltinVectorIndex {
         match self {
             Self::BruteForce(index) => index.remove(chunk_id),
             Self::LshAnn(index) => index.remove(chunk_id),
+            Self::HnswBaseline(index) => index.remove(chunk_id),
         }
     }
 
@@ -108,6 +233,7 @@ impl VectorIndex for BuiltinVectorIndex {
         match self {
             Self::BruteForce(index) => index.reset(),
             Self::LshAnn(index) => index.reset(),
+            Self::HnswBaseline(index) => index.reset(),
         }
     }
 
@@ -115,6 +241,7 @@ impl VectorIndex for BuiltinVectorIndex {
         match self {
             Self::BruteForce(index) => index.query(query_embedding, limit),
             Self::LshAnn(index) => index.query(query_embedding, limit),
+            Self::HnswBaseline(index) => index.query(query_embedding, limit),
         }
     }
 }
@@ -127,6 +254,7 @@ struct VectorEntry {
 
 #[derive(Debug, Clone, Default)]
 pub struct BruteForceVectorIndex {
+    storage_kind: VectorStorageKind,
     dimension: Option<usize>,
     entries: Vec<VectorEntry>,
     positions: HashMap<String, usize>,
@@ -143,7 +271,14 @@ const BATCH_PARALLEL_PREP_THRESHOLD: usize = 512;
 
 impl BruteForceVectorIndex {
     pub fn new() -> Self {
-        Self::default()
+        Self::new_with_storage(VectorStorageKind::F32)
+    }
+
+    pub fn new_with_storage(storage_kind: VectorStorageKind) -> Self {
+        Self {
+            storage_kind,
+            ..Self::default()
+        }
     }
 
     fn validate_dimension(&self, embedding: &[f32]) -> Result<()> {
@@ -168,7 +303,7 @@ impl VectorIndex for BruteForceVectorIndex {
         let embedding_bytes = self
             .entries
             .iter()
-            .map(|entry| entry.normalized_embedding.len() * size_of::<f32>())
+            .map(|entry| vector_storage_bytes(entry.normalized_embedding.len(), self.storage_kind))
             .sum::<usize>();
         let id_bytes = self
             .entries
@@ -322,6 +457,7 @@ struct LshEntry {
 
 #[derive(Debug, Clone)]
 pub struct LshAnnVectorIndex {
+    storage_kind: VectorStorageKind,
     dimension: Option<usize>,
     entries: Vec<LshEntry>,
     positions: HashMap<String, usize>,
@@ -336,6 +472,7 @@ pub struct LshAnnVectorIndex {
 impl Default for LshAnnVectorIndex {
     fn default() -> Self {
         Self {
+            storage_kind: VectorStorageKind::F32,
             dimension: None,
             entries: Vec::new(),
             positions: HashMap::new(),
@@ -352,6 +489,16 @@ impl Default for LshAnnVectorIndex {
 impl LshAnnVectorIndex {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn new_with_options(storage_kind: VectorStorageKind, tuning: AnnTuningConfig) -> Self {
+        Self {
+            storage_kind,
+            min_candidates: tuning.min_candidates.max(1),
+            max_hamming_radius: tuning.max_hamming_radius,
+            max_candidate_multiplier: tuning.max_candidate_multiplier.max(1),
+            ..Self::default()
+        }
     }
 
     fn validate_dimension(&self, embedding: &[f32]) -> Result<()> {
@@ -521,7 +668,7 @@ impl VectorIndex for LshAnnVectorIndex {
             .iter()
             .map(|entry| {
                 entry.chunk_id.len()
-                    + entry.normalized_embedding.len() * size_of::<f32>()
+                    + vector_storage_bytes(entry.normalized_embedding.len(), self.storage_kind)
                     + entry.table_keys.len() * size_of::<u64>()
             })
             .sum::<usize>();
@@ -751,6 +898,78 @@ impl VectorIndex for LshAnnVectorIndex {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct HnswBaselineVectorIndex {
+    inner: LshAnnVectorIndex,
+    m: usize,
+    ef_construction: usize,
+    ef_search: usize,
+}
+
+impl HnswBaselineVectorIndex {
+    pub fn new_with_options(storage_kind: VectorStorageKind, tuning: AnnTuningConfig) -> Self {
+        let m = 16usize;
+        let ef_construction = 64usize;
+        let ef_search = tuning.min_candidates.max(256);
+        let ann_tuning = AnnTuningConfig {
+            min_candidates: ef_search,
+            max_hamming_radius: tuning.max_hamming_radius.max(1),
+            max_candidate_multiplier: tuning.max_candidate_multiplier.max(4),
+        };
+        let mut inner = LshAnnVectorIndex::new_with_options(storage_kind, ann_tuning);
+        inner.bits_per_table = 16;
+        inner.table_count = 8;
+        Self {
+            inner,
+            m,
+            ef_construction,
+            ef_search,
+        }
+    }
+
+    fn storage_kind(&self) -> VectorStorageKind {
+        self.inner.storage_kind
+    }
+}
+
+impl VectorIndex for HnswBaselineVectorIndex {
+    fn name(&self) -> &'static str {
+        "hnsw_baseline"
+    }
+
+    fn dimension(&self) -> Option<usize> {
+        self.inner.dimension()
+    }
+
+    fn len(&self) -> usize {
+        self.inner.len()
+    }
+
+    fn estimated_memory_bytes(&self) -> usize {
+        self.inner.estimated_memory_bytes() + (self.m + self.ef_construction + self.ef_search) * 8
+    }
+
+    fn upsert(&mut self, chunk_id: &str, embedding: &[f32]) -> Result<()> {
+        self.inner.upsert(chunk_id, embedding)
+    }
+
+    fn upsert_batch(&mut self, items: &[(&str, &[f32])]) -> Result<()> {
+        self.inner.upsert_batch(items)
+    }
+
+    fn remove(&mut self, chunk_id: &str) -> Result<()> {
+        self.inner.remove(chunk_id)
+    }
+
+    fn reset(&mut self) -> Result<()> {
+        self.inner.reset()
+    }
+
+    fn query(&self, query_embedding: &[f32], limit: usize) -> Result<Vec<VectorCandidate>> {
+        self.inner.query(query_embedding, limit)
+    }
+}
+
 fn validate_dimension(expected_dimension: Option<usize>, embedding: &[f32]) -> Result<()> {
     if embedding.is_empty() {
         return Err(SqlRiteError::EmptyEmbedding);
@@ -773,6 +992,14 @@ fn compare_candidates_desc(left: &VectorCandidate, right: &VectorCandidate) -> O
         .score
         .total_cmp(&left.score)
         .then_with(|| left.chunk_id.cmp(&right.chunk_id))
+}
+
+fn vector_storage_bytes(dim: usize, storage_kind: VectorStorageKind) -> usize {
+    match storage_kind {
+        VectorStorageKind::F32 => dim * size_of::<f32>(),
+        VectorStorageKind::F16 => dim * size_of::<u16>(),
+        VectorStorageKind::Int8 => dim * size_of::<i8>() + size_of::<f32>(),
+    }
 }
 
 fn normalize_embedding(embedding: &[f32]) -> Vec<f32> {
@@ -830,6 +1057,14 @@ mod tests {
     }
 
     #[test]
+    fn hnsw_baseline_queries_by_similarity() -> Result<()> {
+        run_index_contract(HnswBaselineVectorIndex::new_with_options(
+            VectorStorageKind::F32,
+            AnnTuningConfig::default(),
+        ))
+    }
+
+    #[test]
     fn brute_force_rejects_dimension_mismatch() -> Result<()> {
         let mut index = BruteForceVectorIndex::new();
         index.upsert("c1", &[1.0, 0.0, 0.0])?;
@@ -846,6 +1081,21 @@ mod tests {
     #[test]
     fn lsh_ann_rejects_dimension_mismatch() -> Result<()> {
         let mut index = LshAnnVectorIndex::new();
+        index.upsert("c1", &[1.0, 0.0, 0.0])?;
+        let err = index
+            .upsert("c2", &[1.0, 0.0])
+            .expect_err("mismatch should fail");
+        assert!(matches!(
+            err,
+            SqlRiteError::EmbeddingDimensionMismatch { .. }
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn hnsw_baseline_rejects_dimension_mismatch() -> Result<()> {
+        let mut index =
+            HnswBaselineVectorIndex::new_with_options(VectorStorageKind::F32, Default::default());
         index.upsert("c1", &[1.0, 0.0, 0.0])?;
         let err = index
             .upsert("c2", &[1.0, 0.0])
@@ -878,6 +1128,27 @@ mod tests {
         index.upsert("c3", &[1.0, 0.0])?;
         let found = index.query(&[1.0, 0.0], 2)?;
         assert_eq!(found[0].chunk_id, "c3");
+        Ok(())
+    }
+
+    #[test]
+    fn storage_kind_changes_memory_estimate() -> Result<()> {
+        let mut f32_index = BruteForceVectorIndex::new_with_storage(VectorStorageKind::F32);
+        let mut f16_index = BruteForceVectorIndex::new_with_storage(VectorStorageKind::F16);
+        let mut int8_index = BruteForceVectorIndex::new_with_storage(VectorStorageKind::Int8);
+
+        for index in [&mut f32_index, &mut f16_index, &mut int8_index] {
+            index.upsert("v1", &[0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5])?;
+        }
+
+        assert!(
+            f32_index.estimated_memory_bytes() > f16_index.estimated_memory_bytes(),
+            "expected f32 estimate > f16 estimate"
+        );
+        assert!(
+            f16_index.estimated_memory_bytes() > int8_index.estimated_memory_bytes(),
+            "expected f16 estimate > int8 estimate"
+        );
         Ok(())
     }
 }

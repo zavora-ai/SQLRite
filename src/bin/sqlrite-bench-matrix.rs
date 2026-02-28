@@ -57,6 +57,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             },
         },
         MatrixScenario {
+            name: "weighted + hnsw_baseline".to_string(),
+            runtime: runtime_with_mode(args.durability_profile, VectorIndexMode::HnswBaseline),
+            config: BenchmarkConfig {
+                fusion_strategy: FusionStrategy::Weighted,
+                ..base_config.clone()
+            },
+        },
+        MatrixScenario {
             name: "weighted + disabled_index".to_string(),
             runtime: runtime_with_mode(args.durability_profile, VectorIndexMode::Disabled),
             config: BenchmarkConfig {

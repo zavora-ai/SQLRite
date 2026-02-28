@@ -57,6 +57,33 @@ The format is based on Keep a Changelog.
   - `project_plan/reports/s07_eval.json`
   - `project_plan/reports/s07_release_gate.md`
   - `project_plan/reports/s07_competitor_review.md`
+- ANN baseline and tuning expansions:
+  - new index mode `hnsw_baseline`
+  - ANN runtime tuning config (`min_candidates`, hamming radius, candidate multiplier)
+  - vector storage options (`f32`, `f16`, `int8`)
+- ANN persistence and quantization support:
+  - persisted ANN snapshot files for ANN modes
+  - snapshot encoding variants (`f32`, `f16`, `int8`)
+  - quantization/dequantization regression tests
+- Sprint 8 evidence artifacts:
+  - `project_plan/reports/S08.md`
+  - `project_plan/reports/s08_bench_matrix.json`
+  - `project_plan/reports/s08_eval.json`
+- Sprint 9 evidence artifacts:
+  - `project_plan/reports/S09.md`
+  - `project_plan/reports/s09_benchmark_f32.json`
+  - `project_plan/reports/s09_benchmark_f16.json`
+  - `project_plan/reports/s09_benchmark_int8.json`
+  - `project_plan/reports/s09_eval_int8.json`
+  - `project_plan/reports/s09_persistence_doctor.json`
+- Sprint 10 evidence artifacts:
+  - `project_plan/reports/S10.md`
+  - `project_plan/reports/s10_benchmark_default.json`
+  - `project_plan/reports/s10_benchmark_tuned.json`
+  - `project_plan/reports/s10_quickstart_default.json`
+  - `project_plan/reports/s10_quickstart_tuned.json`
+  - `project_plan/reports/s10_doctor_tuned.json`
+  - `project_plan/reports/s10_memory_dashboard.md`
 
 ### Changed
 
@@ -65,6 +92,10 @@ The format is based on Keep a Changelog.
 - `sqlrite sql` now bootstraps database migrations before executing statements, ensuring catalog tables/views exist in non-init SQL sessions.
 - Search planner behavior now guarantees vector brute-force fallback semantics when ANN/index paths are unavailable, with deterministic tie-break ordering.
 - SQL REPL example catalog now includes additional SQL-only retrieval cookbook patterns (`filter`, `doc_scope`, `rerank_ready`, `explain`).
+- Runtime profiles now include sqlite tuning controls and report them in benchmark/doctor output:
+  - `sqlite_mmap_size_bytes`
+  - `sqlite_cache_size_kib`
+- `sqlrite-bench-matrix` now includes `weighted + hnsw_baseline` scenario.
 
 ## [0.1.0] - 2026-02-28
 

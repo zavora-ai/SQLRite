@@ -31,16 +31,19 @@ pub use security::{
 pub use server::{ServerConfig, serve_health_endpoints};
 use vector_index::BuiltinVectorIndex;
 pub use vector_index::{
-    BruteForceVectorIndex, LshAnnVectorIndex, VectorCandidate, VectorIndex, VectorIndexMode,
+    AnnTuningConfig, BruteForceVectorIndex, LshAnnVectorIndex, VectorCandidate, VectorIndex,
+    VectorIndexMode, VectorIndexOptions, VectorStorageKind,
 };
 
+use half::f16;
 use rusqlite::types::Value as SqlValue;
 use rusqlite::{Connection, params, params_from_iter};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 const LATEST_SCHEMA_VERSION: i64 = 3;
@@ -345,6 +348,11 @@ pub struct RuntimeConfig {
     pub enable_wal: bool,
     pub temp_store_memory: bool,
     pub vector_index_mode: VectorIndexMode,
+    pub vector_storage_kind: VectorStorageKind,
+    pub ann_tuning: AnnTuningConfig,
+    pub enable_ann_persistence: bool,
+    pub sqlite_mmap_size_bytes: i64,
+    pub sqlite_cache_size_kib: i64,
 }
 
 impl Default for RuntimeConfig {
@@ -355,6 +363,11 @@ impl Default for RuntimeConfig {
             enable_wal: true,
             temp_store_memory: true,
             vector_index_mode: VectorIndexMode::BruteForce,
+            vector_storage_kind: VectorStorageKind::F32,
+            ann_tuning: AnnTuningConfig::default(),
+            enable_ann_persistence: true,
+            sqlite_mmap_size_bytes: 268_435_456,
+            sqlite_cache_size_kib: 65_536,
         }
     }
 }
@@ -376,6 +389,31 @@ impl RuntimeConfig {
 
     pub fn with_vector_index_mode(mut self, mode: VectorIndexMode) -> Self {
         self.vector_index_mode = mode;
+        self
+    }
+
+    pub fn with_vector_storage_kind(mut self, kind: VectorStorageKind) -> Self {
+        self.vector_storage_kind = kind;
+        self
+    }
+
+    pub fn with_ann_tuning(mut self, tuning: AnnTuningConfig) -> Self {
+        self.ann_tuning = tuning;
+        self
+    }
+
+    pub fn with_ann_persistence(mut self, enabled: bool) -> Self {
+        self.enable_ann_persistence = enabled;
+        self
+    }
+
+    pub fn with_sqlite_mmap_size(mut self, bytes: i64) -> Self {
+        self.sqlite_mmap_size_bytes = bytes.max(0);
+        self
+    }
+
+    pub fn with_sqlite_cache_size_kib(mut self, kib: i64) -> Self {
+        self.sqlite_cache_size_kib = kib.max(0);
         self
     }
 
@@ -402,6 +440,7 @@ pub struct SearchResult {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VectorIndexStats {
     pub mode: String,
+    pub storage_kind: String,
     pub dimension: Option<usize>,
     pub entries: usize,
     pub estimated_memory_bytes: usize,
@@ -414,6 +453,7 @@ pub struct SqlRite {
     runtime_config: RuntimeConfig,
     schema_version: i64,
     vector_index: Option<RefCell<BuiltinVectorIndex>>,
+    db_path: Option<PathBuf>,
 }
 
 #[derive(Debug)]
@@ -440,23 +480,25 @@ struct FtsCandidates {
 
 impl SqlRite {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
+        let path = path.as_ref();
         let conn = Connection::open(path)?;
-        Self::from_connection_with_config(conn, RuntimeConfig::default())
+        Self::from_connection_with_config(conn, RuntimeConfig::default(), Some(path.to_path_buf()))
     }
 
     pub fn open_with_config(path: impl AsRef<Path>, config: RuntimeConfig) -> Result<Self> {
+        let path = path.as_ref();
         let conn = Connection::open(path)?;
-        Self::from_connection_with_config(conn, config)
+        Self::from_connection_with_config(conn, config, Some(path.to_path_buf()))
     }
 
     pub fn open_in_memory() -> Result<Self> {
         let conn = Connection::open_in_memory()?;
-        Self::from_connection_with_config(conn, RuntimeConfig::default())
+        Self::from_connection_with_config(conn, RuntimeConfig::default(), None)
     }
 
     pub fn open_in_memory_with_config(config: RuntimeConfig) -> Result<Self> {
         let conn = Connection::open_in_memory()?;
-        Self::from_connection_with_config(conn, config)
+        Self::from_connection_with_config(conn, config, None)
     }
 
     pub fn chunk_count(&self) -> Result<usize> {
@@ -562,6 +604,7 @@ impl SqlRite {
         let index = index.borrow();
         Some(VectorIndexStats {
             mode: index.name().to_string(),
+            storage_kind: index.storage_kind().as_str().to_string(),
             dimension: index.dimension(),
             entries: index.len(),
             estimated_memory_bytes: index.estimated_memory_bytes(),
@@ -610,6 +653,8 @@ impl SqlRite {
                 .collect();
             index.upsert_batch(&upserts)?;
         }
+
+        self.persist_ann_snapshot_if_enabled()?;
         Ok(())
     }
 
@@ -787,12 +832,13 @@ impl SqlRite {
     fn from_connection_with_config(
         mut conn: Connection,
         runtime_config: RuntimeConfig,
+        db_path: Option<PathBuf>,
     ) -> Result<Self> {
         apply_runtime_config(&conn, &runtime_config)?;
         let schema_version = run_migrations(&mut conn)?;
         let fts_enabled = initialize_fts(&conn);
         let vector_index =
-            load_vector_index(&conn, runtime_config.vector_index_mode)?.map(RefCell::new);
+            load_vector_index(&conn, &runtime_config, db_path.as_deref())?.map(RefCell::new);
 
         Ok(Self {
             conn,
@@ -800,7 +846,38 @@ impl SqlRite {
             runtime_config,
             schema_version,
             vector_index,
+            db_path,
         })
+    }
+
+    fn persist_ann_snapshot_if_enabled(&self) -> Result<()> {
+        if !self.runtime_config.enable_ann_persistence
+            || !self.runtime_config.vector_index_mode.is_ann()
+        {
+            return Ok(());
+        }
+        let Some(db_path) = self.db_path.as_deref() else {
+            return Ok(());
+        };
+        let Some(index) = self.vector_index.as_ref() else {
+            return Ok(());
+        };
+        let Some(snapshot_path) = ann_snapshot_path(
+            db_path,
+            self.runtime_config.vector_index_mode,
+            self.runtime_config.vector_storage_kind,
+        ) else {
+            return Ok(());
+        };
+
+        let index = index.borrow();
+        let entries = index.export_entries();
+        save_ann_snapshot(
+            &snapshot_path,
+            self.runtime_config.vector_index_mode,
+            self.runtime_config.vector_storage_kind,
+            &entries,
+        )
     }
 
     fn fetch_candidate_chunks(&self, request: &SearchRequest) -> Result<Vec<ChunkRecord>> {
@@ -1282,13 +1359,71 @@ fn merge_candidate_ids(
     merged
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct AnnSnapshotFile {
+    version: u32,
+    mode: String,
+    storage_kind: String,
+    entries: Vec<AnnSnapshotEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct AnnSnapshotEntry {
+    chunk_id: String,
+    vector: AnnSnapshotVector,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "encoding", rename_all = "snake_case")]
+enum AnnSnapshotVector {
+    F32 { values: Vec<f32> },
+    F16 { values: Vec<u16> },
+    Int8 { values: Vec<i8>, scale: f32 },
+}
+
 fn load_vector_index(
     conn: &Connection,
-    mode: VectorIndexMode,
+    runtime_config: &RuntimeConfig,
+    db_path: Option<&Path>,
 ) -> Result<Option<BuiltinVectorIndex>> {
-    let Some(mut index) = BuiltinVectorIndex::from_mode(mode) else {
+    let options = VectorIndexOptions {
+        storage_kind: runtime_config.vector_storage_kind,
+        ann_tuning: runtime_config.ann_tuning,
+    };
+    let Some(mut index) = BuiltinVectorIndex::from_mode(runtime_config.vector_index_mode, options)
+    else {
         return Ok(None);
     };
+
+    let snapshot_path =
+        if runtime_config.enable_ann_persistence && runtime_config.vector_index_mode.is_ann() {
+            db_path.and_then(|path| {
+                ann_snapshot_path(
+                    path,
+                    runtime_config.vector_index_mode,
+                    runtime_config.vector_storage_kind,
+                )
+            })
+        } else {
+            None
+        };
+
+    if let (Some(path), Some(db_file)) = (snapshot_path.as_ref(), db_path)
+        && ann_snapshot_is_fresh(path, db_file)
+        && let Ok(snapshot) = load_ann_snapshot(path)
+        && snapshot.mode == runtime_config.vector_index_mode.as_str()
+        && snapshot.storage_kind == runtime_config.vector_storage_kind.as_str()
+    {
+        let entries = snapshot
+            .entries
+            .into_iter()
+            .map(|entry| (entry.chunk_id, decode_snapshot_vector(entry.vector)))
+            .collect::<Vec<_>>();
+        if index.import_entries(&entries).is_ok() {
+            return Ok(Some(index));
+        }
+    }
+
     let mut stmt = conn.prepare(
         "SELECT id, embedding, embedding_dim
          FROM chunks
@@ -1330,7 +1465,116 @@ fn load_vector_index(
         index.upsert_batch(&refs)?;
     }
 
+    if let Some(path) = snapshot_path.as_ref() {
+        let entries = index.export_entries();
+        let _ = save_ann_snapshot(
+            path,
+            runtime_config.vector_index_mode,
+            runtime_config.vector_storage_kind,
+            &entries,
+        );
+    }
+
     Ok(Some(index))
+}
+
+fn ann_snapshot_path(
+    db_path: &Path,
+    mode: VectorIndexMode,
+    storage_kind: VectorStorageKind,
+) -> Option<PathBuf> {
+    let parent = db_path.parent().unwrap_or_else(|| Path::new("."));
+    let file_stem = db_path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("sqlrite");
+    Some(parent.join(format!(
+        ".{file_stem}.ann.{}.{}.json",
+        mode.as_str(),
+        storage_kind.as_str()
+    )))
+}
+
+fn ann_snapshot_is_fresh(snapshot_path: &Path, db_path: &Path) -> bool {
+    let snapshot_meta = fs::metadata(snapshot_path).ok();
+    let db_meta = fs::metadata(db_path).ok();
+    let Some(snapshot_mtime) = snapshot_meta.and_then(|meta| meta.modified().ok()) else {
+        return false;
+    };
+    let Some(db_mtime) = db_meta.and_then(|meta| meta.modified().ok()) else {
+        return false;
+    };
+    snapshot_mtime >= db_mtime
+}
+
+fn load_ann_snapshot(path: &Path) -> Result<AnnSnapshotFile> {
+    let raw = fs::read_to_string(path)?;
+    let snapshot: AnnSnapshotFile = serde_json::from_str(&raw)?;
+    Ok(snapshot)
+}
+
+fn save_ann_snapshot(
+    path: &Path,
+    mode: VectorIndexMode,
+    storage_kind: VectorStorageKind,
+    entries: &[(String, Vec<f32>)],
+) -> Result<()> {
+    let payload = AnnSnapshotFile {
+        version: 1,
+        mode: mode.as_str().to_string(),
+        storage_kind: storage_kind.as_str().to_string(),
+        entries: entries
+            .iter()
+            .map(|(chunk_id, embedding)| AnnSnapshotEntry {
+                chunk_id: chunk_id.clone(),
+                vector: encode_snapshot_vector(embedding, storage_kind),
+            })
+            .collect(),
+    };
+
+    let raw = serde_json::to_string_pretty(&payload)?;
+    fs::write(path, raw)?;
+    Ok(())
+}
+
+fn encode_snapshot_vector(embedding: &[f32], storage_kind: VectorStorageKind) -> AnnSnapshotVector {
+    match storage_kind {
+        VectorStorageKind::F32 => AnnSnapshotVector::F32 {
+            values: embedding.to_vec(),
+        },
+        VectorStorageKind::F16 => AnnSnapshotVector::F16 {
+            values: embedding
+                .iter()
+                .map(|value| f16::from_f32(*value).to_bits())
+                .collect(),
+        },
+        VectorStorageKind::Int8 => {
+            let max_abs = embedding
+                .iter()
+                .fold(0.0f32, |acc, value| acc.max(value.abs()))
+                .max(1e-6);
+            let scale = max_abs / 127.0;
+            let values = embedding
+                .iter()
+                .map(|value| ((*value / scale).round().clamp(-127.0, 127.0)) as i8)
+                .collect::<Vec<_>>();
+            AnnSnapshotVector::Int8 { values, scale }
+        }
+    }
+}
+
+fn decode_snapshot_vector(vector: AnnSnapshotVector) -> Vec<f32> {
+    match vector {
+        AnnSnapshotVector::F32 { values } => values,
+        AnnSnapshotVector::F16 { values } => values
+            .into_iter()
+            .map(|bits| f16::from_bits(bits).to_f32())
+            .collect(),
+        AnnSnapshotVector::Int8 { values, scale } => values
+            .into_iter()
+            .map(|value| value as f32 * scale)
+            .collect(),
+    }
 }
 
 fn compute_hybrid_scores(
@@ -1427,6 +1671,15 @@ fn apply_runtime_config(conn: &Connection, config: &RuntimeConfig) -> Result<()>
 
     if config.temp_store_memory {
         conn.pragma_update(None, "temp_store", "MEMORY")?;
+    }
+
+    if config.sqlite_cache_size_kib > 0 {
+        let cache_pages_kib = -config.sqlite_cache_size_kib;
+        conn.pragma_update(None, "cache_size", cache_pages_kib)?;
+    }
+
+    if config.sqlite_mmap_size_bytes > 0 {
+        conn.pragma_update(None, "mmap_size", config.sqlite_mmap_size_bytes)?;
     }
 
     Ok(())
@@ -1624,6 +1877,7 @@ fn lexical_overlap_score(query_tokens: &HashSet<String>, query_text: &str, conte
 mod tests {
     use super::*;
     use serde_json::json;
+    use tempfile::tempdir;
 
     fn seed(db: &SqlRite) -> Result<()> {
         db.ingest_chunks(&[
@@ -1940,6 +2194,119 @@ mod tests {
             err,
             SqlRiteError::EmbeddingDimensionMismatch { .. }
         ));
+        Ok(())
+    }
+
+    #[test]
+    fn hnsw_baseline_mode_rejects_mixed_embedding_dimensions() -> Result<()> {
+        let db = SqlRite::open_in_memory_with_config(
+            RuntimeConfig::default().with_vector_index_mode(VectorIndexMode::HnswBaseline),
+        )?;
+        db.ingest_chunk(&ChunkInput {
+            id: "c1".to_string(),
+            doc_id: "d1".to_string(),
+            content: "alpha".to_string(),
+            embedding: vec![1.0, 0.0, 0.0],
+            metadata: json!({}),
+            source: None,
+        })?;
+
+        let err = db
+            .ingest_chunk(&ChunkInput {
+                id: "c2".to_string(),
+                doc_id: "d2".to_string(),
+                content: "beta".to_string(),
+                embedding: vec![1.0, 0.0],
+                metadata: json!({}),
+                source: None,
+            })
+            .expect_err("mixed dimensions should fail in hnsw_baseline mode");
+        assert!(matches!(
+            err,
+            SqlRiteError::EmbeddingDimensionMismatch { .. }
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn ann_snapshot_round_trip_f16_precision() {
+        let original = vec![0.12345, -0.34567, 0.99991, -0.00123, 0.5, -0.5];
+        let encoded = encode_snapshot_vector(&original, VectorStorageKind::F16);
+        let decoded = decode_snapshot_vector(encoded);
+        assert_eq!(decoded.len(), original.len());
+        for (left, right) in decoded.iter().zip(original.iter()) {
+            assert!(
+                (left - right).abs() < 0.001,
+                "f16 round-trip drift too high"
+            );
+        }
+    }
+
+    #[test]
+    fn ann_snapshot_round_trip_int8_precision() {
+        let original = vec![1.0, -1.0, 0.75, -0.5, 0.1, -0.05, 0.0];
+        let encoded = encode_snapshot_vector(&original, VectorStorageKind::Int8);
+        let decoded = decode_snapshot_vector(encoded);
+        assert_eq!(decoded.len(), original.len());
+        for (left, right) in decoded.iter().zip(original.iter()) {
+            assert!(
+                (left - right).abs() < 0.02,
+                "int8 round-trip drift too high"
+            );
+        }
+    }
+
+    #[test]
+    fn ann_snapshot_persists_for_file_backed_ann_index() -> Result<()> {
+        let dir = tempdir()?;
+        let db_path = dir.path().join("ann_snapshot_test.db");
+        let runtime = RuntimeConfig::default()
+            .with_vector_index_mode(VectorIndexMode::HnswBaseline)
+            .with_vector_storage_kind(VectorStorageKind::Int8)
+            .with_ann_persistence(true);
+
+        {
+            let db = SqlRite::open_with_config(&db_path, runtime)?;
+            db.ingest_chunks(&[
+                ChunkInput {
+                    id: "c1".to_string(),
+                    doc_id: "d1".to_string(),
+                    content: "alpha".to_string(),
+                    embedding: vec![1.0, 0.0, 0.0],
+                    metadata: json!({}),
+                    source: None,
+                },
+                ChunkInput {
+                    id: "c2".to_string(),
+                    doc_id: "d2".to_string(),
+                    content: "beta".to_string(),
+                    embedding: vec![0.8, 0.2, 0.0],
+                    metadata: json!({}),
+                    source: None,
+                },
+            ])?;
+        }
+
+        let snapshot_path = ann_snapshot_path(
+            &db_path,
+            VectorIndexMode::HnswBaseline,
+            VectorStorageKind::Int8,
+        )
+        .expect("expected snapshot path");
+        assert!(snapshot_path.exists(), "snapshot file should be created");
+
+        let snapshot = load_ann_snapshot(&snapshot_path)?;
+        assert_eq!(snapshot.version, 1);
+        assert_eq!(snapshot.mode, "hnsw_baseline");
+        assert_eq!(snapshot.storage_kind, "int8");
+        assert_eq!(snapshot.entries.len(), 2);
+        assert!(
+            snapshot
+                .entries
+                .iter()
+                .all(|entry| matches!(entry.vector, AnnSnapshotVector::Int8 { .. })),
+            "expected int8 encoded vectors"
+        );
         Ok(())
     }
 

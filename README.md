@@ -16,7 +16,8 @@ It is designed for developers who want:
   - vector similarity
   - FTS5 lexical ranking (or lexical fallback)
   - weighted and RRF fusion
-- pluggable vector index modes: `brute_force`, `lsh_ann`, `disabled`
+- pluggable vector index modes: `brute_force`, `lsh_ann`, `hnsw_baseline`, `disabled`
+- vector storage profiles: `f32`, `f16`, `int8` (ANN snapshot quantization support)
 - ingestion worker with durable checkpoints and idempotent chunk IDs
 - embedding provider abstraction:
   - deterministic local provider
@@ -26,6 +27,8 @@ It is designed for developers who want:
 - tenant-aware secure wrapper with audit logging and key-rotation workflow
 - operations tooling: backup, verify, health checks
 - benchmark/eval CLIs with CI-gate integration
+- ANN snapshot persistence for faster ANN index warm-start on file-backed databases
+- SQLite mmap/cache tuning controls for performance experiments and profile hardening
 
 ## 5-Minute Start
 
@@ -621,13 +624,18 @@ Sample output:
 sqlrite doctor
 - version=0.1.0
 - supported_profiles=balanced,durable,fast_unsafe
-- supported_index_modes=brute_force,lsh_ann,disabled
+- supported_index_modes=brute_force,lsh_ann,hnsw_baseline,disabled
+- supported_vector_storage=f32,f16,int8
 - in_memory_integrity_ok=true
 - db_path=sqlrite_demo.db
 - integrity_ok=true
 - chunk_count=3
 - schema_version=3
 - index_mode=brute_force
+- vector_storage=f32
+- index_estimated_memory_bytes=174
+- sqlite_mmap_size_bytes=268435456
+- sqlite_cache_size_kib=65536
 ```
 
 ### Backup + verify
@@ -683,9 +691,21 @@ Sample output:
 
 ```text
 SQLRite benchmark: corpus=3000, queries=200, index=lsh_ann, fusion=weighted
+runtime: storage=f32, mmap_size_bytes=268435456, cache_size_kib=65536
 ingest_ms=297.69, query_ms=830.41, qps=240.85, top1_hit_rate=1.0000
 ingest_chunks_per_sec=10077.46, dataset_payload_bytes=923265, index_estimated_bytes=1245544, approx_working_set_bytes=2168809
-latency_ms: avg=4.1436, p50=4.0659, p95=4.6379, p99=5.1522, min=3.7147, max=5.1905
+latency_ms: avg=4.1436, p50=4.0659, p95=4.6379, p99=5.1522
+```
+
+Sample JSON fields (from `--output` report):
+
+```json
+{
+  "vector_index_mode": "hnsw_baseline",
+  "vector_storage_kind": "f32",
+  "sqlite_mmap_size_bytes": 268435456,
+  "sqlite_cache_size_kib": 65536
+}
 ```
 
 ### Matrix run
@@ -699,10 +719,11 @@ Sample output:
 ```text
 SQLRite benchmark matrix profile=quick
 scenario                            qps    p50(ms)    p95(ms)       top1   query_ms   ingest_cps    work_mb
-weighted + brute_force           164.94      5.931      6.691     1.0000     1212.5      30581.1       1.77
-rrf(k=60) + brute_force          160.81      6.194      6.516     0.0950     1243.7      31399.1       1.77
-weighted + lsh_ann               259.32      3.834      4.035     1.0000      771.2      10398.1       2.07
-weighted + disabled_index        218.81      4.537      4.810     0.8050      914.0      33118.2       0.88
+weighted + brute_force           152.46      6.162      8.051     1.0000     1311.8      24484.8       1.77
+rrf(k=60) + brute_force          150.53      6.548      7.197     0.0950     1328.7      30149.2       1.77
+weighted + lsh_ann               243.34      4.075      4.297     1.0000      821.9       9919.5       2.07
+weighted + hnsw_baseline         221.50      4.285      5.379     1.0000      902.9       7495.1       2.18
+weighted + disabled_index         59.53     16.225     18.317     1.0000     3359.8      28595.9       0.88
 ```
 
 ### Assert thresholds (perf gate)
@@ -729,6 +750,59 @@ For historical trend context, see:
 - `BENCHMARK_STATUS.md`
 - `.github/workflows/ci.yml`
 - `.github/workflows/perf-nightly.yml`
+
+## ANN, Storage, and SQLite Tuning Knobs (Sprint 8-10)
+
+`sqlrite` now supports ANN/runtime tuning through environment variables (applies to `init`, `query`, `benchmark`, `quickstart`, `doctor`, `serve`, and SQL bootstrap).
+
+| Variable | Description | Example |
+| --- | --- | --- |
+| `SQLRITE_VECTOR_STORAGE` | Vector storage kind (`f32`, `f16`, `int8`) | `SQLRITE_VECTOR_STORAGE=int8` |
+| `SQLRITE_ANN_MIN_CANDIDATES` | ANN minimum candidate set | `SQLRITE_ANN_MIN_CANDIDATES=256` |
+| `SQLRITE_ANN_MAX_HAMMING_RADIUS` | ANN bucket expansion radius | `SQLRITE_ANN_MAX_HAMMING_RADIUS=2` |
+| `SQLRITE_ANN_MAX_CANDIDATE_MULTIPLIER` | ANN cap multiplier | `SQLRITE_ANN_MAX_CANDIDATE_MULTIPLIER=8` |
+| `SQLRITE_ENABLE_ANN_PERSISTENCE` | Enable/disable ANN snapshot persistence (`true/false`) | `SQLRITE_ENABLE_ANN_PERSISTENCE=true` |
+| `SQLRITE_SQLITE_MMAP_SIZE` | SQLite mmap size (bytes) | `SQLRITE_SQLITE_MMAP_SIZE=536870912` |
+| `SQLRITE_SQLITE_CACHE_SIZE_KIB` | SQLite page cache target (KiB) | `SQLRITE_SQLITE_CACHE_SIZE_KIB=131072` |
+
+### Example: run HNSW baseline with int8 storage
+
+```bash
+SQLRITE_VECTOR_STORAGE=int8 \
+cargo run -- query \
+  --db sqlrite_demo.db \
+  --index-mode hnsw_baseline \
+  --text "local memory" \
+  --vector 0.95,0.05,0.0 \
+  --top-k 3
+```
+
+### Example: benchmark tuned mmap/cache profile
+
+```bash
+SQLRITE_SQLITE_MMAP_SIZE=536870912 \
+SQLRITE_SQLITE_CACHE_SIZE_KIB=131072 \
+cargo run -- benchmark \
+  --corpus 8000 \
+  --queries 350 \
+  --warmup 80 \
+  --embedding-dim 64 \
+  --top-k 10 \
+  --candidate-limit 400 \
+  --fusion weighted \
+  --index-mode hnsw_baseline \
+  --durability balanced \
+  --output project_plan/reports/s10_benchmark_tuned.json
+```
+
+### Example: verify active storage/tuning in doctor output
+
+```bash
+SQLRITE_VECTOR_STORAGE=int8 \
+SQLRITE_SQLITE_MMAP_SIZE=536870912 \
+SQLRITE_SQLITE_CACHE_SIZE_KIB=131072 \
+cargo run -- doctor --db sqlrite_demo.db --index-mode hnsw_baseline --json
+```
 
 ## Evaluation (Quality Metrics)
 

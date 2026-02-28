@@ -6,8 +6,8 @@ use serde::Serialize;
 use serde_json::{Map, Value, json};
 use sqlrite::{
     BenchmarkConfig, ChunkInput, DurabilityProfile, FusionStrategy, RuntimeConfig, SearchRequest,
-    ServerConfig, SqlRite, VectorIndexMode, backup_file, build_health_report, run_benchmark,
-    serve_health_endpoints, verify_backup_file,
+    ServerConfig, SqlRite, VectorIndexMode, VectorStorageKind, backup_file, build_health_report,
+    run_benchmark, serve_health_endpoints, verify_backup_file,
 };
 use std::collections::{HashMap, HashSet};
 use std::env;
@@ -164,12 +164,12 @@ fn parse_init_args(args: &[String]) -> Result<InitArgs, String> {
             }
             "--help" | "-h" => {
                 return Err(
-                    "usage: sqlrite init [--db PATH] [--profile balanced|durable|fast_unsafe] [--index-mode brute_force|lsh_ann|disabled] [--seed-demo]".to_string(),
+                    "usage: sqlrite init [--db PATH] [--profile balanced|durable|fast_unsafe] [--index-mode brute_force|lsh_ann|hnsw_baseline|disabled] [--seed-demo]".to_string(),
                 )
             }
             other => {
                 return Err(format!(
-                    "unknown argument `{other}`\nusage: sqlrite init [--db PATH] [--profile balanced|durable|fast_unsafe] [--index-mode brute_force|lsh_ann|disabled] [--seed-demo]"
+                    "unknown argument `{other}`\nusage: sqlrite init [--db PATH] [--profile balanced|durable|fast_unsafe] [--index-mode brute_force|lsh_ann|hnsw_baseline|disabled] [--seed-demo]"
                 ))
             }
         }
@@ -189,10 +189,11 @@ struct SqlArgs {
 fn cmd_sql(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     let parsed = parse_sql_args(args).map_err(std::io::Error::other)?;
     // Ensure SQL CLI sessions always run against the latest schema/catalog migrations.
-    let bootstrap = RuntimeConfig {
+    let mut bootstrap = RuntimeConfig {
         durability_profile: parsed.profile,
         ..RuntimeConfig::default()
     };
+    apply_runtime_env_overrides(&mut bootstrap);
     let _ = SqlRite::open_with_config(&parsed.db_path, bootstrap)?;
 
     let conn = Connection::open(&parsed.db_path)?;
@@ -338,11 +339,11 @@ fn parse_ingest_args(args: &[String]) -> Result<IngestArgs, String> {
                 source = Some(parse_string(args, i, "--source")?);
             }
             "--help" | "-h" => {
-                return Err("usage: sqlrite ingest [--db PATH] [--profile balanced|durable|fast_unsafe] [--index-mode brute_force|lsh_ann|disabled] --id ID --doc-id ID --content TEXT --embedding v1,v2,... [--metadata JSON] [--tenant TENANT] [--source SRC]".to_string())
+                return Err("usage: sqlrite ingest [--db PATH] [--profile balanced|durable|fast_unsafe] [--index-mode brute_force|lsh_ann|hnsw_baseline|disabled] --id ID --doc-id ID --content TEXT --embedding v1,v2,... [--metadata JSON] [--tenant TENANT] [--source SRC]".to_string())
             }
             other => {
                 return Err(format!(
-                    "unknown argument `{other}`\nusage: sqlrite ingest [--db PATH] [--profile balanced|durable|fast_unsafe] [--index-mode brute_force|lsh_ann|disabled] --id ID --doc-id ID --content TEXT --embedding v1,v2,... [--metadata JSON] [--tenant TENANT] [--source SRC]"
+                    "unknown argument `{other}`\nusage: sqlrite ingest [--db PATH] [--profile balanced|durable|fast_unsafe] [--index-mode brute_force|lsh_ann|hnsw_baseline|disabled] --id ID --doc-id ID --content TEXT --embedding v1,v2,... [--metadata JSON] [--tenant TENANT] [--source SRC]"
                 ))
             }
         }
@@ -509,11 +510,11 @@ fn parse_query_args(args: &[String]) -> Result<QueryArgs, String> {
                     .insert(key.trim().to_string(), value.trim().to_string());
             }
             "--help" | "-h" => {
-                return Err("usage: sqlrite query [--db PATH] [--profile balanced|durable|fast_unsafe] [--index-mode brute_force|lsh_ann|disabled] [--text QUERY] [--vector v1,v2,...] [--top-k N] [--alpha F] [--candidate-limit N] [--doc-id ID] [--filter key=value]... [--fusion weighted|rrf] [--rrf-k F]".to_string())
+                return Err("usage: sqlrite query [--db PATH] [--profile balanced|durable|fast_unsafe] [--index-mode brute_force|lsh_ann|hnsw_baseline|disabled] [--text QUERY] [--vector v1,v2,...] [--top-k N] [--alpha F] [--candidate-limit N] [--doc-id ID] [--filter key=value]... [--fusion weighted|rrf] [--rrf-k F]".to_string())
             }
             other => {
                 return Err(format!(
-                    "unknown argument `{other}`\nusage: sqlrite query [--db PATH] [--profile balanced|durable|fast_unsafe] [--index-mode brute_force|lsh_ann|disabled] [--text QUERY] [--vector v1,v2,...] [--top-k N] [--alpha F] [--candidate-limit N] [--doc-id ID] [--filter key=value]... [--fusion weighted|rrf] [--rrf-k F]"
+                    "unknown argument `{other}`\nusage: sqlrite query [--db PATH] [--profile balanced|durable|fast_unsafe] [--index-mode brute_force|lsh_ann|hnsw_baseline|disabled] [--text QUERY] [--vector v1,v2,...] [--top-k N] [--alpha F] [--candidate-limit N] [--doc-id ID] [--filter key=value]... [--fusion weighted|rrf] [--rrf-k F]"
                 ))
             }
         }
@@ -1010,7 +1011,7 @@ fn percentile(values: &[f64], p: f64) -> f64 {
 }
 
 fn quickstart_usage() -> &'static str {
-    "usage: sqlrite quickstart [--db PATH] [--profile balanced|durable|fast_unsafe] [--index-mode brute_force|lsh_ann|disabled] [--seed-demo|--no-seed-demo] [--reset|--no-reset] [--text QUERY] [--vector v1,v2,...] [--top-k N] [--alpha F] [--candidate-limit N] [--fusion weighted|rrf] [--rrf-k F] [--runs N] [--max-median-ms F] [--min-success-rate F] [--json] [--output PATH]"
+    "usage: sqlrite quickstart [--db PATH] [--profile balanced|durable|fast_unsafe] [--index-mode brute_force|lsh_ann|hnsw_baseline|disabled] [--seed-demo|--no-seed-demo] [--reset|--no-reset] [--text QUERY] [--vector v1,v2,...] [--top-k N] [--alpha F] [--candidate-limit N] [--fusion weighted|rrf] [--rrf-k F] [--runs N] [--max-median-ms F] [--min-success-rate F] [--json] [--output PATH]"
 }
 
 #[derive(Debug)]
@@ -1062,11 +1063,11 @@ fn parse_serve_args(args: &[String]) -> Result<ServeArgs, String> {
                 out.index_mode = parse_index_mode(&parse_string(args, i, "--index-mode")?)?;
             }
             "--help" | "-h" => {
-                return Err("usage: sqlrite serve [--db PATH] [--bind HOST:PORT] [--profile balanced|durable|fast_unsafe] [--index-mode brute_force|lsh_ann|disabled]".to_string())
+                return Err("usage: sqlrite serve [--db PATH] [--bind HOST:PORT] [--profile balanced|durable|fast_unsafe] [--index-mode brute_force|lsh_ann|hnsw_baseline|disabled]".to_string())
             }
             other => {
                 return Err(format!(
-                    "unknown argument `{other}`\nusage: sqlrite serve [--db PATH] [--bind HOST:PORT] [--profile balanced|durable|fast_unsafe] [--index-mode brute_force|lsh_ann|disabled]"
+                    "unknown argument `{other}`\nusage: sqlrite serve [--db PATH] [--bind HOST:PORT] [--profile balanced|durable|fast_unsafe] [--index-mode brute_force|lsh_ann|hnsw_baseline|disabled]"
                 ))
             }
         }
@@ -1182,8 +1183,19 @@ fn cmd_benchmark(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         report.corpus_size, report.query_count, report.vector_index_mode, report.fusion_strategy
     );
     println!(
+        "runtime: storage={}, mmap_size_bytes={}, cache_size_kib={}",
+        report.vector_storage_kind, report.sqlite_mmap_size_bytes, report.sqlite_cache_size_kib
+    );
+    println!(
         "ingest_ms={:.2}, query_ms={:.2}, qps={:.2}, top1_hit_rate={:.4}",
         report.ingest_duration_ms, report.query_duration_ms, report.qps, report.top1_hit_rate
+    );
+    println!(
+        "ingest_chunks_per_sec={:.2}, dataset_payload_bytes={}, index_estimated_bytes={}, approx_working_set_bytes={}",
+        report.ingest_chunks_per_sec,
+        report.dataset_payload_bytes,
+        report.vector_index_estimated_memory_bytes,
+        report.approx_working_set_bytes
     );
     println!(
         "latency_ms: avg={:.4}, p50={:.4}, p95={:.4}, p99={:.4}",
@@ -1263,11 +1275,11 @@ fn parse_benchmark_args(args: &[String]) -> Result<BenchmarkArgs, String> {
                 output_path = Some(PathBuf::from(parse_string(args, i, "--output")?));
             }
             "--help" | "-h" => {
-                return Err("usage: sqlrite benchmark [--corpus N] [--queries N] [--warmup N] [--embedding-dim N] [--top-k N] [--candidate-limit N] [--batch-size N] [--alpha F] [--fusion weighted|rrf] [--rrf-k F] [--profile balanced|durable|fast_unsafe] [--durability balanced|durable|fast_unsafe] [--index-mode brute_force|lsh_ann|disabled] [--output PATH]".to_string())
+                return Err("usage: sqlrite benchmark [--corpus N] [--queries N] [--warmup N] [--embedding-dim N] [--top-k N] [--candidate-limit N] [--batch-size N] [--alpha F] [--fusion weighted|rrf] [--rrf-k F] [--profile balanced|durable|fast_unsafe] [--durability balanced|durable|fast_unsafe] [--index-mode brute_force|lsh_ann|hnsw_baseline|disabled] [--output PATH]".to_string())
             }
             other => {
                 return Err(format!(
-                    "unknown argument `{other}`\nusage: sqlrite benchmark [--corpus N] [--queries N] [--warmup N] [--embedding-dim N] [--top-k N] [--candidate-limit N] [--batch-size N] [--alpha F] [--fusion weighted|rrf] [--rrf-k F] [--profile balanced|durable|fast_unsafe] [--durability balanced|durable|fast_unsafe] [--index-mode brute_force|lsh_ann|disabled] [--output PATH]"
+                    "unknown argument `{other}`\nusage: sqlrite benchmark [--corpus N] [--queries N] [--warmup N] [--embedding-dim N] [--top-k N] [--candidate-limit N] [--batch-size N] [--alpha F] [--fusion weighted|rrf] [--rrf-k F] [--profile balanced|durable|fast_unsafe] [--durability balanced|durable|fast_unsafe] [--index-mode brute_force|lsh_ann|hnsw_baseline|disabled] [--output PATH]"
                 ))
             }
         }
@@ -1310,13 +1322,13 @@ fn cmd_doctor(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
             }
             "--help" | "-h" => {
                 return Err(std::io::Error::other(
-                    "usage: sqlrite doctor [--db PATH] [--profile balanced|durable|fast_unsafe] [--index-mode brute_force|lsh_ann|disabled] [--json]",
+                    "usage: sqlrite doctor [--db PATH] [--profile balanced|durable|fast_unsafe] [--index-mode brute_force|lsh_ann|hnsw_baseline|disabled] [--json]",
                 )
                 .into())
             }
             other => {
                 return Err(std::io::Error::other(format!(
-                    "unknown argument `{other}`\nusage: sqlrite doctor [--db PATH] [--profile balanced|durable|fast_unsafe] [--index-mode brute_force|lsh_ann|disabled] [--json]"
+                    "unknown argument `{other}`\nusage: sqlrite doctor [--db PATH] [--profile balanced|durable|fast_unsafe] [--index-mode brute_force|lsh_ann|hnsw_baseline|disabled] [--json]"
                 ))
                 .into())
             }
@@ -1329,7 +1341,7 @@ fn cmd_doctor(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
 
     let db_exists_before = db_path.exists();
     let runtime = runtime_config(profile, index_mode);
-    let db = SqlRite::open_with_config(&db_path, runtime)?;
+    let db = SqlRite::open_with_config(&db_path, runtime.clone())?;
     let health = build_health_report(&db)?;
     let db_parent_writable = path_parent_writable(&db_path);
 
@@ -1386,8 +1398,10 @@ fn cmd_doctor(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         supported_index_modes: vec![
             "brute_force".to_string(),
             "lsh_ann".to_string(),
+            "hnsw_baseline".to_string(),
             "disabled".to_string(),
         ],
+        supported_vector_storage: vec!["f32".to_string(), "f16".to_string(), "int8".to_string()],
         in_memory_integrity_ok,
         db: DoctorDbReport {
             path: db_path.display().to_string(),
@@ -1395,11 +1409,16 @@ fn cmd_doctor(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
             parent_writable: db_parent_writable,
             profile: profile_name(profile).to_string(),
             requested_index_mode: index_mode_name(index_mode).to_string(),
+            requested_vector_storage: runtime.vector_storage_kind.as_str().to_string(),
             integrity_ok: health.integrity_check_ok,
             schema_version: health.schema_version,
             chunk_count: health.chunk_count,
             active_index_mode: health.vector_index_mode,
+            active_storage_kind: health.vector_index_storage_kind,
             index_entries: health.vector_index_entries,
+            index_estimated_memory_bytes: health.vector_index_estimated_memory_bytes,
+            sqlite_mmap_size_bytes: runtime.sqlite_mmap_size_bytes,
+            sqlite_cache_size_kib: runtime.sqlite_cache_size_kib,
         },
         recommendations,
     };
@@ -1435,17 +1454,38 @@ fn cmd_doctor(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         "- supported_index_modes={}",
         report.supported_index_modes.join(",")
     );
+    println!(
+        "- supported_vector_storage={}",
+        report.supported_vector_storage.join(",")
+    );
     println!("- in_memory_integrity_ok={}", report.in_memory_integrity_ok);
     println!("- db_path={}", report.db.path);
     println!("- db_exists_before={}", report.db.existed_before);
     println!("- db_parent_writable={}", report.db.parent_writable);
     println!("- profile={}", report.db.profile);
     println!("- requested_index_mode={}", report.db.requested_index_mode);
+    println!(
+        "- requested_vector_storage={}",
+        report.db.requested_vector_storage
+    );
     println!("- integrity_ok={}", report.db.integrity_ok);
     println!("- schema_version={}", report.db.schema_version);
     println!("- chunk_count={}", report.db.chunk_count);
     println!("- index_mode={}", report.db.active_index_mode);
+    println!("- vector_storage={}", report.db.active_storage_kind);
     println!("- index_entries={}", report.db.index_entries);
+    println!(
+        "- index_estimated_memory_bytes={}",
+        report.db.index_estimated_memory_bytes
+    );
+    println!(
+        "- sqlite_mmap_size_bytes={}",
+        report.db.sqlite_mmap_size_bytes
+    );
+    println!(
+        "- sqlite_cache_size_kib={}",
+        report.db.sqlite_cache_size_kib
+    );
     if !report.recommendations.is_empty() {
         println!("recommendations:");
         for rec in &report.recommendations {
@@ -1469,6 +1509,7 @@ struct DoctorReport {
     cargo_version: Option<String>,
     supported_profiles: Vec<String>,
     supported_index_modes: Vec<String>,
+    supported_vector_storage: Vec<String>,
     in_memory_integrity_ok: bool,
     db: DoctorDbReport,
     recommendations: Vec<String>,
@@ -1481,17 +1522,65 @@ struct DoctorDbReport {
     parent_writable: bool,
     profile: String,
     requested_index_mode: String,
+    requested_vector_storage: String,
     integrity_ok: bool,
     schema_version: i64,
     chunk_count: usize,
     active_index_mode: String,
+    active_storage_kind: String,
     index_entries: usize,
+    index_estimated_memory_bytes: usize,
+    sqlite_mmap_size_bytes: i64,
+    sqlite_cache_size_kib: i64,
 }
 
 fn runtime_config(profile: DurabilityProfile, index_mode: VectorIndexMode) -> RuntimeConfig {
     let mut cfg = RuntimeConfig::default().with_vector_index_mode(index_mode);
     cfg.durability_profile = profile;
+    apply_runtime_env_overrides(&mut cfg);
     cfg
+}
+
+fn apply_runtime_env_overrides(cfg: &mut RuntimeConfig) {
+    if let Ok(raw) = env::var("SQLRITE_VECTOR_STORAGE")
+        && let Ok(storage) = parse_vector_storage_kind(&raw)
+    {
+        cfg.vector_storage_kind = storage;
+    }
+
+    let mut tuning = cfg.ann_tuning;
+    if let Ok(raw) = env::var("SQLRITE_ANN_MIN_CANDIDATES")
+        && let Ok(value) = raw.parse::<usize>()
+    {
+        tuning.min_candidates = value.max(1);
+    }
+    if let Ok(raw) = env::var("SQLRITE_ANN_MAX_HAMMING_RADIUS")
+        && let Ok(value) = raw.parse::<usize>()
+    {
+        tuning.max_hamming_radius = value;
+    }
+    if let Ok(raw) = env::var("SQLRITE_ANN_MAX_CANDIDATE_MULTIPLIER")
+        && let Ok(value) = raw.parse::<usize>()
+    {
+        tuning.max_candidate_multiplier = value.max(1);
+    }
+    cfg.ann_tuning = tuning;
+
+    if let Ok(raw) = env::var("SQLRITE_ENABLE_ANN_PERSISTENCE")
+        && let Some(value) = parse_boolish(&raw)
+    {
+        cfg.enable_ann_persistence = value;
+    }
+    if let Ok(raw) = env::var("SQLRITE_SQLITE_MMAP_SIZE")
+        && let Ok(value) = raw.parse::<i64>()
+    {
+        cfg.sqlite_mmap_size_bytes = value.max(0);
+    }
+    if let Ok(raw) = env::var("SQLRITE_SQLITE_CACHE_SIZE_KIB")
+        && let Ok(value) = raw.parse::<i64>()
+    {
+        cfg.sqlite_cache_size_kib = value.max(0);
+    }
 }
 
 fn parse_profile(value: &str) -> Result<DurabilityProfile, String> {
@@ -1509,10 +1598,30 @@ fn parse_index_mode(value: &str) -> Result<VectorIndexMode, String> {
     match value {
         "brute_force" => Ok(VectorIndexMode::BruteForce),
         "lsh_ann" => Ok(VectorIndexMode::LshAnn),
+        "hnsw_baseline" | "hnsw" => Ok(VectorIndexMode::HnswBaseline),
         "disabled" => Ok(VectorIndexMode::Disabled),
         other => Err(format!(
-            "invalid --index-mode `{other}`; expected brute_force, lsh_ann, or disabled"
+            "invalid --index-mode `{other}`; expected brute_force, lsh_ann, hnsw_baseline, or disabled"
         )),
+    }
+}
+
+fn parse_vector_storage_kind(value: &str) -> Result<VectorStorageKind, String> {
+    match value {
+        "f32" => Ok(VectorStorageKind::F32),
+        "f16" => Ok(VectorStorageKind::F16),
+        "int8" => Ok(VectorStorageKind::Int8),
+        other => Err(format!(
+            "invalid vector storage `{other}`; expected f32, f16, or int8"
+        )),
+    }
+}
+
+fn parse_boolish(value: &str) -> Option<bool> {
+    match value.to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Some(true),
+        "0" | "false" | "no" | "off" => Some(false),
+        _ => None,
     }
 }
 
@@ -1636,6 +1745,7 @@ fn index_mode_name(mode: VectorIndexMode) -> &'static str {
         VectorIndexMode::Disabled => "disabled",
         VectorIndexMode::BruteForce => "brute_force",
         VectorIndexMode::LshAnn => "lsh_ann",
+        VectorIndexMode::HnswBaseline => "hnsw_baseline",
     }
 }
 
@@ -3420,7 +3530,7 @@ fn sql_value_to_json(value: ValueRef<'_>) -> Value {
 }
 
 fn usage() -> &'static str {
-    "sqlrite unified CLI\n\nusage:\n  sqlrite <command> [options]\n\ncommands:\n  init       Create/open a SQLRite database and apply runtime profile\n  sql        Execute SQL or enter interactive SQL shell\n  ingest     Ingest a single chunk directly from CLI flags\n  query      Run text/vector/hybrid retrieval query\n  quickstart Run init->query UX flow with telemetry/gates\n  serve      Start health/metrics HTTP server\n  backup     Create or verify backup files\n  benchmark  Run synthetic retrieval benchmark\n  doctor     Run environment and database health checks\n\nexamples:\n  sqlrite init --db sqlrite_demo.db --seed-demo\n  sqlrite quickstart --db sqlrite_demo.db --runs 5 --max-median-ms 180000 --min-success-rate 0.95\n  sqlrite query --db sqlrite_demo.db --text \"agents local memory\" --top-k 3\n  sqlrite doctor --db sqlrite_demo.db --json\n  sqlrite sql --db sqlrite_demo.db\n  sqlrite sql --db sqlrite_demo.db --execute \"SELECT id, doc_id FROM chunks LIMIT 3;\""
+    "sqlrite unified CLI\n\nusage:\n  sqlrite <command> [options]\n\ncommands:\n  init       Create/open a SQLRite database and apply runtime profile\n  sql        Execute SQL or enter interactive SQL shell\n  ingest     Ingest a single chunk directly from CLI flags\n  query      Run text/vector/hybrid retrieval query\n  quickstart Run init->query UX flow with telemetry/gates\n  serve      Start health/metrics HTTP server\n  backup     Create or verify backup files\n  benchmark  Run synthetic retrieval benchmark\n  doctor     Run environment and database health checks\n\nenv overrides:\n  SQLRITE_VECTOR_STORAGE=f32|f16|int8\n  SQLRITE_ANN_MIN_CANDIDATES=<int>\n  SQLRITE_ANN_MAX_HAMMING_RADIUS=<int>\n  SQLRITE_ANN_MAX_CANDIDATE_MULTIPLIER=<int>\n  SQLRITE_ENABLE_ANN_PERSISTENCE=true|false\n  SQLRITE_SQLITE_MMAP_SIZE=<bytes>\n  SQLRITE_SQLITE_CACHE_SIZE_KIB=<kib>\n\nexamples:\n  sqlrite init --db sqlrite_demo.db --seed-demo\n  sqlrite quickstart --db sqlrite_demo.db --runs 5 --max-median-ms 180000 --min-success-rate 0.95\n  sqlrite query --db sqlrite_demo.db --text \"agents local memory\" --top-k 3\n  sqlrite doctor --db sqlrite_demo.db --json\n  sqlrite sql --db sqlrite_demo.db\n  sqlrite sql --db sqlrite_demo.db --execute \"SELECT id, doc_id FROM chunks LIMIT 3;\""
 }
 
 #[cfg(test)]
@@ -3471,6 +3581,27 @@ mod tests {
     fn path_parent_writable_detects_temp_dir() {
         let path = std::env::temp_dir().join("sqlrite-parent-writable-test.db");
         assert!(path_parent_writable(&path));
+    }
+
+    #[test]
+    fn parse_index_mode_accepts_hnsw_aliases() {
+        assert!(matches!(
+            parse_index_mode("hnsw_baseline"),
+            Ok(VectorIndexMode::HnswBaseline)
+        ));
+        assert!(matches!(
+            parse_index_mode("hnsw"),
+            Ok(VectorIndexMode::HnswBaseline)
+        ));
+    }
+
+    #[test]
+    fn parse_boolish_supports_common_values() {
+        assert_eq!(parse_boolish("true"), Some(true));
+        assert_eq!(parse_boolish("1"), Some(true));
+        assert_eq!(parse_boolish("false"), Some(false));
+        assert_eq!(parse_boolish("0"), Some(false));
+        assert_eq!(parse_boolish("not-a-bool"), None);
     }
 
     #[test]

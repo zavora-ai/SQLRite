@@ -8,7 +8,9 @@ pub struct HealthReport {
     pub schema_version: i64,
     pub chunk_count: usize,
     pub vector_index_mode: String,
+    pub vector_index_storage_kind: String,
     pub vector_index_entries: usize,
+    pub vector_index_estimated_memory_bytes: usize,
     pub integrity_check_ok: bool,
 }
 
@@ -22,12 +24,22 @@ pub fn build_health_report(db: &SqlRite) -> Result<HealthReport> {
         .as_ref()
         .map(|stats| stats.entries)
         .unwrap_or(0);
+    let vector_index_storage_kind = vector_stats
+        .as_ref()
+        .map(|stats| stats.storage_kind.clone())
+        .unwrap_or_else(|| "f32".to_string());
+    let vector_index_estimated_memory_bytes = vector_stats
+        .as_ref()
+        .map(|stats| stats.estimated_memory_bytes)
+        .unwrap_or(0);
 
     Ok(HealthReport {
         schema_version: db.schema_version(),
         chunk_count: db.chunk_count()?,
         vector_index_mode,
+        vector_index_storage_kind,
         vector_index_entries,
+        vector_index_estimated_memory_bytes,
         integrity_check_ok: db.integrity_check_ok()?,
     })
 }

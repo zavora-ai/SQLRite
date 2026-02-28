@@ -143,9 +143,10 @@ fn parse_args(args: Vec<String>) -> Result<BenchCliArgs, String> {
                     "brute_force" => VectorIndexMode::BruteForce,
                     "disabled" => VectorIndexMode::Disabled,
                     "lsh_ann" => VectorIndexMode::LshAnn,
+                    "hnsw_baseline" | "hnsw" => VectorIndexMode::HnswBaseline,
                     other => {
                         return Err(format!(
-                            "invalid --index-mode `{other}`; expected brute_force, lsh_ann, or disabled"
+                            "invalid --index-mode `{other}`; expected brute_force, lsh_ann, hnsw_baseline, or disabled"
                         ));
                     }
                 };
@@ -192,7 +193,7 @@ fn parse_f32(args: &[String], index: usize, flag: &str) -> Result<f32, String> {
 }
 
 fn usage() -> String {
-    "usage: cargo run --bin sqlrite-bench -- [--corpus N] [--queries N] [--warmup N] [--embedding-dim N] [--top-k N] [--candidate-limit N] [--batch-size N] [--alpha F] [--fusion weighted|rrf] [--rrf-k F] [--index-mode brute_force|lsh_ann|disabled] [--durability balanced|durable|fast_unsafe] [--output PATH]".to_string()
+    "usage: cargo run --bin sqlrite-bench -- [--corpus N] [--queries N] [--warmup N] [--embedding-dim N] [--top-k N] [--candidate-limit N] [--batch-size N] [--alpha F] [--fusion weighted|rrf] [--rrf-k F] [--index-mode brute_force|lsh_ann|hnsw_baseline|disabled] [--durability balanced|durable|fast_unsafe] [--output PATH]".to_string()
 }
 
 fn print_summary(report: &sqlrite::BenchmarkReport) {
