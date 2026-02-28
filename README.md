@@ -817,6 +817,29 @@ Sample output:
 benchmark assertions passed: profile=quick, checked=2 scenario(s)
 ```
 
+### Phase C benchmark bundle (S13)
+
+Generate a reproducible bundle (suite JSON/log + manifest + gate log + tarball):
+
+```bash
+bash scripts/run-benchmark-bundle.sh \
+  --output-dir project_plan/reports/s13_bundle \
+  --profiles 100k,1m \
+  --concurrency-profile 100k \
+  --concurrency-levels 1,2,4 \
+  --strict-phase-c-gate
+```
+
+Gate assertions against suite output (direct CLI):
+
+```bash
+cargo run --bin sqlrite-bench-suite-assert -- \
+  --suite project_plan/reports/s13_bundle/bench_suite.json \
+  --rule "profile=100k,scenario=weighted + lsh_ann,max_p95_ms=40,min_top1=0.99" \
+  --rule "profile=1m,scenario=weighted + lsh_ann,max_p95_ms=90,min_top1=0.99" \
+  --rule "profile=100k,scenario=weighted + brute_force,min_ingest_cpm=50000"
+```
+
 For historical trend context, see:
 
 - `BENCHMARK_STATUS.md`

@@ -17,6 +17,8 @@ SQLRite now has:
 - CI OS smoke matrix for benchmark CLI (`ubuntu`/`macos`/`windows`)
 - CI target matrix checks for Linux/macOS/Windows x64/arm64 targets
 - scheduled perf workflow (`.github/workflows/perf-nightly.yml`) for 10k/100k trend checks plus suite artifact generation
+- phase-C benchmark bundle script (`scripts/run-benchmark-bundle.sh`) for reproducible S13 artifacts
+- suite gate assertion CLI (`sqlrite-bench-suite-assert`) for threshold checks from suite JSON
 - `hnsw_baseline` benchmark matrix scenario
 - vector storage telemetry (`f32`/`f16`/`int8`) in benchmark JSON
 - sqlite runtime telemetry (`sqlite_mmap_size_bytes`, `sqlite_cache_size_kib`) in benchmark JSON
@@ -110,6 +112,7 @@ Notes:
 
 1. 100k/1m matrix runs are wired in nightly/dispatch workflows for reproducible CI artifacts.
 2. 10m profile is now available in benchmark profile selection (`sqlrite-bench-matrix`, `sqlrite-bench-suite`) for large-scale phase continuation in S13.
+3. S13 introduces profile definition files and bundle automation for publishing reproducible benchmark packages.
 
 ## 10k profile progression
 

@@ -1,0 +1,12 @@
+SQLRite benchmark suite: version=s12-v1, host=macos aarch64, cpu_threads=10
+metadata: dataset_id=examples/eval_dataset.json, embedding_model=deterministic-local-v1, hardware_class=local-Darwin-arm64
+profile=quick
+  weighted + brute_force       qps=  147.48 p95_ms=   8.101 top1=1.0000 conc=1
+  rrf(k=60) + brute_force      qps=  103.59 p95_ms=  16.844 top1=0.0950 conc=1
+  weighted + lsh_ann           qps=  227.32 p95_ms=   5.371 top1=1.0000 conc=1
+  weighted + hnsw_baseline     qps=  219.96 p95_ms=   5.454 top1=1.0000 conc=1
+  weighted + disabled_index    qps=   59.59 p95_ms=  18.137 top1=1.0000 conc=1
+concurrency_sweep profile=quick scenario=weighted + brute_force
+  concurrency=1 qps=162.43 p95_ms=6.373
+  concurrency=2 qps=74.64 p95_ms=8.298
+eval: skipped

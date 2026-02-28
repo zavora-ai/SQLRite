@@ -105,6 +105,11 @@ The format is based on Keep a Changelog.
   - `project_plan/reports/s12_bench_suite.json`
   - `project_plan/reports/s12_bench_suite.log`
   - `project_plan/reports/s12_quality_gates.log`
+- S13 benchmark bundle baselines:
+  - profile definitions in `benchmarks/profiles/*.json` (`10k`, `100k`, `1m`, `10m`)
+  - reproducible bundle script `scripts/run-benchmark-bundle.sh`
+  - suite assertion CLI `sqlrite-bench-suite-assert`
+  - benchmark profile reference docs in `benchmarks/README.md`
 - Reproducible benchmark/eval suite CLI:
   - `sqlrite-bench-suite`
   - profile matrix support (`quick`, `10k`, `100k`, `1m`, `10m`)
@@ -113,6 +118,7 @@ The format is based on Keep a Changelog.
 - CI matrix expansion for S12 scope:
   - benchmark smoke matrix on Linux/macOS/Windows
   - target-check matrix on Linux/macOS/Windows x64/arm64 triples
+- Performance workflow now includes manual-dispatch phase-C benchmark bundle generation with uploaded artifacts.
 
 ### Changed
 

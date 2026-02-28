@@ -113,3 +113,29 @@ jobs:
         with:
           name: bench-matrix-1m-dispatch
           path: bench_matrix_1m_dispatch.json
+
+  phase-c-bundle-dispatch:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    needs: bench-1m-dispatch
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Run phase-c benchmark bundle
+        run: |
+          bash scripts/run-benchmark-bundle.sh \
+            --output-dir s13_bundle_ci \
+            --profiles 100k,1m \
+            --concurrency-profile 100k \
+            --concurrency-levels 1,2,4 \
+            --dataset examples/eval_dataset.json \
+            --dataset-id examples/eval_dataset.json \
+            --embedding-model deterministic-local-v1 \
+            --hardware-class gh-ubuntu-latest-x86_64 \
+            --durability balanced \
+            --strict-phase-c-gate
+      - name: Upload phase-c bundle artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase-c-benchmark-bundle-dispatch
+          path: s13_bundle_ci/*

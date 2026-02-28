@@ -1,0 +1,13 @@
+{
+  "profile": "10m",
+  "corpus_size": 10000000,
+  "query_count": 5000,
+  "warmup_queries": 1000,
+  "concurrency": 1,
+  "embedding_dim": 384,
+  "top_k": 10,
+  "candidate_limit": 4000,
+  "alpha": 0.65,
+  "batch_size": 4000,
+  "default_fusion": "weighted"
+}
