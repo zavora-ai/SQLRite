@@ -8,11 +8,15 @@ SQLRite now has:
 
 - deterministic synthetic benchmark harness (`sqlrite-bench`)
 - profile matrix runner (`sqlrite-bench-matrix`)
+- reproducible benchmark/eval suite runner (`sqlrite-bench-suite`)
 - reproducible reports in JSON for comparison over time
 - throughput and memory estimate fields in benchmark output
+- explicit benchmark concurrency field in benchmark output
 - assertion CLI (`sqlrite-bench-assert`) for automated regression gates
 - CI workflow gate (`.github/workflows/ci.yml`) that runs quick profile assertions
-- scheduled perf workflow (`.github/workflows/perf-nightly.yml`) for 10k/100k trend checks
+- CI OS smoke matrix for benchmark CLI (`ubuntu`/`macos`/`windows`)
+- CI target matrix checks for Linux/macOS/Windows x64/arm64 targets
+- scheduled perf workflow (`.github/workflows/perf-nightly.yml`) for 10k/100k trend checks plus suite artifact generation
 - `hnsw_baseline` benchmark matrix scenario
 - vector storage telemetry (`f32`/`f16`/`int8`) in benchmark JSON
 - sqlite runtime telemetry (`sqlite_mmap_size_bytes`, `sqlite_cache_size_kib`) in benchmark JSON
@@ -77,6 +81,35 @@ Compaction evidence:
 |---|---:|---:|---:|---:|---:|
 | maintenance run | 21286 | 21286 | 0 | 704512 | 190.39 |
 | dedupe smoke | 3 | 2 | 1 | 0 | 5.98 |
+
+## Sprint 12 benchmark/eval suite snapshot
+
+Sources:
+
+1. `project_plan/reports/s12_bench_suite.json`
+2. `project_plan/reports/s12_bench_suite.log`
+3. `project_plan/reports/s12_quality_gates.log`
+
+Local suite configuration:
+
+- profiles: `quick,10k`
+- concurrency sweep profile: `10k`
+- concurrency levels: `1,2,4`
+- dataset: `examples/eval_dataset.json`
+- embedding model label: `deterministic-local-v1`
+- hardware class label: `local-Darwin-arm64`
+
+Selected observations:
+
+1. 10k profile (`weighted + brute_force`) reported `qps=76.50`, `p95_ms=16.511`, `top1_hit_rate=1.0000`.
+2. 10k profile (`weighted + lsh_ann`) reported `qps=86.39`, `p95_ms=14.288`, `top1_hit_rate=0.9980`.
+3. Concurrency sweep (10k, weighted + brute_force): `conc=1 qps=87.36`, `conc=2 qps=35.14`, `conc=4 qps=37.26`.
+4. Eval metrics stayed stable across `brute_force`, `lsh_ann`, `hnsw_baseline` on this dataset (`k=1 recall=0.8333`, `mrr=1.0000`, `ndcg=1.0000`).
+
+Notes:
+
+1. 100k/1m matrix runs are wired in nightly/dispatch workflows for reproducible CI artifacts.
+2. 10m profile is now available in benchmark profile selection (`sqlrite-bench-matrix`, `sqlrite-bench-suite`) for large-scale phase continuation in S13.
 
 ## 10k profile progression
 

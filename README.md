@@ -709,6 +709,7 @@ cargo run -- benchmark \
   --corpus 3000 \
   --queries 200 \
   --warmup 50 \
+  --concurrency 2 \
   --embedding-dim 64 \
   --top-k 10 \
   --candidate-limit 300 \
@@ -721,7 +722,7 @@ cargo run -- benchmark \
 Sample output:
 
 ```text
-SQLRite benchmark: corpus=3000, queries=200, index=lsh_ann, fusion=weighted
+SQLRite benchmark: corpus=3000, queries=200, concurrency=2, index=lsh_ann, fusion=weighted
 runtime: storage=f32, mmap_size_bytes=268435456, cache_size_kib=65536
 ingest_ms=297.69, query_ms=830.41, qps=240.85, top1_hit_rate=1.0000
 ingest_chunks_per_sec=10077.46, dataset_payload_bytes=923265, index_estimated_bytes=1245544, approx_working_set_bytes=2168809
@@ -742,19 +743,59 @@ Sample JSON fields (from `--output` report):
 ### Matrix run
 
 ```bash
-cargo run --bin sqlrite-bench-matrix -- --profile quick --durability balanced --output bench_matrix_quick_readme.json
+cargo run --bin sqlrite-bench-matrix -- \
+  --profile quick \
+  --concurrency 2 \
+  --durability balanced \
+  --output bench_matrix_quick_readme.json
 ```
 
 Sample output:
 
 ```text
 SQLRite benchmark matrix profile=quick
-scenario                            qps    p50(ms)    p95(ms)       top1   query_ms   ingest_cps    work_mb
-weighted + brute_force           152.46      6.162      8.051     1.0000     1311.8      24484.8       1.77
-rrf(k=60) + brute_force          150.53      6.548      7.197     0.0950     1328.7      30149.2       1.77
-weighted + lsh_ann               243.34      4.075      4.297     1.0000      821.9       9919.5       2.07
-weighted + hnsw_baseline         221.50      4.285      5.379     1.0000      902.9       7495.1       2.18
-weighted + disabled_index         59.53     16.225     18.317     1.0000     3359.8      28595.9       0.88
+scenario                      conc        qps    p50(ms)    p95(ms)       top1   query_ms   ingest_cps    work_mb
+weighted + brute_force           2      84.57      7.284      9.425     1.0000     1182.4      24780.3       1.77
+rrf(k=60) + brute_force          2      81.93      7.642     10.181     0.0950     1220.3      30122.7       1.77
+weighted + lsh_ann               2     188.12      4.203      6.012     1.0000      531.6       9981.4       2.07
+weighted + hnsw_baseline         2     173.44      4.689      7.435     1.0000      576.6       7520.6       2.18
+weighted + disabled_index        2      55.92     17.114     20.889     1.0000     3576.5      28610.1       0.88
+```
+
+### Reproducible benchmark/eval suite (S12)
+
+Run one command to capture:
+
+- benchmark matrix runs for each profile (`quick|10k|100k|1m|10m`)
+- throughput sweep by concurrency level
+- eval metrics (`recall`, `mrr`, `ndcg`) for selected index modes
+- metadata (`embedding_model`, `dataset_id`, `hardware_class`, OS/arch/CPU threads)
+
+```bash
+cargo run --bin sqlrite-bench-suite -- \
+  --profiles quick,10k \
+  --concurrency-profile 10k \
+  --concurrency-levels 1,2,4 \
+  --dataset examples/eval_dataset.json \
+  --dataset-id examples/eval_dataset.json \
+  --embedding-model deterministic-local-v1 \
+  --hardware-class local-dev \
+  --durability balanced \
+  --output project_plan/reports/s12_bench_suite.json
+```
+
+Sample output:
+
+```text
+SQLRite benchmark suite: version=s12-v1, host=macos aarch64, cpu_threads=10
+metadata: dataset_id=examples/eval_dataset.json, embedding_model=deterministic-local-v1, hardware_class=local-dev
+profile=10k
+  weighted + brute_force       qps=   76.50 p95_ms=  16.511 top1=1.0000 conc=1
+concurrency_sweep profile=10k scenario=weighted + brute_force
+  concurrency=1 qps=87.36 p95_ms=12.849
+  concurrency=2 qps=35.14 p95_ms=15.005
+  concurrency=4 qps=37.26 p95_ms=33.079
+eval mode=brute_force k=1 recall=0.8333 mrr=1.0000 ndcg=1.0000
 ```
 
 ### Assert thresholds (perf gate)

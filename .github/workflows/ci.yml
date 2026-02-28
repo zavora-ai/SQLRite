@@ -61,3 +61,62 @@ jobs:
             --max-p95-ms 45 \
             --min-top1 0.99 \
             --min-ingest-cps 3000
+
+  benchmark-smoke-os-matrix:
+    name: Benchmark smoke (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    needs: quality
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Run quick benchmark smoke
+        shell: bash
+        run: |
+          cargo run --bin sqlrite-bench -- \
+            --corpus 2000 \
+            --queries 120 \
+            --warmup 30 \
+            --concurrency 2 \
+            --embedding-dim 64 \
+            --candidate-limit 300 \
+            --batch-size 256 \
+            --index-mode brute_force \
+            --durability balanced \
+            --output bench_smoke_${{ runner.os }}.json
+      - name: Upload benchmark smoke report
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-smoke-${{ matrix.os }}
+          path: bench_smoke_${{ runner.os }}.json
+
+  target-check-matrix:
+    name: Target check (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    needs: quality
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+          - os: macos-latest
+            target: x86_64-apple-darwin
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+          - os: windows-latest
+            target: aarch64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Add target
+        run: rustup target add ${{ matrix.target }}
+      - name: Cargo check target
+        run: cargo check --target ${{ matrix.target }} --all-targets --all-features

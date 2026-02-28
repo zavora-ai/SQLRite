@@ -27,7 +27,10 @@ struct MatrixReport {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args =
         parse_args(std::env::args().skip(1).collect::<Vec<_>>()).map_err(std::io::Error::other)?;
-    let base_config = profile_to_config(&args.profile).map_err(std::io::Error::other)?;
+    let mut base_config = profile_to_config(&args.profile).map_err(std::io::Error::other)?;
+    if let Some(concurrency) = args.concurrency {
+        base_config.concurrency = concurrency;
+    }
 
     let scenarios = vec![
         MatrixScenario {
@@ -103,6 +106,7 @@ struct MatrixArgs {
     profile: String,
     durability_profile: DurabilityProfile,
     rrf_rank_constant: f32,
+    concurrency: Option<usize>,
     output_path: Option<PathBuf>,
 }
 
@@ -112,6 +116,7 @@ impl Default for MatrixArgs {
             profile: "quick".to_string(),
             durability_profile: DurabilityProfile::Balanced,
             rrf_rank_constant: 60.0,
+            concurrency: None,
             output_path: None,
         }
     }
@@ -129,6 +134,10 @@ fn parse_args(args: Vec<String>) -> Result<MatrixArgs, String> {
             "--rrf-k" => {
                 i += 1;
                 cfg.rrf_rank_constant = parse_f32(&args, i, "--rrf-k")?;
+            }
+            "--concurrency" => {
+                i += 1;
+                cfg.concurrency = Some(parse_usize(&args, i, "--concurrency")?);
             }
             "--durability" => {
                 i += 1;
@@ -169,8 +178,14 @@ fn parse_f32(args: &[String], index: usize, flag: &str) -> Result<f32, String> {
         .map_err(|_| format!("invalid number for {flag}: `{raw}`\n{}", usage()))
 }
 
+fn parse_usize(args: &[String], index: usize, flag: &str) -> Result<usize, String> {
+    let raw = parse_string(args, index, flag)?;
+    raw.parse::<usize>()
+        .map_err(|_| format!("invalid integer for {flag}: `{raw}`\n{}", usage()))
+}
+
 fn usage() -> String {
-    "usage: cargo run --bin sqlrite-bench-matrix -- [--profile quick|10k|100k|1m] [--durability balanced|durable|fast_unsafe] [--rrf-k F] [--output PATH]".to_string()
+    "usage: cargo run --bin sqlrite-bench-matrix -- [--profile quick|10k|100k|1m|10m] [--concurrency N] [--durability balanced|durable|fast_unsafe] [--rrf-k F] [--output PATH]".to_string()
 }
 
 fn profile_to_config(profile: &str) -> Result<BenchmarkConfig, String> {
@@ -179,6 +194,7 @@ fn profile_to_config(profile: &str) -> Result<BenchmarkConfig, String> {
             corpus_size: 3_000,
             query_count: 200,
             warmup_queries: 50,
+            concurrency: 1,
             embedding_dim: 64,
             top_k: 10,
             candidate_limit: 300,
@@ -190,6 +206,7 @@ fn profile_to_config(profile: &str) -> Result<BenchmarkConfig, String> {
             corpus_size: 10_000,
             query_count: 500,
             warmup_queries: 100,
+            concurrency: 1,
             embedding_dim: 128,
             top_k: 10,
             candidate_limit: 500,
@@ -201,6 +218,7 @@ fn profile_to_config(profile: &str) -> Result<BenchmarkConfig, String> {
             corpus_size: 100_000,
             query_count: 1000,
             warmup_queries: 200,
+            concurrency: 1,
             embedding_dim: 256,
             top_k: 10,
             candidate_limit: 1000,
@@ -212,6 +230,7 @@ fn profile_to_config(profile: &str) -> Result<BenchmarkConfig, String> {
             corpus_size: 1_000_000,
             query_count: 2000,
             warmup_queries: 500,
+            concurrency: 1,
             embedding_dim: 384,
             top_k: 10,
             candidate_limit: 2000,
@@ -219,9 +238,21 @@ fn profile_to_config(profile: &str) -> Result<BenchmarkConfig, String> {
             fusion_strategy: FusionStrategy::Weighted,
             batch_size: 2000,
         },
+        "10m" => BenchmarkConfig {
+            corpus_size: 10_000_000,
+            query_count: 5000,
+            warmup_queries: 1000,
+            concurrency: 1,
+            embedding_dim: 384,
+            top_k: 10,
+            candidate_limit: 4000,
+            alpha: 0.65,
+            fusion_strategy: FusionStrategy::Weighted,
+            batch_size: 4000,
+        },
         other => {
             return Err(format!(
-                "invalid profile `{other}`; expected quick, 10k, 100k, or 1m"
+                "invalid profile `{other}`; expected quick, 10k, 100k, 1m, or 10m"
             ));
         }
     };
@@ -237,13 +268,22 @@ fn runtime_with_mode(durability: DurabilityProfile, mode: VectorIndexMode) -> Ru
 fn print_matrix_summary(profile: &str, runs: &[MatrixRun]) {
     println!("SQLRite benchmark matrix profile={profile}");
     println!(
-        "{:<28} {:>10} {:>10} {:>10} {:>10} {:>10} {:>12} {:>10}",
-        "scenario", "qps", "p50(ms)", "p95(ms)", "top1", "query_ms", "ingest_cps", "work_mb"
+        "{:<28} {:>6} {:>10} {:>10} {:>10} {:>10} {:>10} {:>12} {:>10}",
+        "scenario",
+        "conc",
+        "qps",
+        "p50(ms)",
+        "p95(ms)",
+        "top1",
+        "query_ms",
+        "ingest_cps",
+        "work_mb"
     );
     for run in runs {
         println!(
-            "{:<28} {:>10.2} {:>10.3} {:>10.3} {:>10.4} {:>10.1} {:>12.1} {:>10.2}",
+            "{:<28} {:>6} {:>10.2} {:>10.3} {:>10.3} {:>10.4} {:>10.1} {:>12.1} {:>10.2}",
             run.name,
+            run.report.concurrency,
             run.report.qps,
             run.report.latency.p50_ms,
             run.report.latency.p95_ms,

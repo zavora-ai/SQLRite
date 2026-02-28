@@ -100,6 +100,19 @@ The format is based on Keep a Changelog.
   - `project_plan/reports/s11_compaction_dedupe.json`
   - `project_plan/reports/s11_benchmark.json`
   - `project_plan/reports/s11_eval.json`
+- Sprint 12 benchmark/eval and quality-gate artifacts:
+  - `project_plan/reports/S12.md`
+  - `project_plan/reports/s12_bench_suite.json`
+  - `project_plan/reports/s12_bench_suite.log`
+  - `project_plan/reports/s12_quality_gates.log`
+- Reproducible benchmark/eval suite CLI:
+  - `sqlrite-bench-suite`
+  - profile matrix support (`quick`, `10k`, `100k`, `1m`, `10m`)
+  - concurrency throughput sweep output
+  - metadata capture (`embedding_model`, `dataset_id`, `hardware_class`, host OS/arch/threads)
+- CI matrix expansion for S12 scope:
+  - benchmark smoke matrix on Linux/macOS/Windows
+  - target-check matrix on Linux/macOS/Windows x64/arm64 triples
 
 ### Changed
 
@@ -112,7 +125,10 @@ The format is based on Keep a Changelog.
   - `sqlite_mmap_size_bytes`
   - `sqlite_cache_size_kib`
 - `sqlrite-bench-matrix` now includes `weighted + hnsw_baseline` scenario.
+- `sqlrite-bench-matrix` and `sqlrite benchmark` now support benchmark `--concurrency` execution.
+- `sqlrite-bench-matrix` now supports `10m` profile selection.
 - Benchmark CLI human output now includes runtime storage/cache settings and ingestion payload/index footprint metrics.
+- Benchmark report payload now includes `concurrency` and temp benchmark DB cleanup now runs on both success and failure paths for parallel runs.
 
 ## [0.1.0] - 2026-02-28
 

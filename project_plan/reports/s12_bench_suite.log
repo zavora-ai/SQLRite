@@ -1,0 +1,21 @@
+SQLRite benchmark suite: version=s12-v1, host=macos aarch64, cpu_threads=10
+metadata: dataset_id=examples/eval_dataset.json, embedding_model=deterministic-local-v1, hardware_class=local-Darwin-arm64
+profile=quick
+  weighted + brute_force       qps=  157.30 p95_ms=   7.116 top1=1.0000 conc=1
+  rrf(k=60) + brute_force      qps=  144.98 p95_ms=   7.785 top1=0.0950 conc=1
+  weighted + lsh_ann           qps=  200.26 p95_ms=   6.364 top1=1.0000 conc=1
+  weighted + hnsw_baseline     qps=  220.52 p95_ms=   5.428 top1=1.0000 conc=1
+  weighted + disabled_index    qps=   56.84 p95_ms=  18.558 top1=1.0000 conc=1
+profile=10k
+  weighted + brute_force       qps=   76.50 p95_ms=  16.511 top1=1.0000 conc=1
+  rrf(k=60) + brute_force      qps=   71.88 p95_ms=  18.744 top1=0.0560 conc=1
+  weighted + lsh_ann           qps=   86.39 p95_ms=  14.288 top1=0.9980 conc=1
+  weighted + hnsw_baseline     qps=   70.56 p95_ms=  27.125 top1=1.0000 conc=1
+  weighted + disabled_index    qps=   11.30 p95_ms= 101.784 top1=1.0000 conc=1
+concurrency_sweep profile=10k scenario=weighted + brute_force
+  concurrency=1 qps=87.36 p95_ms=12.849
+  concurrency=2 qps=35.14 p95_ms=15.005
+  concurrency=4 qps=37.26 p95_ms=33.079
+eval mode=brute_force k=1 recall=0.8333 mrr=1.0000 ndcg=1.0000
+eval mode=lsh_ann k=1 recall=0.8333 mrr=1.0000 ndcg=1.0000
+eval mode=hnsw_baseline k=1 recall=0.8333 mrr=1.0000 ndcg=1.0000

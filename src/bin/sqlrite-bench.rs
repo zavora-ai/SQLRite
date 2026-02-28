@@ -26,6 +26,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         corpus_size: args.corpus_size,
         query_count: args.query_count,
         warmup_queries: args.warmup_queries,
+        concurrency: args.concurrency,
         embedding_dim: args.embedding_dim,
         top_k: args.top_k,
         candidate_limit: args.candidate_limit,
@@ -55,6 +56,7 @@ struct BenchCliArgs {
     corpus_size: usize,
     query_count: usize,
     warmup_queries: usize,
+    concurrency: usize,
     embedding_dim: usize,
     top_k: usize,
     candidate_limit: usize,
@@ -73,6 +75,7 @@ impl Default for BenchCliArgs {
             corpus_size: 10_000,
             query_count: 500,
             warmup_queries: 100,
+            concurrency: 1,
             embedding_dim: 128,
             top_k: 10,
             candidate_limit: 500,
@@ -103,6 +106,10 @@ fn parse_args(args: Vec<String>) -> Result<BenchCliArgs, String> {
             "--warmup" => {
                 i += 1;
                 cfg.warmup_queries = parse_usize(&args, i, "--warmup")?;
+            }
+            "--concurrency" => {
+                i += 1;
+                cfg.concurrency = parse_usize(&args, i, "--concurrency")?;
             }
             "--embedding-dim" => {
                 i += 1;
@@ -193,13 +200,17 @@ fn parse_f32(args: &[String], index: usize, flag: &str) -> Result<f32, String> {
 }
 
 fn usage() -> String {
-    "usage: cargo run --bin sqlrite-bench -- [--corpus N] [--queries N] [--warmup N] [--embedding-dim N] [--top-k N] [--candidate-limit N] [--batch-size N] [--alpha F] [--fusion weighted|rrf] [--rrf-k F] [--index-mode brute_force|lsh_ann|hnsw_baseline|disabled] [--durability balanced|durable|fast_unsafe] [--output PATH]".to_string()
+    "usage: cargo run --bin sqlrite-bench -- [--corpus N] [--queries N] [--warmup N] [--concurrency N] [--embedding-dim N] [--top-k N] [--candidate-limit N] [--batch-size N] [--alpha F] [--fusion weighted|rrf] [--rrf-k F] [--index-mode brute_force|lsh_ann|hnsw_baseline|disabled] [--durability balanced|durable|fast_unsafe] [--output PATH]".to_string()
 }
 
 fn print_summary(report: &sqlrite::BenchmarkReport) {
     println!(
-        "SQLRite benchmark: corpus={}, queries={}, index={}, fusion={}",
-        report.corpus_size, report.query_count, report.vector_index_mode, report.fusion_strategy
+        "SQLRite benchmark: corpus={}, queries={}, concurrency={}, index={}, fusion={}",
+        report.corpus_size,
+        report.query_count,
+        report.concurrency,
+        report.vector_index_mode,
+        report.fusion_strategy
     );
     println!(
         "ingest_ms={:.2}, query_ms={:.2}, qps={:.2}, top1_hit_rate={:.4}",

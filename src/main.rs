@@ -1313,8 +1313,12 @@ fn cmd_benchmark(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     let report = run_benchmark(args.config, runtime)?;
 
     println!(
-        "SQLRite benchmark: corpus={}, queries={}, index={}, fusion={}",
-        report.corpus_size, report.query_count, report.vector_index_mode, report.fusion_strategy
+        "SQLRite benchmark: corpus={}, queries={}, concurrency={}, index={}, fusion={}",
+        report.corpus_size,
+        report.query_count,
+        report.concurrency,
+        report.vector_index_mode,
+        report.fusion_strategy
     );
     println!(
         "runtime: storage={}, mmap_size_bytes={}, cache_size_kib={}",
@@ -1364,6 +1368,10 @@ fn parse_benchmark_args(args: &[String]) -> Result<BenchmarkArgs, String> {
                 i += 1;
                 config.warmup_queries = parse_usize(args, i, "--warmup")?;
             }
+            "--concurrency" => {
+                i += 1;
+                config.concurrency = parse_usize(args, i, "--concurrency")?;
+            }
             "--embedding-dim" => {
                 i += 1;
                 config.embedding_dim = parse_usize(args, i, "--embedding-dim")?;
@@ -1409,11 +1417,11 @@ fn parse_benchmark_args(args: &[String]) -> Result<BenchmarkArgs, String> {
                 output_path = Some(PathBuf::from(parse_string(args, i, "--output")?));
             }
             "--help" | "-h" => {
-                return Err("usage: sqlrite benchmark [--corpus N] [--queries N] [--warmup N] [--embedding-dim N] [--top-k N] [--candidate-limit N] [--batch-size N] [--alpha F] [--fusion weighted|rrf] [--rrf-k F] [--profile balanced|durable|fast_unsafe] [--durability balanced|durable|fast_unsafe] [--index-mode brute_force|lsh_ann|hnsw_baseline|disabled] [--output PATH]".to_string())
+                return Err("usage: sqlrite benchmark [--corpus N] [--queries N] [--warmup N] [--concurrency N] [--embedding-dim N] [--top-k N] [--candidate-limit N] [--batch-size N] [--alpha F] [--fusion weighted|rrf] [--rrf-k F] [--profile balanced|durable|fast_unsafe] [--durability balanced|durable|fast_unsafe] [--index-mode brute_force|lsh_ann|hnsw_baseline|disabled] [--output PATH]".to_string())
             }
             other => {
                 return Err(format!(
-                    "unknown argument `{other}`\nusage: sqlrite benchmark [--corpus N] [--queries N] [--warmup N] [--embedding-dim N] [--top-k N] [--candidate-limit N] [--batch-size N] [--alpha F] [--fusion weighted|rrf] [--rrf-k F] [--profile balanced|durable|fast_unsafe] [--durability balanced|durable|fast_unsafe] [--index-mode brute_force|lsh_ann|hnsw_baseline|disabled] [--output PATH]"
+                    "unknown argument `{other}`\nusage: sqlrite benchmark [--corpus N] [--queries N] [--warmup N] [--concurrency N] [--embedding-dim N] [--top-k N] [--candidate-limit N] [--batch-size N] [--alpha F] [--fusion weighted|rrf] [--rrf-k F] [--profile balanced|durable|fast_unsafe] [--durability balanced|durable|fast_unsafe] [--index-mode brute_force|lsh_ann|hnsw_baseline|disabled] [--output PATH]"
                 ))
             }
         }
@@ -3767,6 +3775,30 @@ mod tests {
         assert!(!parsed.analyze);
         assert!(!parsed.vacuum);
         assert!(parsed.json_output);
+        Ok(())
+    }
+
+    #[test]
+    fn benchmark_args_default_concurrency_is_one() -> Result<(), Box<dyn std::error::Error>> {
+        let parsed = parse_benchmark_args(&[]).map_err(std::io::Error::other)?;
+        assert_eq!(parsed.config.concurrency, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn benchmark_args_parse_concurrency() -> Result<(), Box<dyn std::error::Error>> {
+        let args = vec![
+            "--corpus".to_string(),
+            "3000".to_string(),
+            "--queries".to_string(),
+            "200".to_string(),
+            "--concurrency".to_string(),
+            "4".to_string(),
+        ];
+        let parsed = parse_benchmark_args(&args).map_err(std::io::Error::other)?;
+        assert_eq!(parsed.config.concurrency, 4);
+        assert_eq!(parsed.config.corpus_size, 3000);
+        assert_eq!(parsed.config.query_count, 200);
         Ok(())
     }
 
