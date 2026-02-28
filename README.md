@@ -334,6 +334,56 @@ results=1
    best match
 ```
 
+## EXPLAIN RETRIEVAL (Sprint 7)
+
+SQLRite supports retrieval-aware explain output with score attribution and path breakdown:
+
+```bash
+cargo run -- sql --db sqlrite_demo.db --execute "
+EXPLAIN RETRIEVAL
+SELECT id,
+       1.0 - cosine_distance(embedding, vector('0.95,0.05,0.0')) AS vector_score,
+       bm25_score('local agent memory', content) AS text_score,
+       hybrid_score(
+           1.0 - cosine_distance(embedding, vector('0.95,0.05,0.0')),
+           bm25_score('local agent memory', content),
+           0.65
+       ) AS hybrid
+FROM chunks
+ORDER BY hybrid DESC, id ASC
+LIMIT 5;"
+```
+
+Sample fields in output:
+
+- `execution_path.vector`: `ann_index` or `brute_force_fallback`
+- `execution_path.text`: text execution mode
+- `score_attribution`: vector/text/fusion and `hybrid_alpha`
+- `determinism`: order-by tie-break diagnostics
+- `sqlite_query_plan`: raw `EXPLAIN QUERY PLAN` rows
+
+## SQL Cookbook and Conformance (Sprint 7)
+
+SQL-only cookbook:
+
+- `docs/sql_cookbook.md`
+
+Migration guides:
+
+- `docs/migrations/sqlite_to_sqlrite.md`
+- `docs/migrations/pgvector_to_sqlrite.md`
+
+Run SQL-only conformance for cookbook patterns:
+
+```bash
+bash scripts/run-sql-cookbook-conformance.sh
+```
+
+Artifacts:
+
+- `project_plan/reports/s07_sql_conformance.log`
+- `project_plan/reports/s07_sql_conformance.json`
+
 ## Query Cookbook (Real Use Cases)
 
 All commands below assume `sqlrite_demo.db` from `cargo run`.

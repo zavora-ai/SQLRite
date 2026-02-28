@@ -42,6 +42,21 @@ The format is based on Keep a Changelog.
   - `project_plan/reports/s06_sql_smoke.log`
   - `project_plan/reports/s06_benchmark.json`
   - `project_plan/reports/s06_eval.json`
+- Retrieval explainability support in SQL mode:
+  - `EXPLAIN RETRIEVAL <query>` with execution-path, score attribution, determinism hints, and `EXPLAIN QUERY PLAN` rows
+- SQL cookbook and migration documentation:
+  - `docs/sql_cookbook.md`
+  - `docs/migrations/sqlite_to_sqlrite.md`
+  - `docs/migrations/pgvector_to_sqlrite.md`
+- SQL-only conformance runner:
+  - `scripts/run-sql-cookbook-conformance.sh`
+- Sprint 7 evidence artifacts:
+  - `project_plan/reports/S07.md`
+  - `project_plan/reports/s07_sql_conformance.json`
+  - `project_plan/reports/s07_bench_matrix.json`
+  - `project_plan/reports/s07_eval.json`
+  - `project_plan/reports/s07_release_gate.md`
+  - `project_plan/reports/s07_competitor_review.md`
 
 ### Changed
 
@@ -49,6 +64,7 @@ The format is based on Keep a Changelog.
 - CLI help and README now document SQL-native retrieval usage and quickstart gates.
 - `sqlrite sql` now bootstraps database migrations before executing statements, ensuring catalog tables/views exist in non-init SQL sessions.
 - Search planner behavior now guarantees vector brute-force fallback semantics when ANN/index paths are unavailable, with deterministic tie-break ordering.
+- SQL REPL example catalog now includes additional SQL-only retrieval cookbook patterns (`filter`, `doc_scope`, `rerank_ready`, `explain`).
 
 ## [0.1.0] - 2026-02-28
 

@@ -1,0 +1,221 @@
+$ cargo run -- init --db s07_cookbook.db --seed-demo --profile balanced --index-mode brute_force
+initialized SQLRite database
+- path=s07_cookbook.db
+- schema_version=3
+- chunk_count=3
+- profile=balanced
+- index_mode=brute_force
+
+pattern=vector_ddl
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.01s
+     Running `target/debug/sqlrite sql --db s07_cookbook.db --execute 'CREATE VECTOR INDEX IF NOT EXISTS idx_chunks_embedding_hnsw ON chunks(embedding) USING HNSW WITH (m=16, ef_construction=64);'`
+created vector retrieval index `idx_chunks_embedding_hnsw` on chunks(embedding) using HNSW
+status=passed
+
+pattern=text_ddl
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.01s
+     Running `target/debug/sqlrite sql --db s07_cookbook.db --execute 'CREATE TEXT INDEX IF NOT EXISTS idx_chunks_content_fts ON chunks(content) USING FTS5 WITH (tokenizer=unicode61);'`
+created text retrieval index `idx_chunks_content_fts` on chunks(content) using FTS5
+status=passed
+
+pattern=semantic_vector
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.02s
+     Running `target/debug/sqlrite sql --db s07_cookbook.db --execute 'SELECT id, embedding <-> vector('\''0.95,0.05,0.0'\'') AS l2 FROM chunks ORDER BY l2 ASC, id ASC LIMIT 5;'`
+[
+  {
+    "id": "demo-1",
+    "l2": 0.04242638498544693
+  },
+  {
+    "id": "demo-2",
+    "l2": 0.4242640733718872
+  },
+  {
+    "id": "demo-3",
+    "l2": 0.9192387461662292
+  }
+]
+status=passed
+
+pattern=lexical
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.01s
+     Running `target/debug/sqlrite sql --db s07_cookbook.db --execute 'SELECT c.id, c.doc_id, bm25(chunks_fts) AS rank FROM chunks_fts JOIN chunks AS c ON c.id = chunks_fts.chunk_id WHERE chunks_fts MATCH '\''local OR agent'\'' ORDER BY rank ASC, c.id ASC LIMIT 5;'`
+[
+  {
+    "doc_id": "doc-a",
+    "id": "demo-1",
+    "rank": -0.48057936972721493
+  }
+]
+status=passed
+
+pattern=hybrid
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.01s
+     Running `target/debug/sqlrite sql --db s07_cookbook.db --execute 'SELECT id, 1.0 - cosine_distance(embedding, vector('\''0.95,0.05,0.0'\'')) AS vector_score, bm25_score('\''local agent memory'\'', content) AS text_score, hybrid_score(1.0 - cosine_distance(embedding, vector('\''0.95,0.05,0.0'\'')), bm25_score('\''local agent memory'\'', content), 0.65) AS hybrid FROM chunks ORDER BY hybrid DESC, id ASC LIMIT 5;'`
+[
+  {
+    "hybrid": 1.3808426976203918,
+    "id": "demo-1",
+    "text_score": 2.089205026626587,
+    "vector_score": 0.9994168281555176
+  },
+  {
+    "hybrid": 0.5877119183540345,
+    "id": "demo-2",
+    "text_score": 0.0,
+    "vector_score": 0.9041721820831299
+  },
+  {
+    "hybrid": 0.28709460496902467,
+    "id": "demo-3",
+    "text_score": 0.0,
+    "vector_score": 0.4416840076446533
+  }
+]
+status=passed
+
+pattern=tenant_filter
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.01s
+     Running `target/debug/sqlrite sql --db s07_cookbook.db --execute 'SELECT id, doc_id, content FROM chunks WHERE json_extract(metadata, '\''$.tenant'\'') = '\''demo'\'' ORDER BY id ASC LIMIT 10;'`
+[
+  {
+    "content": "Rust and SQLite are ideal for local-first AI agents.",
+    "doc_id": "doc-a",
+    "id": "demo-1"
+  },
+  {
+    "content": "Hybrid retrieval mixes vector search with keyword signals.",
+    "doc_id": "doc-b",
+    "id": "demo-2"
+  },
+  {
+    "content": "Batching and metadata filters keep RAG pipelines deterministic.",
+    "doc_id": "doc-c",
+    "id": "demo-3"
+  }
+]
+status=passed
+
+pattern=topic_filter
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.01s
+     Running `target/debug/sqlrite sql --db s07_cookbook.db --execute 'SELECT id, doc_id, content FROM chunks WHERE json_extract(metadata, '\''$.topic'\'') = '\''retrieval'\'' ORDER BY id ASC LIMIT 10;'`
+[
+  {
+    "content": "Hybrid retrieval mixes vector search with keyword signals.",
+    "doc_id": "doc-b",
+    "id": "demo-2"
+  }
+]
+status=passed
+
+pattern=doc_scope
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.01s
+     Running `target/debug/sqlrite sql --db s07_cookbook.db --execute 'SELECT id, doc_id, content FROM chunks WHERE doc_id = '\''doc-a'\'' ORDER BY id ASC LIMIT 10;'`
+[
+  {
+    "content": "Rust and SQLite are ideal for local-first AI agents.",
+    "doc_id": "doc-a",
+    "id": "demo-1"
+  }
+]
+status=passed
+
+pattern=rerank_ready
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.01s
+     Running `target/debug/sqlrite sql --db s07_cookbook.db --execute 'SELECT id, content, 1.0 - cosine_distance(embedding, vector('\''0.95,0.05,0.0'\'')) AS vector_score, bm25_score('\''local agent memory'\'', content) AS text_score FROM chunks ORDER BY vector_score DESC, text_score DESC, id ASC LIMIT 20;'`
+[
+  {
+    "content": "Rust and SQLite are ideal for local-first AI agents.",
+    "id": "demo-1",
+    "text_score": 2.089205026626587,
+    "vector_score": 0.9994168281555176
+  },
+  {
+    "content": "Hybrid retrieval mixes vector search with keyword signals.",
+    "id": "demo-2",
+    "text_score": 0.0,
+    "vector_score": 0.9041721820831299
+  },
+  {
+    "content": "Batching and metadata filters keep RAG pipelines deterministic.",
+    "id": "demo-3",
+    "text_score": 0.0,
+    "vector_score": 0.4416840076446533
+  }
+]
+status=passed
+
+pattern=explain_retrieval
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.01s
+     Running `target/debug/sqlrite sql --db s07_cookbook.db --execute 'EXPLAIN RETRIEVAL SELECT id, 1.0 - cosine_distance(embedding, vector('\''0.95,0.05,0.0'\'')) AS vector_score, bm25_score('\''local agent memory'\'', content) AS text_score, hybrid_score(1.0 - cosine_distance(embedding, vector('\''0.95,0.05,0.0'\'')), bm25_score('\''local agent memory'\'', content), 0.65) AS hybrid FROM chunks ORDER BY hybrid DESC, id ASC LIMIT 5;'`
+{
+  "determinism": {
+    "has_explicit_tie_break": true,
+    "has_order_by": true,
+    "order_by_clause": "hybrid DESC, id ASC"
+  },
+  "execution_path": {
+    "index_catalog": {
+      "active_text_indexes": 1,
+      "active_vector_indexes": 1
+    },
+    "text": "fts_index_or_bm25",
+    "vector": "ann_index"
+  },
+  "kind": "retrieval_explain",
+  "notes": [],
+  "query": {
+    "original": "SELECT id, 1.0 - cosine_distance(embedding, vector('0.95,0.05,0.0')) AS vector_score, bm25_score('local agent memory', content) AS text_score, hybrid_score(1.0 - cosine_distance(embedding, vector('0.95,0.05,0.0')), bm25_score('local agent memory', content), 0.65) AS hybrid FROM chunks ORDER BY hybrid DESC, id ASC LIMIT 5",
+    "rewritten": "SELECT id, 1.0 - cosine_distance(embedding, vector('0.95,0.05,0.0')) AS vector_score, bm25_score('local agent memory', content) AS text_score, hybrid_score(1.0 - cosine_distance(embedding, vector('0.95,0.05,0.0')), bm25_score('local agent memory', content), 0.65) AS hybrid FROM chunks ORDER BY hybrid DESC, id ASC LIMIT 5"
+  },
+  "score_attribution": {
+    "fusion_mode": "hybrid_score",
+    "hybrid_alpha": 0.65,
+    "text_component": "enabled",
+    "vector_component": "enabled"
+  },
+  "signals": {
+    "uses_hybrid": true,
+    "uses_text": true,
+    "uses_vector": true
+  },
+  "sqlite_query_plan": [
+    {
+      "detail": "SCAN chunks",
+      "id": 4,
+      "parent": 0
+    },
+    {
+      "detail": "USE TEMP B-TREE FOR ORDER BY",
+      "id": 32,
+      "parent": 0
+    }
+  ]
+}
+status=passed
+
+pattern=index_catalog
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.01s
+     Running `target/debug/sqlrite sql --db s07_cookbook.db --execute 'SELECT name, index_kind, table_name, column_name, using_engine, status FROM retrieval_index_catalog ORDER BY name;'`
+[
+  {
+    "column_name": "content",
+    "index_kind": "text",
+    "name": "idx_chunks_content_fts",
+    "status": "active",
+    "table_name": "chunks",
+    "using_engine": "fts5"
+  },
+  {
+    "column_name": "embedding",
+    "index_kind": "vector",
+    "name": "idx_chunks_embedding_hnsw",
+    "status": "active",
+    "table_name": "chunks",
+    "using_engine": "hnsw"
+  }
+]
+status=passed
+
+summary_path=project_plan/reports/s07_sql_conformance.json
+total_patterns=11 passed=11 failed=0 pass_rate=1.000000

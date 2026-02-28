@@ -1,0 +1,23 @@
+{
+  "db_path": "s07_cookbook.db",
+  "total_patterns": 11,
+  "passed_patterns": 11,
+  "failed_patterns": 0,
+  "pass_rate": 1.000000,
+  "passed": [
+    "vector_ddl",
+    "text_ddl",
+    "semantic_vector",
+    "lexical",
+    "hybrid",
+    "tenant_filter",
+    "topic_filter",
+    "doc_scope",
+    "rerank_ready",
+    "explain_retrieval",
+    "index_catalog"
+  ],
+  "failed": [
+
+  ]
+}

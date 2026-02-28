@@ -2849,10 +2849,318 @@ fn sqlite_quote_identifier(raw: &str) -> Option<String> {
     }
 }
 
+fn try_execute_explain_retrieval(
+    conn: &Connection,
+    statement: &str,
+) -> Result<Option<Value>, Box<dyn std::error::Error>> {
+    let trimmed = statement.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+
+    let upper = trimmed.to_ascii_uppercase();
+    if !upper.starts_with("EXPLAIN RETRIEVAL") {
+        return Ok(None);
+    }
+
+    let query = trimmed["EXPLAIN RETRIEVAL".len()..]
+        .trim()
+        .trim_end_matches(';')
+        .trim();
+    if query.is_empty() {
+        return Err(std::io::Error::other(
+            "EXPLAIN RETRIEVAL requires a SQL query after the keyword",
+        )
+        .into());
+    }
+
+    ensure_retrieval_index_catalog(conn)?;
+    Ok(Some(build_explain_retrieval_payload(conn, query)))
+}
+
+fn build_explain_retrieval_payload(conn: &Connection, query: &str) -> Value {
+    let rewritten = rewrite_sql_vector_operators(query);
+    let lowered = rewritten.to_ascii_lowercase();
+
+    let uses_vector = query.contains("<->")
+        || query.contains("<=>")
+        || query.contains("<#>")
+        || lowered.contains("l2_distance(")
+        || lowered.contains("cosine_distance(")
+        || lowered.contains("neg_inner_product(")
+        || lowered.contains(" vector(");
+    let uses_text = lowered.contains("bm25_score(")
+        || lowered.contains("chunks_fts")
+        || lowered.contains(" match ");
+    let uses_hybrid = lowered.contains("hybrid_score(") || (uses_vector && uses_text);
+
+    let vector_index_count = query_retrieval_index_count(conn, "vector");
+    let text_index_count = query_retrieval_index_count(conn, "text");
+
+    let vector_path = if uses_vector {
+        if vector_index_count > 0 {
+            "ann_index"
+        } else {
+            "brute_force_fallback"
+        }
+    } else {
+        "not_used"
+    };
+
+    let text_path = if uses_text {
+        if lowered.contains("chunks_fts") || text_index_count > 0 {
+            "fts_index_or_bm25"
+        } else {
+            "lexical_fallback"
+        }
+    } else {
+        "not_used"
+    };
+
+    let order_by_clause = extract_order_by_clause(&rewritten);
+    let has_order_by = order_by_clause.is_some();
+    let has_explicit_tie_break = order_by_clause
+        .as_ref()
+        .is_some_and(|clause| has_deterministic_tie_break(clause));
+
+    let fusion_mode = if lowered.contains("hybrid_score(") {
+        "hybrid_score"
+    } else if uses_vector && uses_text {
+        "implicit_weighted"
+    } else if uses_vector {
+        "vector_only"
+    } else if uses_text {
+        "text_only"
+    } else {
+        "none"
+    };
+
+    let hybrid_alpha = parse_function_numeric_arg(&rewritten, "hybrid_score", 2);
+
+    let sqlite_query_plan = match capture_sqlite_query_plan(conn, &rewritten) {
+        Ok(rows) => Value::Array(rows),
+        Err(error) => json!({
+            "error": error.to_string()
+        }),
+    };
+
+    let mut notes = Vec::new();
+    if uses_vector && vector_path == "brute_force_fallback" {
+        notes.push(
+            "Vector ANN path unavailable; planner will use brute-force fallback scoring."
+                .to_string(),
+        );
+    }
+    if !has_order_by {
+        notes.push(
+            "No ORDER BY clause detected; repeated runs may not be deterministic.".to_string(),
+        );
+    } else if !has_explicit_tie_break {
+        notes.push(
+            "ORDER BY does not include an explicit id/chunk_id tie-break column.".to_string(),
+        );
+    }
+
+    json!({
+        "kind": "retrieval_explain",
+        "query": {
+            "original": query,
+            "rewritten": rewritten,
+        },
+        "signals": {
+            "uses_vector": uses_vector,
+            "uses_text": uses_text,
+            "uses_hybrid": uses_hybrid,
+        },
+        "execution_path": {
+            "vector": vector_path,
+            "text": text_path,
+            "index_catalog": {
+                "active_vector_indexes": vector_index_count,
+                "active_text_indexes": text_index_count,
+            }
+        },
+        "score_attribution": {
+            "vector_component": if uses_vector { "enabled" } else { "none" },
+            "text_component": if uses_text { "enabled" } else { "none" },
+            "fusion_mode": fusion_mode,
+            "hybrid_alpha": hybrid_alpha,
+        },
+        "determinism": {
+            "has_order_by": has_order_by,
+            "has_explicit_tie_break": has_explicit_tie_break,
+            "order_by_clause": order_by_clause,
+        },
+        "sqlite_query_plan": sqlite_query_plan,
+        "notes": notes,
+    })
+}
+
+fn query_retrieval_index_count(conn: &Connection, index_kind: &str) -> i64 {
+    conn.query_row(
+        "SELECT COUNT(*) FROM retrieval_indexes WHERE index_kind = ?1 AND status = 'active'",
+        [index_kind],
+        |row| row.get::<_, i64>(0),
+    )
+    .unwrap_or(0)
+}
+
+fn extract_order_by_clause(statement: &str) -> Option<String> {
+    let lowered = statement.to_ascii_lowercase();
+    let order_start = lowered.find(" order by ")?;
+    let tail = &statement[(order_start + " order by ".len())..];
+    let tail_lower = &lowered[(order_start + " order by ".len())..];
+
+    let mut end = tail.len();
+    for marker in [" limit ", " offset ", " fetch ", ";"] {
+        if let Some(idx) = tail_lower.find(marker) {
+            end = end.min(idx);
+        }
+    }
+
+    let clause = tail[..end].trim();
+    if clause.is_empty() {
+        None
+    } else {
+        Some(clause.to_string())
+    }
+}
+
+fn has_deterministic_tie_break(order_by_clause: &str) -> bool {
+    let normalized = order_by_clause.to_ascii_lowercase();
+    normalized
+        .split(|ch: char| !ch.is_ascii_alphanumeric() && ch != '_')
+        .any(|token| matches!(token, "id" | "chunk_id" | "rowid"))
+}
+
+fn parse_function_numeric_arg(
+    statement: &str,
+    function_name: &str,
+    arg_index: usize,
+) -> Option<f64> {
+    let args = parse_function_arguments(statement, function_name)?;
+    args.get(arg_index)?.trim().parse::<f64>().ok()
+}
+
+fn parse_function_arguments(statement: &str, function_name: &str) -> Option<Vec<String>> {
+    let lowered = statement.to_ascii_lowercase();
+    let needle = format!("{}(", function_name.to_ascii_lowercase());
+    let found = lowered.find(&needle)?;
+    let open_idx = found + function_name.len();
+    let bytes = statement.as_bytes();
+
+    let mut depth = 1usize;
+    let mut idx = open_idx + 1;
+    let mut quote: Option<u8> = None;
+    while idx < bytes.len() {
+        let byte = bytes[idx];
+        if let Some(active_quote) = quote {
+            if byte == active_quote {
+                if idx + 1 < bytes.len() && bytes[idx + 1] == active_quote {
+                    idx += 2;
+                    continue;
+                }
+                quote = None;
+            }
+            idx += 1;
+            continue;
+        }
+
+        if byte == b'\'' || byte == b'"' {
+            quote = Some(byte);
+            idx += 1;
+            continue;
+        }
+        if byte == b'(' {
+            depth += 1;
+            idx += 1;
+            continue;
+        }
+        if byte == b')' {
+            depth = depth.saturating_sub(1);
+            if depth == 0 {
+                let raw = &statement[(open_idx + 1)..idx];
+                return Some(split_top_level_sql_args(raw));
+            }
+            idx += 1;
+            continue;
+        }
+        idx += 1;
+    }
+
+    None
+}
+
+fn split_top_level_sql_args(raw: &str) -> Vec<String> {
+    let mut args = Vec::new();
+    let mut current = String::new();
+    let mut depth = 0usize;
+    let mut quote: Option<char> = None;
+
+    for ch in raw.chars() {
+        if let Some(active_quote) = quote {
+            current.push(ch);
+            if ch == active_quote {
+                quote = None;
+            }
+            continue;
+        }
+
+        match ch {
+            '\'' | '"' => {
+                current.push(ch);
+                quote = Some(ch);
+            }
+            '(' => {
+                depth += 1;
+                current.push(ch);
+            }
+            ')' => {
+                depth = depth.saturating_sub(1);
+                current.push(ch);
+            }
+            ',' if depth == 0 => {
+                args.push(current.trim().to_string());
+                current.clear();
+            }
+            _ => current.push(ch),
+        }
+    }
+
+    if !current.trim().is_empty() {
+        args.push(current.trim().to_string());
+    }
+
+    args
+}
+
+fn capture_sqlite_query_plan(conn: &Connection, query: &str) -> Result<Vec<Value>, SqlError> {
+    let explain_sql = format!("EXPLAIN QUERY PLAN {}", query.trim_end_matches(';'));
+    let mut stmt = conn.prepare(&explain_sql)?;
+    let mut rows = stmt.query([])?;
+    let mut out = Vec::new();
+    while let Some(row) = rows.next()? {
+        let id: i64 = row.get(0)?;
+        let parent: i64 = row.get(1)?;
+        let detail: String = row.get(3)?;
+        out.push(json!({
+            "id": id,
+            "parent": parent,
+            "detail": detail,
+        }));
+    }
+    Ok(out)
+}
+
 fn execute_sql_statement(
     conn: &Connection,
     statement: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    if let Some(explain) = try_execute_explain_retrieval(conn, statement)? {
+        println!("{}", serde_json::to_string_pretty(&explain)?);
+        return Ok(());
+    }
+
     if let Some(message) = try_execute_retrieval_index_ddl(conn, statement)? {
         println!("{message}");
         return Ok(());
@@ -2986,6 +3294,10 @@ fn sql_repl_example_catalog() -> &'static str {
   lexical   FTS/BM25 lexical retrieval
   vector    SQL-native vector operator retrieval
   hybrid    embed + bm25_score + hybrid_score ranking
+  filter    metadata-filtered retrieval
+  doc_scope doc-scoped retrieval
+  rerank_ready produce vector/text signals for external rerankers
+  explain   EXPLAIN RETRIEVAL output for hybrid query
   vector_ddl create VECTOR INDEX metadata entry
   index_catalog inspect retrieval index catalog
   tenant    tenant-scoped filtered query
@@ -3025,6 +3337,43 @@ LIMIT 5;",
        hybrid_score(
            1.0 - cosine_distance(embedding, embed('local-first agent memory')),
            bm25_score('local-first agent memory', content),
+           0.65
+       ) AS hybrid
+FROM chunks
+ORDER BY hybrid DESC, id ASC
+LIMIT 5;",
+        ),
+        "filter" => Some(
+            "SELECT id, doc_id, content
+FROM chunks
+WHERE json_extract(metadata, '$.topic') = 'retrieval'
+ORDER BY id ASC
+LIMIT 10;",
+        ),
+        "doc_scope" => Some(
+            "SELECT id, doc_id, content
+FROM chunks
+WHERE doc_id = 'doc-a'
+ORDER BY id ASC
+LIMIT 10;",
+        ),
+        "rerank_ready" => Some(
+            "SELECT id,
+       content,
+       1.0 - cosine_distance(embedding, vector('0.95,0.05,0.0')) AS vector_score,
+       bm25_score('local agent memory', content) AS text_score
+FROM chunks
+ORDER BY vector_score DESC, text_score DESC, id ASC
+LIMIT 20;",
+        ),
+        "explain" => Some(
+            "EXPLAIN RETRIEVAL
+SELECT id,
+       1.0 - cosine_distance(embedding, vector('0.95,0.05,0.0')) AS vector_score,
+       bm25_score('local agent memory', content) AS text_score,
+       hybrid_score(
+           1.0 - cosine_distance(embedding, vector('0.95,0.05,0.0')),
+           bm25_score('local agent memory', content),
            0.65
        ) AS hybrid
 FROM chunks
@@ -3244,6 +3593,96 @@ mod tests {
             |row| row.get(0),
         )?;
         assert_eq!(count_after_drop, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn explain_retrieval_reports_bruteforce_path_and_score_attribution()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let conn = Connection::open_in_memory()?;
+        register_retrieval_sql_functions(&conn)?;
+        conn.execute_batch(
+            "
+            CREATE TABLE chunks (
+                id TEXT PRIMARY KEY,
+                content TEXT NOT NULL,
+                embedding BLOB NOT NULL
+            );
+            ",
+        )?;
+
+        let explain = try_execute_explain_retrieval(
+            &conn,
+            "EXPLAIN RETRIEVAL
+             SELECT id,
+                    1.0 - cosine_distance(embedding, vector('1,0')) AS vector_score,
+                    bm25_score('agent memory', content) AS text_score,
+                    hybrid_score(
+                        1.0 - cosine_distance(embedding, vector('1,0')),
+                        bm25_score('agent memory', content),
+                        0.7
+                    ) AS hybrid
+             FROM chunks
+             ORDER BY hybrid DESC, id ASC
+             LIMIT 5;",
+        )?
+        .expect("expected EXPLAIN RETRIEVAL payload");
+
+        assert_eq!(explain["execution_path"]["vector"], "brute_force_fallback");
+        assert_eq!(explain["execution_path"]["text"], "lexical_fallback");
+        assert_eq!(explain["score_attribution"]["fusion_mode"], "hybrid_score");
+        assert_eq!(explain["score_attribution"]["hybrid_alpha"], 0.7);
+        assert_eq!(explain["determinism"]["has_explicit_tie_break"], true);
+        Ok(())
+    }
+
+    #[test]
+    fn explain_retrieval_reports_ann_path_when_vector_index_exists()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let conn = Connection::open_in_memory()?;
+        register_retrieval_sql_functions(&conn)?;
+        conn.execute_batch(
+            "
+            CREATE TABLE chunks (
+                id TEXT PRIMARY KEY,
+                content TEXT NOT NULL,
+                embedding BLOB NOT NULL
+            );
+            ",
+        )?;
+
+        execute_sql_statement(
+            &conn,
+            "CREATE VECTOR INDEX IF NOT EXISTS idx_chunks_embedding_hnsw
+             ON chunks(embedding)
+             USING HNSW;",
+        )?;
+
+        let explain = try_execute_explain_retrieval(
+            &conn,
+            "EXPLAIN RETRIEVAL
+             SELECT id,
+                    1.0 - cosine_distance(embedding, vector('1,0')) AS vector_score
+             FROM chunks
+             ORDER BY vector_score DESC, id ASC
+             LIMIT 5;",
+        )?
+        .expect("expected EXPLAIN RETRIEVAL payload");
+
+        assert_eq!(explain["execution_path"]["vector"], "ann_index");
+        assert_eq!(
+            explain["execution_path"]["index_catalog"]["active_vector_indexes"],
+            1
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn explain_retrieval_returns_none_for_non_explain_statement()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let conn = Connection::open_in_memory()?;
+        let explain = try_execute_explain_retrieval(&conn, "SELECT 1;")?;
+        assert!(explain.is_none());
         Ok(())
     }
 
