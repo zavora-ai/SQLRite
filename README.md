@@ -181,6 +181,9 @@ Shell helpers:
 - `.schema [table]`
 - `.example`
 - `.example lexical --run`
+- `.example hybrid --run`
+- `.example vector_ddl --run`
+- `.example index_catalog --run`
 - `.exit`
 
 One-shot SQL still works:
@@ -228,6 +231,83 @@ Helper SQL functions:
 - `neg_inner_product(lhs, rhs)`
 - `vec_dims(vector_expr)`
 - `vec_to_json(vector_expr)`
+
+## SQL Retrieval Functions and Index DDL (Sprint 5)
+
+Additional retrieval SQL functions:
+
+- `embed(text)` deterministic text embedding (16 dimensions)
+- `bm25_score(query, document)` lexical relevance score
+- `hybrid_score(vector_score, text_score, alpha)` weighted fusion (`alpha` between `0.0` and `1.0`)
+
+Example:
+
+```bash
+cargo run -- sql --db sqlrite_demo.db --execute "
+SELECT vec_dims(embed('agent local memory')) AS dims,
+       bm25_score('agent memory', 'agent systems keep local memory') AS bm25,
+       hybrid_score(0.8, 0.2, 0.75) AS hybrid;"
+```
+
+Sample output:
+
+```text
+[
+  {
+    "bm25": 4.4489545822143555,
+    "dims": 16,
+    "hybrid": 0.6500000000000001
+  }
+]
+```
+
+Retrieval index DDL support:
+
+- `CREATE VECTOR INDEX ... USING HNSW [WITH (...)]`
+- `CREATE TEXT INDEX ... USING FTS5 [WITH (...)]`
+- `DROP VECTOR INDEX [IF EXISTS] ...`
+- `DROP TEXT INDEX [IF EXISTS] ...`
+- Metadata catalog view: `retrieval_index_catalog`
+
+Example:
+
+```bash
+cargo run -- sql --db sqlrite_demo.db --execute \
+  "CREATE VECTOR INDEX IF NOT EXISTS idx_chunks_embedding_hnsw ON chunks(embedding) USING HNSW WITH (m=16, ef_construction=64);"
+
+cargo run -- sql --db sqlrite_demo.db --execute \
+  "CREATE TEXT INDEX IF NOT EXISTS idx_chunks_content_fts ON chunks(content) USING FTS5 WITH (tokenizer=unicode61);"
+
+cargo run -- sql --db sqlrite_demo.db --execute \
+  "SELECT name, index_kind, table_name, column_name, using_engine, options_json, status FROM retrieval_index_catalog ORDER BY name;"
+```
+
+Sample output:
+
+```text
+created vector retrieval index `idx_chunks_embedding_hnsw` on chunks(embedding) using HNSW
+created text retrieval index `idx_chunks_content_fts` on chunks(content) using FTS5
+[
+  {
+    "column_name": "content",
+    "index_kind": "text",
+    "name": "idx_chunks_content_fts",
+    "options_json": "{\"tokenizer\":\"unicode61\"}",
+    "status": "active",
+    "table_name": "chunks",
+    "using_engine": "fts5"
+  },
+  {
+    "column_name": "embedding",
+    "index_kind": "vector",
+    "name": "idx_chunks_embedding_hnsw",
+    "options_json": "{\"ef_construction\":64,\"m\":16}",
+    "status": "active",
+    "table_name": "chunks",
+    "using_engine": "hnsw"
+  }
+]
+```
 
 ## Query Cookbook (Real Use Cases)
 
@@ -471,7 +551,7 @@ sqlrite doctor
 - db_path=sqlrite_demo.db
 - integrity_ok=true
 - chunk_count=3
-- schema_version=2
+- schema_version=3
 - index_mode=brute_force
 ```
 
@@ -503,7 +583,7 @@ curl -fsS http://127.0.0.1:8099/readyz
 Response:
 
 ```json
-{"ready":true,"schema_version":2}
+{"ready":true,"schema_version":3}
 ```
 
 ## Benchmarks and Performance

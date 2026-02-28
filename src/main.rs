@@ -9,7 +9,7 @@ use sqlrite::{
     ServerConfig, SqlRite, VectorIndexMode, backup_file, build_health_report, run_benchmark,
     serve_health_endpoints, verify_backup_file,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fs;
 use std::io::{self, Write};
@@ -188,6 +188,13 @@ struct SqlArgs {
 
 fn cmd_sql(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     let parsed = parse_sql_args(args).map_err(std::io::Error::other)?;
+    // Ensure SQL CLI sessions always run against the latest schema/catalog migrations.
+    let bootstrap = RuntimeConfig {
+        durability_profile: parsed.profile,
+        ..RuntimeConfig::default()
+    };
+    let _ = SqlRite::open_with_config(&parsed.db_path, bootstrap)?;
+
     let conn = Connection::open(&parsed.db_path)?;
     apply_sql_runtime_profile(&conn, parsed.profile)?;
     register_retrieval_sql_functions(&conn)?;
@@ -1691,6 +1698,30 @@ fn register_retrieval_sql_functions(conn: &Connection) -> Result<(), SqlError> {
         Ok(neg_inner_product(&left, &right) as f64)
     })?;
 
+    conn.create_scalar_function("embed", 1, flags, |ctx| {
+        let text = text_from_value(ctx.get_raw(0))?;
+        let vector = embed_text(&text, 16);
+        Ok(encode_vector_blob(&vector))
+    })?;
+
+    conn.create_scalar_function("bm25_score", 2, flags, |ctx| {
+        let query = text_from_value(ctx.get_raw(0))?;
+        let document = text_from_value(ctx.get_raw(1))?;
+        Ok(bm25_score(&query, &document) as f64)
+    })?;
+
+    conn.create_scalar_function("hybrid_score", 3, flags, |ctx| {
+        let vector_score = ctx.get::<f64>(0)?;
+        let text_score = ctx.get::<f64>(1)?;
+        let alpha = ctx.get::<f64>(2)?;
+        if !(0.0..=1.0).contains(&alpha) {
+            return Err(user_fn_error(
+                "hybrid_score alpha must be between 0.0 and 1.0",
+            ));
+        }
+        Ok((alpha * vector_score) + ((1.0 - alpha) * text_score))
+    })?;
+
     Ok(())
 }
 
@@ -1722,6 +1753,25 @@ fn vector_from_value(value: ValueRef<'_>) -> Result<Vec<f32>, SqlError> {
             "vector argument cannot be NULL; expected BLOB or text literal",
         )),
     }
+}
+
+fn text_from_value(value: ValueRef<'_>) -> Result<String, SqlError> {
+    match value {
+        ValueRef::Text(bytes) => Ok(String::from_utf8_lossy(bytes).to_string()),
+        ValueRef::Blob(bytes) => Ok(format!("blob:{}bytes", bytes.len())),
+        ValueRef::Integer(v) => Ok(v.to_string()),
+        ValueRef::Real(v) => Ok(v.to_string()),
+        ValueRef::Null => Err(user_fn_error("text argument cannot be NULL")),
+    }
+}
+
+fn tokenize_terms(value: &str) -> Vec<String> {
+    value
+        .to_lowercase()
+        .split(|ch: char| !ch.is_ascii_alphanumeric())
+        .filter(|token| !token.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
 }
 
 fn parse_vector_literal(raw: &str) -> Result<Vec<f32>, String> {
@@ -1811,6 +1861,78 @@ fn neg_inner_product(left: &[f32], right: &[f32]) -> f32 {
         .zip(right.iter())
         .map(|(a, b)| a * b)
         .sum::<f32>()
+}
+
+fn embed_text(text: &str, dim: usize) -> Vec<f32> {
+    let mut out = vec![0.0f32; dim.max(1)];
+    let terms = tokenize_terms(text);
+    if terms.is_empty() {
+        out[0] = 1.0;
+        return out;
+    }
+
+    for (position, term) in terms.iter().enumerate() {
+        let hash = fnv1a64(term.as_bytes());
+        let slot = (hash as usize) % out.len();
+        let sign = if hash & 1 == 0 { 1.0 } else { -1.0 };
+        let weight = 1.0 / ((position + 1) as f32).sqrt();
+        out[slot] += sign * weight;
+    }
+
+    let norm = out.iter().map(|value| value * value).sum::<f32>().sqrt();
+    if norm > 0.0 {
+        for value in &mut out {
+            *value /= norm;
+        }
+    }
+
+    out
+}
+
+fn fnv1a64(bytes: &[u8]) -> u64 {
+    let mut hash = 0xcbf29ce484222325u64;
+    for byte in bytes {
+        hash ^= *byte as u64;
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
+}
+
+fn bm25_score(query: &str, document: &str) -> f32 {
+    let query_terms = tokenize_terms(query);
+    let doc_terms = tokenize_terms(document);
+    if query_terms.is_empty() || doc_terms.is_empty() {
+        return 0.0;
+    }
+
+    let mut tf: HashMap<String, usize> = HashMap::new();
+    for term in &doc_terms {
+        *tf.entry(term.clone()).or_insert(0) += 1;
+    }
+
+    let mut unique_query_terms = HashSet::new();
+    let dl = doc_terms.len() as f32;
+    let avgdl = 50.0f32;
+    let k1 = 1.2f32;
+    let b = 0.75f32;
+    let mut score = 0.0f32;
+
+    for term in query_terms {
+        if !unique_query_terms.insert(term.clone()) {
+            continue;
+        }
+
+        let tf_value = tf.get(&term).copied().unwrap_or(0) as f32;
+        if tf_value == 0.0 {
+            continue;
+        }
+
+        let idf = ((1.0 + (1.0 / (tf_value + 1.0))).ln() + 1.0).max(0.01);
+        let denominator = tf_value + k1 * (1.0 - b + b * (dl / avgdl));
+        score += idf * (tf_value * (k1 + 1.0)) / denominator;
+    }
+
+    score
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2203,10 +2325,539 @@ fn is_callable_token(token: &[u8]) -> bool {
     !token.is_empty() && token.iter().all(|byte| is_token_char(*byte))
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RetrievalIndexKind {
+    Vector,
+    Text,
+}
+
+impl RetrievalIndexKind {
+    fn parse(token: &str) -> Result<Self, String> {
+        match token.to_ascii_uppercase().as_str() {
+            "VECTOR" => Ok(Self::Vector),
+            "TEXT" => Ok(Self::Text),
+            other => Err(format!(
+                "unsupported retrieval index kind `{other}`; expected VECTOR or TEXT"
+            )),
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            RetrievalIndexKind::Vector => "vector",
+            RetrievalIndexKind::Text => "text",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct CreateRetrievalIndexDdl {
+    kind: RetrievalIndexKind,
+    if_not_exists: bool,
+    name: String,
+    table_name: String,
+    column_name: String,
+    using_engine: String,
+    options: Value,
+}
+
+#[derive(Debug, Clone)]
+struct DropRetrievalIndexDdl {
+    kind: RetrievalIndexKind,
+    if_exists: bool,
+    name: String,
+}
+
+#[derive(Debug, Clone)]
+enum RetrievalIndexDdl {
+    Create(CreateRetrievalIndexDdl),
+    Drop(DropRetrievalIndexDdl),
+}
+
+fn try_execute_retrieval_index_ddl(
+    conn: &Connection,
+    statement: &str,
+) -> Result<Option<String>, Box<dyn std::error::Error>> {
+    let ddl = match parse_retrieval_index_ddl(statement).map_err(std::io::Error::other)? {
+        Some(ddl) => ddl,
+        None => return Ok(None),
+    };
+
+    ensure_retrieval_index_catalog(conn)?;
+
+    match ddl {
+        RetrievalIndexDdl::Create(create) => {
+            validate_retrieval_index_target(conn, &create.table_name, &create.column_name)?;
+            validate_retrieval_index_engine(create.kind, &create.using_engine)?;
+
+            let existing_count: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM retrieval_indexes WHERE name = ?1",
+                [create.name.as_str()],
+                |row| row.get(0),
+            )?;
+            if existing_count > 0 {
+                if create.if_not_exists {
+                    return Ok(Some(format!(
+                        "retrieval index `{}` already exists; skipped",
+                        create.name
+                    )));
+                }
+                return Err(std::io::Error::other(format!(
+                    "retrieval index `{}` already exists",
+                    create.name
+                ))
+                .into());
+            }
+
+            let options_json = serde_json::to_string(&create.options)?;
+            conn.execute(
+                "
+                INSERT INTO retrieval_indexes
+                    (name, index_kind, table_name, column_name, using_engine, options_json, status)
+                VALUES
+                    (?1, ?2, ?3, ?4, ?5, ?6, 'active')
+                ",
+                rusqlite::params![
+                    create.name,
+                    create.kind.as_str(),
+                    create.table_name,
+                    create.column_name,
+                    create.using_engine.to_ascii_lowercase(),
+                    options_json,
+                ],
+            )?;
+            Ok(Some(format!(
+                "created {} retrieval index `{}` on {}({}) using {}",
+                create.kind.as_str(),
+                create.name,
+                create.table_name,
+                create.column_name,
+                create.using_engine.to_ascii_uppercase()
+            )))
+        }
+        RetrievalIndexDdl::Drop(drop) => {
+            let deleted = conn.execute(
+                "DELETE FROM retrieval_indexes WHERE name = ?1 AND index_kind = ?2",
+                rusqlite::params![drop.name, drop.kind.as_str()],
+            )?;
+
+            if deleted == 0 {
+                if drop.if_exists {
+                    return Ok(Some(format!(
+                        "retrieval index `{}` does not exist; skipped",
+                        drop.name
+                    )));
+                }
+                return Err(std::io::Error::other(format!(
+                    "retrieval index `{}` does not exist",
+                    drop.name
+                ))
+                .into());
+            }
+
+            Ok(Some(format!(
+                "dropped {} retrieval index `{}`",
+                drop.kind.as_str(),
+                drop.name
+            )))
+        }
+    }
+}
+
+fn ensure_retrieval_index_catalog(conn: &Connection) -> Result<(), SqlError> {
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS retrieval_indexes (
+            name TEXT PRIMARY KEY,
+            index_kind TEXT NOT NULL CHECK (index_kind IN ('vector', 'text')),
+            table_name TEXT NOT NULL,
+            column_name TEXT NOT NULL,
+            using_engine TEXT NOT NULL,
+            options_json TEXT NOT NULL DEFAULT '{}',
+            status TEXT NOT NULL DEFAULT 'active',
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_retrieval_indexes_kind_table
+            ON retrieval_indexes(index_kind, table_name, status);
+
+        CREATE VIEW IF NOT EXISTS retrieval_index_catalog AS
+        SELECT
+            name,
+            index_kind,
+            table_name,
+            column_name,
+            using_engine,
+            options_json,
+            status,
+            created_at
+        FROM retrieval_indexes;
+        ",
+    )?;
+    Ok(())
+}
+
+fn validate_retrieval_index_target(
+    conn: &Connection,
+    table_name: &str,
+    column_name: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let pragma = format!(
+        "PRAGMA table_info({});",
+        sqlite_quote_identifier(table_name).ok_or_else(|| {
+            std::io::Error::other(format!(
+                "invalid table identifier `{table_name}` for retrieval index"
+            ))
+        })?
+    );
+    let mut stmt = conn.prepare(&pragma)?;
+    let mut rows = stmt.query([])?;
+    let mut table_found = false;
+    let mut column_found = false;
+    while let Some(row) = rows.next()? {
+        table_found = true;
+        let name: String = row.get(1)?;
+        if name == column_name {
+            column_found = true;
+        }
+    }
+    if !table_found {
+        return Err(
+            std::io::Error::other(format!("target table `{table_name}` does not exist")).into(),
+        );
+    }
+    if !column_found {
+        return Err(std::io::Error::other(format!(
+            "target column `{column_name}` not found on table `{table_name}`"
+        ))
+        .into());
+    }
+    Ok(())
+}
+
+fn validate_retrieval_index_engine(
+    kind: RetrievalIndexKind,
+    engine: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let upper = engine.to_ascii_uppercase();
+    match kind {
+        RetrievalIndexKind::Vector if upper == "HNSW" => Ok(()),
+        RetrievalIndexKind::Text if upper == "FTS5" => Ok(()),
+        RetrievalIndexKind::Vector => Err(std::io::Error::other(format!(
+            "VECTOR index supports USING HNSW only; found `{engine}`"
+        ))
+        .into()),
+        RetrievalIndexKind::Text => Err(std::io::Error::other(format!(
+            "TEXT index supports USING FTS5 only; found `{engine}`"
+        ))
+        .into()),
+    }
+}
+
+fn parse_retrieval_index_ddl(statement: &str) -> Result<Option<RetrievalIndexDdl>, String> {
+    let trimmed = statement.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    let stripped = trimmed.trim_end_matches(';').trim();
+    if stripped.is_empty() {
+        return Ok(None);
+    }
+
+    let tokens = tokenize_ddl_statement(stripped);
+    if tokens.is_empty() {
+        return Ok(None);
+    }
+
+    match tokens[0].to_ascii_uppercase().as_str() {
+        "CREATE" => {
+            if tokens.len() >= 3
+                && matches!(tokens[1].to_ascii_uppercase().as_str(), "VECTOR" | "TEXT")
+                && tokens[2].eq_ignore_ascii_case("INDEX")
+            {
+                parse_create_retrieval_index_ddl(&tokens).map(Some)
+            } else {
+                Ok(None)
+            }
+        }
+        "DROP" => {
+            if tokens.len() >= 3
+                && matches!(tokens[1].to_ascii_uppercase().as_str(), "VECTOR" | "TEXT")
+                && tokens[2].eq_ignore_ascii_case("INDEX")
+            {
+                parse_drop_retrieval_index_ddl(&tokens).map(Some)
+            } else {
+                Ok(None)
+            }
+        }
+        _ => Ok(None),
+    }
+}
+
+fn parse_create_retrieval_index_ddl(tokens: &[String]) -> Result<RetrievalIndexDdl, String> {
+    let mut i = 1usize;
+    let kind = RetrievalIndexKind::parse(token_at(tokens, i, "index kind")?)?;
+    i += 1;
+    expect_keyword(tokens, i, "INDEX")?;
+    i += 1;
+
+    let mut if_not_exists = false;
+    if has_keywords(tokens, i, &["IF", "NOT", "EXISTS"]) {
+        if_not_exists = true;
+        i += 3;
+    }
+
+    let name = validate_identifier(token_at(tokens, i, "index name")?, "index name")?;
+    i += 1;
+
+    expect_keyword(tokens, i, "ON")?;
+    i += 1;
+
+    let table_name = validate_identifier(token_at(tokens, i, "table name")?, "table name")?;
+    i += 1;
+    expect_symbol(tokens, i, "(")?;
+    i += 1;
+    let column_name = validate_identifier(token_at(tokens, i, "column name")?, "column name")?;
+    i += 1;
+    expect_symbol(tokens, i, ")")?;
+    i += 1;
+
+    expect_keyword(tokens, i, "USING")?;
+    i += 1;
+    let using_engine = validate_identifier(token_at(tokens, i, "USING engine")?, "USING engine")?;
+    i += 1;
+
+    let mut options = Value::Object(Map::new());
+    if i < tokens.len() {
+        expect_keyword(tokens, i, "WITH")?;
+        i += 1;
+        let (parsed, consumed) = parse_with_options(&tokens[i..])?;
+        options = parsed;
+        i += consumed;
+    }
+
+    if i != tokens.len() {
+        return Err(format!(
+            "unexpected trailing tokens in retrieval index DDL: {}",
+            tokens[i..].join(" ")
+        ));
+    }
+
+    Ok(RetrievalIndexDdl::Create(CreateRetrievalIndexDdl {
+        kind,
+        if_not_exists,
+        name,
+        table_name,
+        column_name,
+        using_engine,
+        options,
+    }))
+}
+
+fn parse_drop_retrieval_index_ddl(tokens: &[String]) -> Result<RetrievalIndexDdl, String> {
+    let mut i = 1usize;
+    let kind = RetrievalIndexKind::parse(token_at(tokens, i, "index kind")?)?;
+    i += 1;
+    expect_keyword(tokens, i, "INDEX")?;
+    i += 1;
+
+    let mut if_exists = false;
+    if has_keywords(tokens, i, &["IF", "EXISTS"]) {
+        if_exists = true;
+        i += 2;
+    }
+
+    let name = validate_identifier(token_at(tokens, i, "index name")?, "index name")?;
+    i += 1;
+
+    if i != tokens.len() {
+        return Err(format!(
+            "unexpected trailing tokens in DROP retrieval index DDL: {}",
+            tokens[i..].join(" ")
+        ));
+    }
+
+    Ok(RetrievalIndexDdl::Drop(DropRetrievalIndexDdl {
+        kind,
+        if_exists,
+        name,
+    }))
+}
+
+fn parse_with_options(tokens: &[String]) -> Result<(Value, usize), String> {
+    let mut i = 0usize;
+    expect_symbol(tokens, i, "(")?;
+    i += 1;
+
+    let mut options = Map::new();
+    while i < tokens.len() {
+        if tokens[i] == ")" {
+            i += 1;
+            return Ok((Value::Object(options), i));
+        }
+
+        let key = validate_identifier(token_at(tokens, i, "option key")?, "option key")?;
+        i += 1;
+        expect_symbol(tokens, i, "=")?;
+        i += 1;
+        let value_token = token_at(tokens, i, "option value")?;
+        i += 1;
+        options.insert(key, parse_option_value(value_token));
+
+        if i < tokens.len() && tokens[i] == "," {
+            i += 1;
+        }
+    }
+
+    Err("unterminated WITH (...) clause in retrieval index DDL".to_string())
+}
+
+fn parse_option_value(raw: &str) -> Value {
+    if raw.eq_ignore_ascii_case("true") {
+        return Value::Bool(true);
+    }
+    if raw.eq_ignore_ascii_case("false") {
+        return Value::Bool(false);
+    }
+    if let Ok(value) = raw.parse::<i64>() {
+        return Value::Number(value.into());
+    }
+    if let Ok(value) = raw.parse::<f64>() {
+        return Value::from(value);
+    }
+
+    if (raw.starts_with('\'') && raw.ends_with('\''))
+        || (raw.starts_with('"') && raw.ends_with('"'))
+    {
+        let unquoted = raw[1..raw.len().saturating_sub(1)].to_string();
+        return Value::String(unquoted);
+    }
+
+    Value::String(raw.to_string())
+}
+
+fn tokenize_ddl_statement(statement: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut quote: Option<char> = None;
+
+    for ch in statement.chars() {
+        if let Some(active_quote) = quote {
+            current.push(ch);
+            if ch == active_quote {
+                quote = None;
+            }
+            continue;
+        }
+
+        match ch {
+            '\'' | '"' => {
+                if !current.is_empty() {
+                    tokens.push(std::mem::take(&mut current));
+                }
+                current.push(ch);
+                quote = Some(ch);
+            }
+            '(' | ')' | ',' | '=' => {
+                if !current.is_empty() {
+                    tokens.push(std::mem::take(&mut current));
+                }
+                tokens.push(ch.to_string());
+            }
+            ';' => {
+                if !current.is_empty() {
+                    tokens.push(std::mem::take(&mut current));
+                }
+            }
+            _ if ch.is_whitespace() => {
+                if !current.is_empty() {
+                    tokens.push(std::mem::take(&mut current));
+                }
+            }
+            _ => current.push(ch),
+        }
+    }
+
+    if !current.is_empty() {
+        tokens.push(current);
+    }
+
+    tokens
+}
+
+fn token_at<'a>(tokens: &'a [String], index: usize, label: &str) -> Result<&'a str, String> {
+    tokens
+        .get(index)
+        .map(String::as_str)
+        .ok_or_else(|| format!("missing {label} in retrieval index DDL"))
+}
+
+fn expect_keyword(tokens: &[String], index: usize, keyword: &str) -> Result<(), String> {
+    let token = token_at(tokens, index, keyword)?;
+    if token.eq_ignore_ascii_case(keyword) {
+        Ok(())
+    } else {
+        Err(format!(
+            "expected keyword `{keyword}` but found `{token}` in retrieval index DDL"
+        ))
+    }
+}
+
+fn expect_symbol(tokens: &[String], index: usize, symbol: &str) -> Result<(), String> {
+    let token = token_at(tokens, index, symbol)?;
+    if token == symbol {
+        Ok(())
+    } else {
+        Err(format!(
+            "expected symbol `{symbol}` but found `{token}` in retrieval index DDL"
+        ))
+    }
+}
+
+fn has_keywords(tokens: &[String], start: usize, keywords: &[&str]) -> bool {
+    keywords.iter().enumerate().all(|(offset, keyword)| {
+        tokens
+            .get(start + offset)
+            .is_some_and(|token| token.eq_ignore_ascii_case(keyword))
+    })
+}
+
+fn validate_identifier(raw: &str, label: &str) -> Result<String, String> {
+    let value = raw.trim();
+    if value.is_empty() {
+        return Err(format!("{label} cannot be empty"));
+    }
+    if value
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+    {
+        return Ok(value.to_string());
+    }
+    Err(format!(
+        "invalid {label} `{value}`; expected letters, numbers, or underscore"
+    ))
+}
+
+fn sqlite_quote_identifier(raw: &str) -> Option<String> {
+    if raw
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+    {
+        Some(format!("\"{}\"", raw.replace('"', "\"\"")))
+    } else {
+        None
+    }
+}
+
 fn execute_sql_statement(
     conn: &Connection,
     statement: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    if let Some(message) = try_execute_retrieval_index_ddl(conn, statement)? {
+        println!("{message}");
+        return Ok(());
+    }
+
     let rewritten = rewrite_sql_vector_operators(statement);
 
     if is_query_statement(&rewritten) {
@@ -2334,6 +2985,9 @@ fn sql_repl_example_catalog() -> &'static str {
     "available examples:
   lexical   FTS/BM25 lexical retrieval
   vector    SQL-native vector operator retrieval
+  hybrid    embed + bm25_score + hybrid_score ranking
+  vector_ddl create VECTOR INDEX metadata entry
+  index_catalog inspect retrieval index catalog
   tenant    tenant-scoped filtered query
   recent    recent chunks for operational debugging"
 }
@@ -2363,6 +3017,30 @@ LIMIT 10;",
 FROM chunks
 ORDER BY l2 ASC, id ASC
 LIMIT 5;",
+        ),
+        "hybrid" => Some(
+            "SELECT id,
+       1.0 - cosine_distance(embedding, embed('local-first agent memory')) AS vector_score,
+       bm25_score('local-first agent memory', content) AS text_score,
+       hybrid_score(
+           1.0 - cosine_distance(embedding, embed('local-first agent memory')),
+           bm25_score('local-first agent memory', content),
+           0.65
+       ) AS hybrid
+FROM chunks
+ORDER BY hybrid DESC, id ASC
+LIMIT 5;",
+        ),
+        "vector_ddl" => Some(
+            "CREATE VECTOR INDEX IF NOT EXISTS idx_chunks_embedding_hnsw
+ON chunks(embedding)
+USING HNSW
+WITH (m=16, ef_construction=64);",
+        ),
+        "index_catalog" => Some(
+            "SELECT name, index_kind, table_name, column_name, using_engine, options_json, status
+FROM retrieval_index_catalog
+ORDER BY name;",
         ),
         "recent" => Some(
             "SELECT id, doc_id, created_at
@@ -2489,6 +3167,92 @@ mod tests {
                 row.get(0)
             })?;
         assert_eq!(as_json, "[1.0,2.0,3.0]");
+        Ok(())
+    }
+
+    #[test]
+    fn retrieval_sql_functions_embed_bm25_and_hybrid() -> Result<(), Box<dyn std::error::Error>> {
+        let conn = Connection::open_in_memory()?;
+        register_retrieval_sql_functions(&conn)?;
+
+        let (dims, bm25, hybrid): (i64, f64, f64) = conn.query_row(
+            "SELECT
+                vec_dims(embed('agent local memory')) AS dims,
+                bm25_score('agent memory', 'agent systems keep local memory') AS bm25,
+                hybrid_score(0.8, 0.2, 0.75) AS hybrid;",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+
+        assert_eq!(dims, 16);
+        assert!(bm25 > 0.0);
+        assert!((hybrid - 0.65).abs() < 1e-9);
+        Ok(())
+    }
+
+    #[test]
+    fn retrieval_index_ddl_create_and_drop() -> Result<(), Box<dyn std::error::Error>> {
+        let conn = Connection::open_in_memory()?;
+        register_retrieval_sql_functions(&conn)?;
+        conn.execute_batch(
+            "
+            CREATE TABLE chunks (
+                id TEXT PRIMARY KEY,
+                content TEXT NOT NULL,
+                embedding BLOB NOT NULL
+            );
+            ",
+        )?;
+
+        execute_sql_statement(
+            &conn,
+            "CREATE VECTOR INDEX IF NOT EXISTS idx_chunks_embedding_hnsw
+             ON chunks(embedding)
+             USING HNSW
+             WITH (m=16, ef_construction=64);",
+        )?;
+        execute_sql_statement(
+            &conn,
+            "CREATE TEXT INDEX IF NOT EXISTS idx_chunks_content_fts
+             ON chunks(content)
+             USING FTS5;",
+        )?;
+
+        let (kind, engine, options_json): (String, String, String) = conn.query_row(
+            "SELECT index_kind, using_engine, options_json
+             FROM retrieval_index_catalog
+             WHERE name = 'idx_chunks_embedding_hnsw';",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+        assert_eq!(kind, "vector");
+        assert_eq!(engine, "hnsw");
+        let options: Value = serde_json::from_str(&options_json)?;
+        assert_eq!(options["m"], 16);
+        assert_eq!(options["ef_construction"], 64);
+
+        let count_before_drop: i64 =
+            conn.query_row("SELECT COUNT(*) FROM retrieval_index_catalog", [], |row| {
+                row.get(0)
+            })?;
+        assert_eq!(count_before_drop, 2);
+
+        execute_sql_statement(&conn, "DROP VECTOR INDEX idx_chunks_embedding_hnsw;")?;
+        let count_after_drop: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM retrieval_index_catalog WHERE name = 'idx_chunks_embedding_hnsw'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(count_after_drop, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn parse_retrieval_index_ddl_ignores_non_retrieval_create()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let ddl = parse_retrieval_index_ddl("CREATE TABLE t (id INTEGER);")
+            .map_err(std::io::Error::other)?;
+        assert!(ddl.is_none());
         Ok(())
     }
 }

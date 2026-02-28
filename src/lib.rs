@@ -43,7 +43,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::time::Duration;
 
-const LATEST_SCHEMA_VERSION: i64 = 2;
+const LATEST_SCHEMA_VERSION: i64 = 3;
 const DOC_UPSERT_SQL: &str = "
     INSERT INTO documents (id, source, metadata) VALUES (?1, ?2, '{}')
     ON CONFLICT(id) DO UPDATE SET source = COALESCE(excluded.source, documents.source)
@@ -97,6 +97,37 @@ const MIGRATIONS: &[Migration] = &[
             CREATE INDEX IF NOT EXISTS idx_chunks_doc_id ON chunks(doc_id);
             CREATE INDEX IF NOT EXISTS idx_chunks_created_at ON chunks(created_at DESC, rowid DESC);
             CREATE INDEX IF NOT EXISTS idx_documents_created_at ON documents(created_at DESC);
+        ",
+    },
+    Migration {
+        version: 3,
+        name: "retrieval_index_catalog",
+        sql: "
+            CREATE TABLE IF NOT EXISTS retrieval_indexes (
+                name TEXT PRIMARY KEY,
+                index_kind TEXT NOT NULL CHECK (index_kind IN ('vector', 'text')),
+                table_name TEXT NOT NULL,
+                column_name TEXT NOT NULL,
+                using_engine TEXT NOT NULL,
+                options_json TEXT NOT NULL DEFAULT '{}',
+                status TEXT NOT NULL DEFAULT 'active',
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_retrieval_indexes_kind_table
+                ON retrieval_indexes(index_kind, table_name, status);
+
+            CREATE VIEW IF NOT EXISTS retrieval_index_catalog AS
+            SELECT
+                name,
+                index_kind,
+                table_name,
+                column_name,
+                using_engine,
+                options_json,
+                status,
+                created_at
+            FROM retrieval_indexes;
         ",
     },
 ];
@@ -1624,6 +1655,27 @@ mod tests {
                     row.get::<_, i64>(0)
                 })?;
         assert_eq!(migration_count, MIGRATIONS.len() as i64);
+        Ok(())
+    }
+
+    #[test]
+    fn retrieval_index_catalog_migration_objects_exist() -> Result<()> {
+        let db = SqlRite::open_in_memory()?;
+
+        let table_exists: i64 = db.conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'retrieval_indexes'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(table_exists, 1);
+
+        let view_exists: i64 = db.conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'view' AND name = 'retrieval_index_catalog'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(view_exists, 1);
+
         Ok(())
     }
 
