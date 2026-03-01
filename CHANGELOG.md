@@ -248,6 +248,12 @@ The format is based on Keep a Changelog.
   - generated protobuf service contract: `proto/sqlrite/v1/query_service.proto`
   - runtime execution bridge module: `src/sdk_runtime.rs`
   - native gRPC service implementation: `src/grpc.rs`
+- S23 Python SDK baseline:
+  - package root: `sdk/python`
+  - SDK client: `sdk/python/sqlrite_sdk/client.py`
+  - integration tests: `sdk/python/tests/test_client.py`
+  - packaging metadata: `sdk/python/pyproject.toml`
+  - CI pipeline: `.github/workflows/python-sdk.yml`
 - Sprint 20 evidence artifacts:
   - `project_plan/reports/S20.md`
   - `project_plan/reports/s20_quality_gates.log`
@@ -263,6 +269,11 @@ The format is based on Keep a Changelog.
   - `project_plan/reports/s22_quality_gates.log`
   - `project_plan/reports/s22_grpc_sdk_smoke.log`
   - `project_plan/reports/s22_benchmark_grpc_sdk.json`
+- Sprint 23 evidence artifacts:
+  - `project_plan/reports/S23.md`
+  - `project_plan/reports/s23_quality_gates.log`
+  - `project_plan/reports/s23_python_sdk_smoke.log`
+  - `project_plan/reports/s23_benchmark_python_sdk.json`
 
 ### Changed
 

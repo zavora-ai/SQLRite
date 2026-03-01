@@ -201,3 +201,14 @@ S22 native gRPC service additions:
 - `crates/sqlrite-sdk-core`
 4. gRPC + SDK smoke harness:
 - `scripts/run-s22-grpc-sdk-smoke.sh`
+
+S23 Python SDK additions:
+
+1. Python package root:
+- `sdk/python/`
+2. Integration tests against `sqlrite serve`:
+- `sdk/python/tests/test_client.py`
+3. Python package CI/build workflow:
+- `.github/workflows/python-sdk.yml`
+4. Python SDK smoke + dist generation:
+- `scripts/run-s23-python-sdk-smoke.sh`

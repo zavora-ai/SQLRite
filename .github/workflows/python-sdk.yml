@@ -1,0 +1,24 @@
+name: Python SDK
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  python-sdk-ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build sqlrite binary
+        run: cargo build --bin sqlrite
+      - name: Run Python SDK integration + package smoke
+        run: bash scripts/run-s23-python-sdk-smoke.sh
+      - name: Upload Python SDK dist artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-sdk-dist
+          path: project_plan/reports/s23_python_dist/*

@@ -1127,6 +1127,36 @@ Artifacts produced by the harness:
 - `project_plan/reports/s22_grpc_sdk_smoke.log`
 - `project_plan/reports/s22_benchmark_grpc_sdk.json`
 
+## Python SDK (Sprint 23)
+
+Local editable install:
+
+```bash
+pip install -e sdk/python
+```
+
+SDK usage:
+
+```python
+from sqlrite_sdk import SqlRiteClient
+
+client = SqlRiteClient("http://127.0.0.1:8099")
+print(client.health())
+print(client.query(query_text="agent memory", top_k=2))
+print(client.sql("SELECT id, doc_id FROM chunks ORDER BY id ASC LIMIT 2;"))
+```
+
+Reproducible Python SDK integration + packaging smoke:
+
+```bash
+bash scripts/run-s23-python-sdk-smoke.sh
+```
+
+Artifacts produced by the harness:
+
+- `project_plan/reports/s23_python_sdk_smoke.log`
+- `project_plan/reports/s23_python_dist/`
+
 Reproducible S16 smoke harness:
 
 ```bash
