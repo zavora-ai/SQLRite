@@ -6,12 +6,13 @@ use serde::Serialize;
 use serde_json::{Map, Value, json};
 use sqlrite::{
     BenchmarkConfig, ChunkInput, CompactionOptions, DurabilityProfile, FailoverMode,
-    FusionStrategy, HaRuntimeProfile, McpServerConfig, RecoveryConfig, ReplicationConfig,
-    RuntimeConfig, SearchRequest, ServerConfig, ServerRole, SqlRite, VectorIndexMode,
-    VectorStorageKind, backup_file, build_health_report, create_backup_snapshot,
+    FusionStrategy, GrpcServerConfig, HaRuntimeProfile, McpServerConfig, RecoveryConfig,
+    ReplicationConfig, RuntimeConfig, SearchRequest, ServerConfig, ServerRole, SqlRite,
+    VectorIndexMode, VectorStorageKind, backup_file, build_health_report, create_backup_snapshot,
     list_backup_snapshots, mcp_tools_manifest_document, prune_backup_snapshots,
-    restore_backup_file, restore_backup_file_verified, run_benchmark, run_stdio_mcp_server,
-    select_backup_snapshot_for_time, serve_health_endpoints, verify_backup_file,
+    restore_backup_file, restore_backup_file_verified, run_benchmark, run_grpc_server,
+    run_stdio_mcp_server, select_backup_snapshot_for_time, serve_health_endpoints,
+    verify_backup_file,
 };
 use std::collections::{HashMap, HashSet};
 use std::env;
@@ -38,6 +39,7 @@ fn dispatch_command(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>>
         "query" => cmd_query(&args[1..]),
         "quickstart" => cmd_quickstart(&args[1..]),
         "serve" => cmd_serve(&args[1..]),
+        "grpc" => cmd_grpc(&args[1..]),
         "mcp" => cmd_mcp(&args[1..]),
         "backup" => cmd_backup(&args[1..]),
         "compact" => cmd_compact(&args[1..]),
@@ -1215,6 +1217,77 @@ fn parse_serve_args(args: &[String]) -> Result<ServeArgs, String> {
         i += 1;
     }
 
+    Ok(out)
+}
+
+#[derive(Debug)]
+struct GrpcArgs {
+    db_path: PathBuf,
+    bind_addr: String,
+    profile: DurabilityProfile,
+    index_mode: VectorIndexMode,
+}
+
+impl Default for GrpcArgs {
+    fn default() -> Self {
+        Self {
+            db_path: PathBuf::from("sqlrite.db"),
+            bind_addr: "127.0.0.1:50051".to_string(),
+            profile: DurabilityProfile::Balanced,
+            index_mode: VectorIndexMode::BruteForce,
+        }
+    }
+}
+
+fn cmd_grpc(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    let parsed = parse_grpc_args(args).map_err(std::io::Error::other)?;
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+
+    runtime.block_on(run_grpc_server(GrpcServerConfig {
+        db_path: parsed.db_path,
+        bind_addr: parsed.bind_addr,
+        profile: parsed.profile,
+        index_mode: parsed.index_mode,
+    }))?;
+    Ok(())
+}
+
+fn parse_grpc_args(args: &[String]) -> Result<GrpcArgs, String> {
+    let mut out = GrpcArgs::default();
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--db" => {
+                i += 1;
+                out.db_path = PathBuf::from(parse_string(args, i, "--db")?);
+            }
+            "--bind" => {
+                i += 1;
+                out.bind_addr = parse_string(args, i, "--bind")?;
+            }
+            "--profile" => {
+                i += 1;
+                out.profile = parse_profile(&parse_string(args, i, "--profile")?)?;
+            }
+            "--index-mode" => {
+                i += 1;
+                out.index_mode = parse_index_mode(&parse_string(args, i, "--index-mode")?)?;
+            }
+            "--help" | "-h" => {
+                return Err(
+                    "usage: sqlrite grpc [--db PATH] [--bind HOST:PORT] [--profile balanced|durable|fast_unsafe] [--index-mode brute_force|lsh_ann|hnsw_baseline|disabled]".to_string(),
+                );
+            }
+            other => {
+                return Err(format!(
+                    "unknown argument `{other}`\nusage: sqlrite grpc [--db PATH] [--bind HOST:PORT] [--profile balanced|durable|fast_unsafe] [--index-mode brute_force|lsh_ann|hnsw_baseline|disabled]"
+                ));
+            }
+        }
+        i += 1;
+    }
     Ok(out)
 }
 
@@ -4305,7 +4378,7 @@ fn sql_value_to_json(value: ValueRef<'_>) -> Value {
 }
 
 fn usage() -> &'static str {
-    "sqlrite unified CLI\n\nusage:\n  sqlrite <command> [options]\n\ncommands:\n  init       Create/open a SQLRite database and apply runtime profile\n  sql        Execute SQL or enter interactive SQL shell\n  ingest     Ingest a single chunk directly from CLI flags\n  query      Run text/vector/hybrid retrieval query\n  quickstart Run init->query UX flow with telemetry/gates\n  serve      Start server (health/readiness/metrics + HA control plane + SQL API)\n  mcp        Start MCP stdio tool server or print MCP manifest\n  backup     Create, verify, snapshot, restore, PITR-restore, or prune backups\n  compact    Run ingestion-compaction maintenance workflow\n  benchmark  Run synthetic retrieval benchmark\n  doctor     Run environment and database health checks\n\nenv overrides:\n  SQLRITE_VECTOR_STORAGE=f32|f16|int8\n  SQLRITE_ANN_MIN_CANDIDATES=<int>\n  SQLRITE_ANN_MAX_HAMMING_RADIUS=<int>\n  SQLRITE_ANN_MAX_CANDIDATE_MULTIPLIER=<int>\n  SQLRITE_ENABLE_ANN_PERSISTENCE=true|false\n  SQLRITE_SQLITE_MMAP_SIZE=<bytes>\n  SQLRITE_SQLITE_CACHE_SIZE_KIB=<kib>\n\nexamples:\n  sqlrite init --db sqlrite_demo.db --seed-demo\n  sqlrite quickstart --db sqlrite_demo.db --runs 5 --max-median-ms 180000 --min-success-rate 0.95\n  sqlrite query --db sqlrite_demo.db --text \"agents local memory\" --top-k 3\n  sqlrite mcp --db sqlrite_demo.db --print-manifest\n  sqlrite mcp --db sqlrite_demo.db --auth-token dev-token\n  sqlrite backup snapshot --source sqlrite_demo.db --backup-dir ./backups --note pre_release\n  sqlrite backup pitr-restore --backup-dir ./backups --target-unix-ms 1772000000000 --dest restored.db --verify\n  sqlrite compact --db sqlrite_demo.db --json\n  sqlrite doctor --db sqlrite_demo.db --json\n  sqlrite sql --db sqlrite_demo.db\n  sqlrite sql --db sqlrite_demo.db --execute \"SELECT id, doc_id FROM chunks LIMIT 3;\""
+    "sqlrite unified CLI\n\nusage:\n  sqlrite <command> [options]\n\ncommands:\n  init       Create/open a SQLRite database and apply runtime profile\n  sql        Execute SQL or enter interactive SQL shell\n  ingest     Ingest a single chunk directly from CLI flags\n  query      Run text/vector/hybrid retrieval query\n  quickstart Run init->query UX flow with telemetry/gates\n  serve      Start server (health/readiness/metrics + HA control plane + SQL API)\n  grpc       Start native gRPC QueryService endpoint\n  mcp        Start MCP stdio tool server or print MCP manifest\n  backup     Create, verify, snapshot, restore, PITR-restore, or prune backups\n  compact    Run ingestion-compaction maintenance workflow\n  benchmark  Run synthetic retrieval benchmark\n  doctor     Run environment and database health checks\n\nenv overrides:\n  SQLRITE_VECTOR_STORAGE=f32|f16|int8\n  SQLRITE_ANN_MIN_CANDIDATES=<int>\n  SQLRITE_ANN_MAX_HAMMING_RADIUS=<int>\n  SQLRITE_ANN_MAX_CANDIDATE_MULTIPLIER=<int>\n  SQLRITE_ENABLE_ANN_PERSISTENCE=true|false\n  SQLRITE_SQLITE_MMAP_SIZE=<bytes>\n  SQLRITE_SQLITE_CACHE_SIZE_KIB=<kib>\n\nexamples:\n  sqlrite init --db sqlrite_demo.db --seed-demo\n  sqlrite quickstart --db sqlrite_demo.db --runs 5 --max-median-ms 180000 --min-success-rate 0.95\n  sqlrite query --db sqlrite_demo.db --text \"agents local memory\" --top-k 3\n  sqlrite grpc --db sqlrite_demo.db --bind 127.0.0.1:50051\n  sqlrite mcp --db sqlrite_demo.db --print-manifest\n  sqlrite mcp --db sqlrite_demo.db --auth-token dev-token\n  sqlrite backup snapshot --source sqlrite_demo.db --backup-dir ./backups --note pre_release\n  sqlrite backup pitr-restore --backup-dir ./backups --target-unix-ms 1772000000000 --dest restored.db --verify\n  sqlrite compact --db sqlrite_demo.db --json\n  sqlrite doctor --db sqlrite_demo.db --json\n  sqlrite sql --db sqlrite_demo.db\n  sqlrite sql --db sqlrite_demo.db --execute \"SELECT id, doc_id FROM chunks LIMIT 3;\""
 }
 
 #[cfg(test)]
@@ -4473,6 +4546,37 @@ mod tests {
         assert_eq!(parsed.sync_ack_quorum, 2);
         assert_eq!(parsed.failover_mode, FailoverMode::Automatic);
         assert!(!parsed.enable_sql_endpoint);
+        Ok(())
+    }
+
+    #[test]
+    fn grpc_args_default_values_are_stable() -> Result<(), Box<dyn std::error::Error>> {
+        let parsed = parse_grpc_args(&[]).map_err(std::io::Error::other)?;
+        assert_eq!(parsed.db_path, PathBuf::from("sqlrite.db"));
+        assert_eq!(parsed.bind_addr, "127.0.0.1:50051");
+        assert_eq!(parsed.profile, DurabilityProfile::Balanced);
+        assert_eq!(parsed.index_mode, VectorIndexMode::BruteForce);
+        Ok(())
+    }
+
+    #[test]
+    fn grpc_args_parse_overrides() -> Result<(), Box<dyn std::error::Error>> {
+        let parsed = parse_grpc_args(&[
+            "--db".to_string(),
+            "grpc.db".to_string(),
+            "--bind".to_string(),
+            "0.0.0.0:50090".to_string(),
+            "--profile".to_string(),
+            "durable".to_string(),
+            "--index-mode".to_string(),
+            "hnsw_baseline".to_string(),
+        ])
+        .map_err(std::io::Error::other)?;
+
+        assert_eq!(parsed.db_path, PathBuf::from("grpc.db"));
+        assert_eq!(parsed.bind_addr, "0.0.0.0:50090");
+        assert_eq!(parsed.profile, DurabilityProfile::Durable);
+        assert_eq!(parsed.index_mode, VectorIndexMode::HnswBaseline);
         Ok(())
     }
 

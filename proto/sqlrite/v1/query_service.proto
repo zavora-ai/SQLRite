@@ -1,0 +1,38 @@
+syntax = "proto3";
+
+package sqlrite.v1;
+
+service QueryService {
+  rpc Health(HealthRequest) returns (HealthResponse);
+  rpc Sql(SqlRequest) returns (SqlResponse);
+  rpc Query(QueryRequest) returns (QueryResponse);
+}
+
+message HealthRequest {}
+
+message HealthResponse {
+  string status = 1;
+  string version = 2;
+}
+
+message SqlRequest {
+  string statement = 1;
+}
+
+message SqlResponse {
+  string json_payload = 1;
+}
+
+message QueryRequest {
+  optional string query_text = 1;
+  repeated float query_embedding = 2;
+  optional uint32 top_k = 3;
+  optional float alpha = 4;
+  optional uint32 candidate_limit = 5;
+  map<string, string> metadata_filters = 6;
+  optional string doc_id = 7;
+}
+
+message QueryResponse {
+  string json_payload = 1;
+}

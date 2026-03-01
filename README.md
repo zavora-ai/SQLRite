@@ -926,6 +926,33 @@ curl -fsS -X POST \
   http://127.0.0.1:8099/grpc/sqlrite.v1.QueryService/Sql | jq
 ```
 
+Native gRPC QueryService (Sprint 22):
+
+```bash
+cargo run -- grpc --db sqlrite_demo.db --bind 127.0.0.1:50051
+```
+
+Client examples (`sqlrite-grpc-client`):
+
+```bash
+cargo run --bin sqlrite-grpc-client -- --addr 127.0.0.1:50051 health
+
+cargo run --bin sqlrite-grpc-client -- --addr 127.0.0.1:50051 \
+  query --text "agent memory" --top-k 2
+
+cargo run --bin sqlrite-grpc-client -- --addr 127.0.0.1:50051 \
+  sql --statement "SELECT id, doc_id FROM chunks ORDER BY id ASC LIMIT 2;"
+```
+
+Sample output (`health`):
+
+```json
+{
+  "status": "ok",
+  "version": "0.1.0"
+}
+```
+
 Replication + election protocol example:
 
 ```bash
@@ -1065,6 +1092,40 @@ Artifacts produced by the harness:
 
 - `project_plan/reports/s20_mcp_smoke.log`
 - `project_plan/reports/s20_benchmark_mcp.json`
+
+## Native gRPC Service (Sprint 22)
+
+Start native gRPC QueryService from unified CLI:
+
+```bash
+sqlrite grpc --db sqlrite_demo.db --bind 127.0.0.1:50051
+```
+
+Dedicated server binary:
+
+```bash
+cargo run --bin sqlrite-grpc -- --db sqlrite_demo.db --bind 127.0.0.1:50051
+```
+
+Client utility examples:
+
+```bash
+cargo run --bin sqlrite-grpc-client -- --addr 127.0.0.1:50051 health
+cargo run --bin sqlrite-grpc-client -- --addr 127.0.0.1:50051 query --text \"agent memory\" --top-k 2
+cargo run --bin sqlrite-grpc-client -- --addr 127.0.0.1:50051 sql --statement \"SELECT id, doc_id FROM chunks ORDER BY id ASC LIMIT 2;\"
+```
+
+Reproducible S22 gRPC + SDK smoke harness:
+
+```bash
+cargo build --bin sqlrite --bin sqlrite-grpc-client
+scripts/run-s22-grpc-sdk-smoke.sh
+```
+
+Artifacts produced by the harness:
+
+- `project_plan/reports/s22_grpc_sdk_smoke.log`
+- `project_plan/reports/s22_benchmark_grpc_sdk.json`
 
 Reproducible S16 smoke harness:
 
@@ -1283,7 +1344,7 @@ For historical trend context, see:
 
 ## ANN, Storage, and SQLite Tuning Knobs (Sprint 8-10)
 
-`sqlrite` now supports ANN/runtime tuning through environment variables (applies to `init`, `query`, `benchmark`, `quickstart`, `doctor`, `serve`, and SQL bootstrap).
+`sqlrite` now supports ANN/runtime tuning through environment variables (applies to `init`, `query`, `benchmark`, `quickstart`, `doctor`, `serve`, `grpc`, and SQL bootstrap).
 
 | Variable | Description | Example |
 | --- | --- | --- |

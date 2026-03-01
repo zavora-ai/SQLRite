@@ -241,6 +241,13 @@ The format is based on Keep a Changelog.
   - `POST /v1/query` retrieval query endpoint
   - `POST /grpc/sqlrite.v1.QueryService/Sql` gRPC-style SQL bridge endpoint
   - `POST /grpc/sqlrite.v1.QueryService/Query` gRPC-style query bridge endpoint
+- S22 native gRPC + SDK runtime baseline:
+  - shared contract crate: `crates/sqlrite-sdk-core`
+  - native gRPC server command: `sqlrite grpc`
+  - dedicated binaries: `sqlrite-grpc`, `sqlrite-grpc-client`
+  - generated protobuf service contract: `proto/sqlrite/v1/query_service.proto`
+  - runtime execution bridge module: `src/sdk_runtime.rs`
+  - native gRPC service implementation: `src/grpc.rs`
 - Sprint 20 evidence artifacts:
   - `project_plan/reports/S20.md`
   - `project_plan/reports/s20_quality_gates.log`
@@ -251,6 +258,11 @@ The format is based on Keep a Changelog.
   - `project_plan/reports/s21_quality_gates.log`
   - `project_plan/reports/s21_openapi_grpc_smoke.log`
   - `project_plan/reports/s21_benchmark_query_api.json`
+- Sprint 22 evidence artifacts:
+  - `project_plan/reports/S22.md`
+  - `project_plan/reports/s22_quality_gates.log`
+  - `project_plan/reports/s22_grpc_sdk_smoke.log`
+  - `project_plan/reports/s22_benchmark_grpc_sdk.json`
 
 ### Changed
 

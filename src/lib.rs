@@ -2,11 +2,13 @@ mod adapter;
 mod bench;
 mod error;
 mod eval;
+pub mod grpc;
 mod ha;
 mod ingest;
 mod mcp;
 mod ops;
 mod reindex;
+mod sdk_runtime;
 mod security;
 mod server;
 mod sql_semantics;
@@ -19,6 +21,7 @@ pub use eval::{
     EvalDataset, EvalMetricsAtK, EvalQuery, EvalReport, EvalSummary, QueryEvalResult,
     evaluate_dataset,
 };
+pub use grpc::{GrpcServerConfig, grpc_json_payload_or_error, run_grpc_server};
 pub use ha::{
     FailoverMode, HaRuntimeProfile, HaRuntimeState, RecoveryConfig, ReplicationConfig,
     ReplicationLog, ReplicationLogEntry, ServerRole,
@@ -36,6 +39,9 @@ pub use ops::{
     restore_backup_file_verified, select_backup_snapshot_for_time, verify_backup_file,
 };
 pub use reindex::{ReindexCheckpoint, ReindexOptions, ReindexReport, reindex_embeddings};
+pub use sdk_runtime::{
+    SdkRuntimeError, execute_query as execute_sdk_query, execute_sql as execute_sdk_sql,
+};
 pub use security::{
     AccessContext, AccessOperation, AccessPolicy, AllowAllPolicy, AuditEvent, AuditLogger,
     InMemoryTenantKeyRegistry, JsonlAuditLogger, SecureSqlRite, TenantKey, TenantKeyRegistry,

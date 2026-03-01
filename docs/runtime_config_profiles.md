@@ -190,3 +190,14 @@ S21 query-surface interoperability additions:
 - `POST /grpc/sqlrite.v1.QueryService/Query`
 4. Interop smoke harness:
 - `scripts/run-s21-openapi-grpc-smoke.sh`
+
+S22 native gRPC service additions:
+
+1. Native gRPC QueryService endpoint:
+- `sqlrite grpc [--db PATH] [--bind HOST:PORT] [--profile ...] [--index-mode ...]`
+2. Dedicated client utility for contract validation:
+- `sqlrite-grpc-client`
+3. Shared SDK protocol contract crate:
+- `crates/sqlrite-sdk-core`
+4. gRPC + SDK smoke harness:
+- `scripts/run-s22-grpc-sdk-smoke.sh`

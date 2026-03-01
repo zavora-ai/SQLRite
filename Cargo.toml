@@ -6,6 +6,9 @@ description = "RAG-oriented SQLite wrapper for AI agent workloads"
 license = "MIT"
 default-run = "sqlrite"
 
+[workspace]
+members = [".", "crates/sqlrite-sdk-core"]
+
 [dependencies]
 rusqlite = { version = "0.33", features = ["bundled", "functions"] }
 serde = { version = "1.0", features = ["derive"] }
@@ -13,6 +16,14 @@ serde_json = "1.0"
 thiserror = "2.0"
 rayon = "1.10"
 half = "2.4"
+sqlrite-sdk-core = { path = "crates/sqlrite-sdk-core" }
+tokio = { version = "1.43", features = ["macros", "rt-multi-thread", "sync"] }
+tonic = { version = "0.12", features = ["transport"] }
+prost = "0.13"
+tokio-stream = { version = "0.1", features = ["net"] }
 
 [dev-dependencies]
 tempfile = "3.12"
+
+[build-dependencies]
+tonic-build = "0.12"

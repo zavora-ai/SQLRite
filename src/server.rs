@@ -1,13 +1,13 @@
 use crate::{
     DurabilityProfile, FailoverMode, HaRuntimeProfile, HaRuntimeState, ReplicationLog,
-    ReplicationLogEntry, Result, RuntimeConfig, SearchRequest, ServerRole, SqlRite,
-    build_health_report, create_backup_snapshot, execute_sql_statement_json, list_backup_snapshots,
-    prepare_sql_connection, prune_backup_snapshots, restore_backup_file_verified,
-    select_backup_snapshot_for_time,
+    ReplicationLogEntry, Result, RuntimeConfig, ServerRole, SqlRite, build_health_report,
+    create_backup_snapshot, execute_sdk_query, execute_sdk_sql, list_backup_snapshots,
+    prune_backup_snapshots, restore_backup_file_verified, select_backup_snapshot_for_time,
 };
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::Deserialize;
 use serde_json::{Value, json};
+use sqlrite_sdk_core::{QueryRequest as QueryApiRequest, SqlRequest as SqlApiRequest};
 use std::collections::{HashMap, VecDeque};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -377,22 +377,6 @@ struct HttpRequest {
     path: String,
     headers: HashMap<String, String>,
     body: Vec<u8>,
-}
-
-#[derive(Debug, Deserialize)]
-struct SqlApiRequest {
-    statement: String,
-}
-
-#[derive(Debug, Deserialize, Default)]
-struct QueryApiRequest {
-    query_text: Option<String>,
-    query_embedding: Option<Vec<f32>>,
-    top_k: Option<usize>,
-    alpha: Option<f32>,
-    candidate_limit: Option<usize>,
-    metadata_filters: Option<HashMap<String, String>>,
-    doc_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -1836,7 +1820,7 @@ fn build_response(
                     return Ok((400, "application/json", payload.to_string()));
                 }
             };
-            execute_sql_api_statement(db_path, sql_profile, &sql_request.statement)
+            execute_sql_api_statement(db_path, sql_profile, sql_request)
         }
         ("POST", "/v1/query") if config.enable_sql_endpoint => {
             let input = match parse_json_body::<QueryApiRequest>(request) {
@@ -1863,7 +1847,7 @@ fn build_response(
                     return Ok((400, "application/json", payload.to_string()));
                 }
             };
-            execute_sql_api_statement(db_path, sql_profile, &sql_request.statement)
+            execute_sql_api_statement(db_path, sql_profile, sql_request)
         }
         ("POST", "/grpc/sqlrite.v1.QueryService/Query") if config.enable_sql_endpoint => {
             let input = match parse_json_body::<QueryApiRequest>(request) {
@@ -1921,39 +1905,17 @@ fn build_response(
 fn execute_sql_api_statement(
     db_path: &Path,
     sql_profile: DurabilityProfile,
-    statement: &str,
+    input: SqlApiRequest,
 ) -> Result<(u16, &'static str, String)> {
-    if statement.trim().is_empty() {
-        return Ok((
-            400,
-            "application/json",
-            json!({"error": "statement cannot be empty"}).to_string(),
-        ));
-    }
-
-    let conn = match Connection::open(db_path) {
-        Ok(conn) => conn,
-        Err(error) => {
-            return Ok((
-                500,
-                "application/json",
-                json!({"error": format!("failed to open database: {error}")}).to_string(),
-            ));
-        }
-    };
-
-    if let Err(error) = prepare_sql_connection(&conn, sql_profile) {
-        return Ok((
-            500,
-            "application/json",
-            json!({"error": format!("failed to initialize sql runtime: {error}")}).to_string(),
-        ));
-    }
-
-    match execute_sql_statement_json(&conn, statement) {
+    match execute_sdk_sql(db_path, sql_profile, input) {
         Ok(payload) => Ok((200, "application/json", payload.to_string())),
-        Err(error) => Ok((
+        Err(error) if error.is_validation() => Ok((
             400,
+            "application/json",
+            json!({"error": error.to_string()}).to_string(),
+        )),
+        Err(error) => Ok((
+            500,
             "application/json",
             json!({"error": error.to_string()}).to_string(),
         )),
@@ -1961,31 +1923,8 @@ fn execute_sql_api_statement(
 }
 
 fn execute_query_api(db: &SqlRite, input: QueryApiRequest) -> Result<Value> {
-    let mut request = SearchRequest {
-        query_text: input.query_text,
-        query_embedding: input.query_embedding,
-        ..SearchRequest::default()
-    };
-    if let Some(top_k) = input.top_k {
-        request.top_k = top_k;
-    }
-    if let Some(alpha) = input.alpha {
-        request.alpha = alpha;
-    }
-    if let Some(candidate_limit) = input.candidate_limit {
-        request.candidate_limit = candidate_limit;
-    }
-    if let Some(metadata_filters) = input.metadata_filters {
-        request.metadata_filters = metadata_filters;
-    }
-    request.doc_id = input.doc_id;
-
-    let rows = db.search(request)?;
-    Ok(json!({
-        "kind": "query",
-        "row_count": rows.len(),
-        "rows": rows,
-    }))
+    let envelope = execute_sdk_query(db, input).map_err(std::io::Error::other)?;
+    Ok(serde_json::to_value(envelope)?)
 }
 
 fn openapi_query_document(sql_enabled: bool) -> Value {
