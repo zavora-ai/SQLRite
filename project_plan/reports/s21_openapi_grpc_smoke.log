@@ -1,0 +1,263 @@
+[build] cargo build --bin sqlrite
+[start-server] bind=127.0.0.1:8211
+[openapi]
+{
+  "components": {
+    "schemas": {
+      "QueryRequest": {
+        "properties": {
+          "alpha": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "candidate_limit": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "doc_id": {
+            "type": "string"
+          },
+          "metadata_filters": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "query_embedding": {
+            "items": {
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "query_text": {
+            "type": "string"
+          },
+          "top_k": {
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "SqlRequest": {
+        "properties": {
+          "statement": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "statement"
+        ],
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "description": "OpenAPI baseline for SQL and retrieval query surfaces.",
+    "title": "SQLRite Query API",
+    "version": "0.1.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/grpc/sqlrite.v1.QueryService/Query": {
+      "post": {
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QueryRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Query results"
+          },
+          "400": {
+            "description": "Invalid query request"
+          }
+        },
+        "summary": "gRPC-compat retrieval query method over HTTP JSON bridge"
+      }
+    },
+    "/grpc/sqlrite.v1.QueryService/Sql": {
+      "post": {
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SqlRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Statement executed"
+          },
+          "400": {
+            "description": "Invalid SQL request"
+          }
+        },
+        "summary": "gRPC-compat SQL query method over HTTP JSON bridge"
+      }
+    },
+    "/v1/openapi.json": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "OpenAPI document"
+          }
+        },
+        "summary": "Fetch OpenAPI document for query surfaces"
+      }
+    },
+    "/v1/query": {
+      "post": {
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QueryRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Query results"
+          },
+          "400": {
+            "description": "Invalid query request"
+          }
+        },
+        "summary": "Run semantic/lexical/hybrid retrieval query"
+      }
+    },
+    "/v1/sql": {
+      "post": {
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SqlRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Statement executed"
+          },
+          "400": {
+            "description": "Invalid SQL request"
+          }
+        },
+        "summary": "Execute retrieval SQL statement"
+      }
+    }
+  }
+}
+[query-v1]
+{
+  "kind": "query",
+  "row_count": 2,
+  "rows": [
+    {
+      "chunk_id": "demo-1",
+      "content": "Rust and SQLite are ideal for local-first AI agents.",
+      "doc_id": "doc-a",
+      "hybrid_score": 0.0,
+      "metadata": {
+        "tenant": "demo",
+        "topic": "agent-memory"
+      },
+      "text_score": 0.0,
+      "vector_score": 0.0
+    },
+    {
+      "chunk_id": "demo-2",
+      "content": "Hybrid retrieval mixes vector search with keyword signals.",
+      "doc_id": "doc-b",
+      "hybrid_score": 0.0,
+      "metadata": {
+        "tenant": "demo",
+        "topic": "retrieval"
+      },
+      "text_score": 0.0,
+      "vector_score": 0.0
+    }
+  ]
+}
+[grpc-query]
+{
+  "kind": "query",
+  "row_count": 2,
+  "rows": [
+    {
+      "chunk_id": "demo-1",
+      "content": "Rust and SQLite are ideal for local-first AI agents.",
+      "doc_id": "doc-a",
+      "hybrid_score": 0.0,
+      "metadata": {
+        "tenant": "demo",
+        "topic": "agent-memory"
+      },
+      "text_score": 0.0,
+      "vector_score": 0.0
+    },
+    {
+      "chunk_id": "demo-2",
+      "content": "Hybrid retrieval mixes vector search with keyword signals.",
+      "doc_id": "doc-b",
+      "hybrid_score": 0.0,
+      "metadata": {
+        "tenant": "demo",
+        "topic": "retrieval"
+      },
+      "text_score": 0.0,
+      "vector_score": 0.0
+    }
+  ]
+}
+[grpc-sql]
+{
+  "elapsed_ms": 0.040542,
+  "kind": "query",
+  "rewritten_statement": "SELECT id, doc_id FROM chunks ORDER BY id ASC LIMIT 2;",
+  "row_count": 2,
+  "rows": [
+    {
+      "doc_id": "doc-a",
+      "id": "demo-1"
+    },
+    {
+      "doc_id": "doc-b",
+      "id": "demo-2"
+    }
+  ],
+  "statement": "SELECT id, doc_id FROM chunks ORDER BY id ASC LIMIT 2;"
+}
+[method-not-allowed]
+{
+  "error": "method not allowed; use POST /v1/query"
+}
+{
+  "error": "method not allowed; use POST /grpc/sqlrite.v1.QueryService/Sql"
+}
+[assertions]
+openapi_version=ok
+openapi_has_v1_query=ok
+openapi_has_grpc_sql=ok
+v1_query_results=ok
+grpc_query_results=ok
+grpc_sql_results=ok
+v1_query_method_guard=ok
+grpc_sql_method_guard=ok
+[s21-openapi-grpc-smoke-complete] log=project_plan/reports/s21_openapi_grpc_smoke.log

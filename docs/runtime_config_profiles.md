@@ -188,3 +188,5 @@ S21 query-surface interoperability additions:
 3. gRPC-style HTTP JSON bridge endpoints:
 - `POST /grpc/sqlrite.v1.QueryService/Sql`
 - `POST /grpc/sqlrite.v1.QueryService/Query`
+4. Interop smoke harness:
+- `scripts/run-s21-openapi-grpc-smoke.sh`

@@ -2939,6 +2939,35 @@ mod tests {
     }
 
     #[test]
+    fn openapi_endpoint_hides_sql_paths_when_sql_endpoint_disabled() -> Result<()> {
+        let db = SqlRite::open_in_memory_with_config(RuntimeConfig::default())?;
+        let state = Arc::new(Mutex::new(ControlPlaneState::new(
+            HaRuntimeProfile::default(),
+        )));
+        let request = make_request("GET", "/v1/openapi.json", None, None);
+        let config = ServerConfig {
+            enable_sql_endpoint: false,
+            ..ServerConfig::default()
+        };
+
+        let (status, _content_type, body) = build_response(
+            &db,
+            Path::new(":memory:"),
+            DurabilityProfile::Balanced,
+            &config,
+            &state,
+            &request,
+        )?;
+        assert_eq!(status, 200);
+        assert!(!body.contains("\"/v1/sql\""));
+        assert!(!body.contains("\"/v1/query\""));
+        assert!(!body.contains("\"/grpc/sqlrite.v1.QueryService/Sql\""));
+        assert!(!body.contains("\"/grpc/sqlrite.v1.QueryService/Query\""));
+        assert!(body.contains("\"/v1/openapi.json\""));
+        Ok(())
+    }
+
+    #[test]
     fn query_and_grpc_query_endpoints_return_results() -> Result<()> {
         let db = SqlRite::open_in_memory_with_config(RuntimeConfig::default())?;
         db.ingest_chunk(&ChunkInput {
@@ -2988,6 +3017,78 @@ mod tests {
         )?;
         assert_eq!(status, 200);
         assert!(body.contains("\"kind\":\"query\""));
+        Ok(())
+    }
+
+    #[test]
+    fn query_and_grpc_endpoints_reject_non_post_methods() -> Result<()> {
+        let db = SqlRite::open_in_memory_with_config(RuntimeConfig::default())?;
+        let state = Arc::new(Mutex::new(ControlPlaneState::new(
+            HaRuntimeProfile::default(),
+        )));
+        let config = ServerConfig::default();
+
+        let query_get = make_request("GET", "/v1/query", None, None);
+        let (status, _, body) = build_response(
+            &db,
+            Path::new(":memory:"),
+            DurabilityProfile::Balanced,
+            &config,
+            &state,
+            &query_get,
+        )?;
+        assert_eq!(status, 405);
+        assert!(body.contains("POST /v1/query"));
+
+        let grpc_sql_get = make_request("GET", "/grpc/sqlrite.v1.QueryService/Sql", None, None);
+        let (status, _, body) = build_response(
+            &db,
+            Path::new(":memory:"),
+            DurabilityProfile::Balanced,
+            &config,
+            &state,
+            &grpc_sql_get,
+        )?;
+        assert_eq!(status, 405);
+        assert!(body.contains("POST /grpc/sqlrite.v1.QueryService/Sql"));
+        Ok(())
+    }
+
+    #[test]
+    fn grpc_sql_endpoint_executes_sql_statement() -> Result<()> {
+        let db_file = NamedTempFile::new().map_err(std::io::Error::other)?;
+        let db = SqlRite::open_with_config(db_file.path(), RuntimeConfig::default())?;
+        db.ingest_chunk(&ChunkInput {
+            id: "grpc-sql-1".to_string(),
+            doc_id: "doc-1".to_string(),
+            content: "grpc sql endpoint".to_string(),
+            embedding: vec![1.0, 0.0],
+            metadata: json!({}),
+            source: None,
+        })?;
+        let state = Arc::new(Mutex::new(ControlPlaneState::new(
+            HaRuntimeProfile::default(),
+        )));
+        let config = ServerConfig::default();
+
+        let grpc_sql_req = make_request(
+            "POST",
+            "/grpc/sqlrite.v1.QueryService/Sql",
+            Some(r#"{"statement":"SELECT id, doc_id FROM chunks ORDER BY id ASC LIMIT 1;"}"#),
+            None,
+        );
+        let (status, _, body) = build_response(
+            &db,
+            db_file.path(),
+            DurabilityProfile::Balanced,
+            &config,
+            &state,
+            &grpc_sql_req,
+        )?;
+        assert_eq!(status, 200);
+        assert!(body.contains("\"kind\":\"query\""));
+        assert!(body.contains("\"row_count\":1"));
+        assert!(body.contains("grpc-sql-1"));
         Ok(())
     }
 

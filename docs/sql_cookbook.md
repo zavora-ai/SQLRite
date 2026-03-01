@@ -150,3 +150,73 @@ Artifacts:
 
 - `project_plan/reports/s07_sql_conformance.log`
 - `project_plan/reports/s07_sql_conformance.json`
+
+## API Parity (Sprint 21)
+
+S21 adds OpenAPI + gRPC-style query surfaces mapped to cookbook patterns.
+
+Start server:
+
+```bash
+cargo run -- serve --db sqlrite_cookbook.db --bind 127.0.0.1:8099
+```
+
+Fetch OpenAPI contract:
+
+```bash
+curl -fsS http://127.0.0.1:8099/v1/openapi.json | jq '.paths | keys'
+```
+
+Semantic retrieval (`query_text`):
+
+```bash
+curl -fsS -X POST \
+  -H "content-type: application/json" \
+  -d '{"query_text":"local agent memory","top_k":3}' \
+  http://127.0.0.1:8099/v1/query | jq
+```
+
+Vector retrieval (`query_embedding`):
+
+```bash
+curl -fsS -X POST \
+  -H "content-type: application/json" \
+  -d '{"query_embedding":[0.95,0.05,0.0],"top_k":3}' \
+  http://127.0.0.1:8099/v1/query | jq
+```
+
+Hybrid tuning (`alpha`) with metadata filter:
+
+```bash
+curl -fsS -X POST \
+  -H "content-type: application/json" \
+  -d '{"query_text":"agent","top_k":3,"alpha":0.65,"metadata_filters":{"tenant":"demo"}}' \
+  http://127.0.0.1:8099/v1/query | jq
+```
+
+Doc-scoped retrieval:
+
+```bash
+curl -fsS -X POST \
+  -H "content-type: application/json" \
+  -d '{"query_text":"agent","top_k":3,"doc_id":"doc-a"}' \
+  http://127.0.0.1:8099/v1/query | jq
+```
+
+gRPC-style HTTP JSON bridge (query):
+
+```bash
+curl -fsS -X POST \
+  -H "content-type: application/json" \
+  -d '{"query_text":"agent","top_k":3}' \
+  http://127.0.0.1:8099/grpc/sqlrite.v1.QueryService/Query | jq
+```
+
+gRPC-style HTTP JSON bridge (SQL):
+
+```bash
+curl -fsS -X POST \
+  -H "content-type: application/json" \
+  -d '{"statement":"SELECT id, doc_id FROM chunks ORDER BY id ASC LIMIT 3;"}' \
+  http://127.0.0.1:8099/grpc/sqlrite.v1.QueryService/Sql | jq
+```

@@ -843,19 +843,87 @@ curl -fsS -X POST \
   http://127.0.0.1:8099/v1/query | jq
 ```
 
+Sample output:
+
+```json
+{
+  "kind": "query",
+  "row_count": 3,
+  "rows": [
+    {
+      "chunk_id": "demo-1",
+      "doc_id": "doc-a",
+      "content": "Rust and SQLite are ideal for local-first AI agents.",
+      "vector_score": 0.0,
+      "text_score": 0.0,
+      "hybrid_score": 0.0,
+      "metadata": {
+        "tenant": "demo",
+        "topic": "agent-memory"
+      }
+    },
+    {
+      "chunk_id": "demo-2",
+      "doc_id": "doc-b",
+      "content": "Hybrid retrieval mixes vector search with keyword signals.",
+      "vector_score": 0.0,
+      "text_score": 0.0,
+      "hybrid_score": 0.0,
+      "metadata": {
+        "tenant": "demo",
+        "topic": "retrieval"
+      }
+    },
+    {
+      "chunk_id": "demo-3",
+      "doc_id": "doc-c",
+      "content": "Deterministic scoring keeps retrieval stable across runs.",
+      "vector_score": 0.0,
+      "text_score": 0.0,
+      "hybrid_score": 0.0,
+      "metadata": {
+        "tenant": "demo",
+        "topic": "stability"
+      }
+    }
+  ]
+}
+```
+
 OpenAPI contract fetch:
 
 ```bash
-curl -fsS http://127.0.0.1:8099/v1/openapi.json | jq
+curl -fsS http://127.0.0.1:8099/v1/openapi.json | jq '.paths | keys'
 ```
 
-gRPC-style bridge example:
+Sample output:
+
+```json
+[
+  "/grpc/sqlrite.v1.QueryService/Query",
+  "/grpc/sqlrite.v1.QueryService/Sql",
+  "/v1/openapi.json",
+  "/v1/query",
+  "/v1/sql"
+]
+```
+
+gRPC-style bridge query example:
 
 ```bash
 curl -fsS -X POST \
   -H "content-type: application/json" \
   -d '{"query_text":"agent memory","top_k":3}' \
   http://127.0.0.1:8099/grpc/sqlrite.v1.QueryService/Query | jq
+```
+
+gRPC-style bridge SQL example:
+
+```bash
+curl -fsS -X POST \
+  -H "content-type: application/json" \
+  -d '{"statement":"SELECT id, doc_id FROM chunks ORDER BY id ASC LIMIT 2;"}' \
+  http://127.0.0.1:8099/grpc/sqlrite.v1.QueryService/Sql | jq
 ```
 
 Replication + election protocol example:

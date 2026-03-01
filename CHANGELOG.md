@@ -246,6 +246,11 @@ The format is based on Keep a Changelog.
   - `project_plan/reports/s20_quality_gates.log`
   - `project_plan/reports/s20_mcp_smoke.log`
   - `project_plan/reports/s20_benchmark_mcp.json`
+- Sprint 21 evidence artifacts:
+  - `project_plan/reports/S21.md`
+  - `project_plan/reports/s21_quality_gates.log`
+  - `project_plan/reports/s21_openapi_grpc_smoke.log`
+  - `project_plan/reports/s21_benchmark_query_api.json`
 
 ### Changed
 
