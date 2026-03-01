@@ -1,0 +1,29 @@
+[typescript-sdk-install]
+
+up to date, audited 2 packages in 1s
+
+found 0 vulnerabilities
+[typescript-sdk-test]
+
+> @sqlrite/sdk@0.1.0 test
+> npm run build && node --test tests/integration.test.mjs
+
+
+> @sqlrite/sdk@0.1.0 build
+> tsc -p tsconfig.json
+
+✔ openapi exposes query endpoint (74.585042ms)
+✔ query returns rows (8.507083ms)
+✔ sql returns deterministic row count (4.794333ms)
+✔ query validation errors map to typed sdk error (5.119667ms)
+ℹ tests 4
+ℹ suites 0
+ℹ pass 4
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1069.618708
+[typescript-sdk-pack]
+sqlrite-sdk-0.1.0.tgz
+[s24-typescript-sdk-smoke-complete] log=project_plan/reports/s24_typescript_sdk_smoke.log

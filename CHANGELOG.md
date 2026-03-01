@@ -254,6 +254,12 @@ The format is based on Keep a Changelog.
   - integration tests: `sdk/python/tests/test_client.py`
   - packaging metadata: `sdk/python/pyproject.toml`
   - CI pipeline: `.github/workflows/python-sdk.yml`
+- S24 TypeScript SDK baseline:
+  - package root: `sdk/typescript`
+  - SDK client: `sdk/typescript/src/client.ts`
+  - integration tests: `sdk/typescript/tests/integration.test.mjs`
+  - packaging metadata: `sdk/typescript/package.json`, `sdk/typescript/tsconfig.json`
+  - cross-platform CI matrix: `.github/workflows/typescript-sdk.yml`
 - Sprint 20 evidence artifacts:
   - `project_plan/reports/S20.md`
   - `project_plan/reports/s20_quality_gates.log`
@@ -274,6 +280,11 @@ The format is based on Keep a Changelog.
   - `project_plan/reports/s23_quality_gates.log`
   - `project_plan/reports/s23_python_sdk_smoke.log`
   - `project_plan/reports/s23_benchmark_python_sdk.json`
+- Sprint 24 evidence artifacts:
+  - `project_plan/reports/S24.md`
+  - `project_plan/reports/s24_quality_gates.log`
+  - `project_plan/reports/s24_typescript_sdk_smoke.log`
+  - `project_plan/reports/s24_benchmark_typescript_sdk.json`
 
 ### Changed
 

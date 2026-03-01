@@ -212,3 +212,14 @@ S23 Python SDK additions:
 - `.github/workflows/python-sdk.yml`
 4. Python SDK smoke + dist generation:
 - `scripts/run-s23-python-sdk-smoke.sh`
+
+S24 TypeScript SDK additions:
+
+1. TypeScript package root:
+- `sdk/typescript/`
+2. Integration tests against `sqlrite serve`:
+- `sdk/typescript/tests/integration.test.mjs`
+3. Cross-platform TypeScript SDK CI matrix:
+- `.github/workflows/typescript-sdk.yml`
+4. TypeScript SDK smoke + npm pack generation:
+- `scripts/run-s24-typescript-sdk-smoke.sh`

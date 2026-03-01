@@ -1157,6 +1157,39 @@ Artifacts produced by the harness:
 - `project_plan/reports/s23_python_sdk_smoke.log`
 - `project_plan/reports/s23_python_dist/`
 
+## TypeScript SDK (Sprint 24)
+
+Install dependencies and build:
+
+```bash
+npm --prefix sdk/typescript install
+npm --prefix sdk/typescript run build
+```
+
+SDK usage:
+
+```ts
+import { SqlRiteClient } from "@sqlrite/sdk";
+
+const client = new SqlRiteClient("http://127.0.0.1:8099");
+const health = await client.health();
+const query = await client.query({ query_text: "agent memory", top_k: 2 });
+const sql = await client.sql("SELECT id, doc_id FROM chunks ORDER BY id ASC LIMIT 2;");
+
+console.log(health, query, sql);
+```
+
+Reproducible TypeScript SDK integration + packaging smoke:
+
+```bash
+bash scripts/run-s24-typescript-sdk-smoke.sh
+```
+
+Artifacts produced by the harness:
+
+- `project_plan/reports/s24_typescript_sdk_smoke.log`
+- `project_plan/reports/s24_typescript_dist/`
+
 Reproducible S16 smoke harness:
 
 ```bash
