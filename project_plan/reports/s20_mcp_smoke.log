@@ -1,0 +1,124 @@
+[manifest]
+{
+  "auth": {
+    "argument": "auth_token",
+    "required": true,
+    "type": "static_token"
+  },
+  "name": "sqlrite-mcp",
+  "tools": [
+    {
+      "description": "Hybrid vector+text retrieval over SQLRite chunks",
+      "inputSchema": {
+        "properties": {
+          "alpha": {
+            "type": "number"
+          },
+          "candidate_limit": {
+            "type": "integer"
+          },
+          "doc_id": {
+            "type": "string"
+          },
+          "metadata_filters": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "query_embedding": {
+            "items": {
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "query_text": {
+            "type": "string"
+          },
+          "top_k": {
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "name": "search"
+    },
+    {
+      "description": "Ingest chunks into SQLRite",
+      "inputSchema": {
+        "properties": {
+          "chunks": {
+            "type": "array"
+          }
+        },
+        "required": [
+          "chunks"
+        ],
+        "type": "object"
+      },
+      "name": "ingest"
+    },
+    {
+      "description": "Get integrity and index health report",
+      "inputSchema": {
+        "properties": {},
+        "type": "object"
+      },
+      "name": "health"
+    },
+    {
+      "description": "Delete chunks by exact metadata key/value",
+      "inputSchema": {
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "value"
+        ],
+        "type": "object"
+      },
+      "name": "delete_by_metadata"
+    }
+  ],
+  "transport": {
+    "args": [
+      "mcp"
+    ],
+    "command": "sqlrite",
+    "type": "stdio"
+  },
+  "version": "0.1.0"
+}
+\n[mcp-raw-responses]
+Content-Length: 163
+
+
+
+{"id":1,"jsonrpc":"2.0","result":{"capabilities":{"tools":{"listChanged":false}},"protocolVersion":"2024-11-05","serverInfo":{"name":"sqlrite","version":"0.1.0"}}}Content-Length: 950
+
+
+
+{"id":2,"jsonrpc":"2.0","result":{"tools":[{"description":"Hybrid vector+text retrieval over SQLRite chunks","inputSchema":{"properties":{"alpha":{"type":"number"},"candidate_limit":{"type":"integer"},"doc_id":{"type":"string"},"metadata_filters":{"additionalProperties":{"type":"string"},"type":"object"},"query_embedding":{"items":{"type":"number"},"type":"array"},"query_text":{"type":"string"},"top_k":{"type":"integer"}},"type":"object"},"name":"search"},{"description":"Ingest chunks into SQLRite","inputSchema":{"properties":{"chunks":{"type":"array"}},"required":["chunks"],"type":"object"},"name":"ingest"},{"description":"Get integrity and index health report","inputSchema":{"properties":{},"type":"object"},"name":"health"},{"description":"Delete chunks by exact metadata key/value","inputSchema":{"properties":{"key":{"type":"string"},"value":{"type":"string"}},"required":["key","value"],"type":"object"},"name":"delete_by_metadata"}]}}Content-Length: 559
+
+
+
+{"id":3,"jsonrpc":"2.0","result":{"content":[{"text":"{\n  \"chunk_count\": 3,\n  \"integrity_check_ok\": true,\n  \"schema_version\": 3,\n  \"vector_index_entries\": 3,\n  \"vector_index_estimated_memory_bytes\": 174,\n  \"vector_index_mode\": \"brute_force\",\n  \"vector_index_storage_kind\": \"f32\"\n}","type":"text"}],"isError":false,"structuredContent":{"chunk_count":3,"integrity_check_ok":true,"schema_version":3,"vector_index_entries":3,"vector_index_estimated_memory_bytes":174,"vector_index_mode":"brute_force","vector_index_storage_kind":"f32"}}}Content-Length: 1182
+
+
+
+{"id":4,"jsonrpc":"2.0","result":{"content":[{"text":"[\n  {\n    \"chunk_id\": \"demo-1\",\n    \"content\": \"Rust and SQLite are ideal for local-first AI agents.\",\n    \"doc_id\": \"doc-a\",\n    \"hybrid_score\": 1.0,\n    \"metadata\": {\n      \"tenant\": \"demo\",\n      \"topic\": \"agent-memory\"\n    },\n    \"text_score\": 1.0,\n    \"vector_score\": 0.0\n  },\n  {\n    \"chunk_id\": \"demo-2\",\n    \"content\": \"Hybrid retrieval mixes vector search with keyword signals.\",\n    \"doc_id\": \"doc-b\",\n    \"hybrid_score\": 0.0,\n    \"metadata\": {\n      \"tenant\": \"demo\",\n      \"topic\": \"retrieval\"\n    },\n    \"text_score\": 0.0,\n    \"vector_score\": 0.0\n  }\n]","type":"text"}],"isError":false,"structuredContent":[{"chunk_id":"demo-1","content":"Rust and SQLite are ideal for local-first AI agents.","doc_id":"doc-a","hybrid_score":1.0,"metadata":{"tenant":"demo","topic":"agent-memory"},"text_score":1.0,"vector_score":0.0},{"chunk_id":"demo-2","content":"Hybrid retrieval mixes vector search with keyword signals.","doc_id":"doc-b","hybrid_score":0.0,"metadata":{"tenant":"demo","topic":"retrieval"},"text_score":0.0,"vector_score":0.0}]}}Content-Length: 139
+
+
+
+{"error":{"code":-32001,"data":{"hint":"provide matching arguments.auth_token"},"message":"unauthorized tool call"},"id":5,"jsonrpc":"2.0"}\n[assertions]
+initialize_protocol_version=ok
+tools_list_contains_search=ok
+authorized_tool_call=ok
+unauthorized_tool_call_rejected=ok
+\n[s20-mcp-smoke-complete] log=project_plan/reports/s20_mcp_smoke.log

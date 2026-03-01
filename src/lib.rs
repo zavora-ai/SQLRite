@@ -4,6 +4,7 @@ mod error;
 mod eval;
 mod ha;
 mod ingest;
+mod mcp;
 mod ops;
 mod reindex;
 mod security;
@@ -28,6 +29,7 @@ pub use ingest::{
     IngestionReport, IngestionRequest, IngestionSource, IngestionWorker,
     OpenAiCompatibleEmbeddingProvider,
 };
+pub use mcp::{McpServerConfig, mcp_tools_manifest_document, run_stdio_mcp_server};
 pub use ops::{
     BackupPruneReport, BackupSnapshotRecord, HealthReport, backup_file, build_health_report,
     create_backup_snapshot, list_backup_snapshots, prune_backup_snapshots, restore_backup_file,

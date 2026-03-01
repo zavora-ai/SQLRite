@@ -6,10 +6,11 @@ use serde::Serialize;
 use serde_json::{Map, Value, json};
 use sqlrite::{
     BenchmarkConfig, ChunkInput, CompactionOptions, DurabilityProfile, FailoverMode,
-    FusionStrategy, HaRuntimeProfile, RecoveryConfig, ReplicationConfig, RuntimeConfig,
-    SearchRequest, ServerConfig, ServerRole, SqlRite, VectorIndexMode, VectorStorageKind,
-    backup_file, build_health_report, create_backup_snapshot, list_backup_snapshots,
-    prune_backup_snapshots, restore_backup_file, restore_backup_file_verified, run_benchmark,
+    FusionStrategy, HaRuntimeProfile, McpServerConfig, RecoveryConfig, ReplicationConfig,
+    RuntimeConfig, SearchRequest, ServerConfig, ServerRole, SqlRite, VectorIndexMode,
+    VectorStorageKind, backup_file, build_health_report, create_backup_snapshot,
+    list_backup_snapshots, mcp_tools_manifest_document, prune_backup_snapshots,
+    restore_backup_file, restore_backup_file_verified, run_benchmark, run_stdio_mcp_server,
     select_backup_snapshot_for_time, serve_health_endpoints, verify_backup_file,
 };
 use std::collections::{HashMap, HashSet};
@@ -37,6 +38,7 @@ fn dispatch_command(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>>
         "query" => cmd_query(&args[1..]),
         "quickstart" => cmd_quickstart(&args[1..]),
         "serve" => cmd_serve(&args[1..]),
+        "mcp" => cmd_mcp(&args[1..]),
         "backup" => cmd_backup(&args[1..]),
         "compact" => cmd_compact(&args[1..]),
         "benchmark" => cmd_benchmark(&args[1..]),
@@ -1208,6 +1210,90 @@ fn parse_serve_args(args: &[String]) -> Result<ServeArgs, String> {
                 return Err(format!(
                     "unknown argument `{other}`\nusage: sqlrite serve [--db PATH] [--bind HOST:PORT] [--profile balanced|durable|fast_unsafe] [--index-mode brute_force|lsh_ann|hnsw_baseline|disabled] [--ha-role standalone|primary|replica] [--cluster-id ID] [--node-id ID] [--advertise HOST:PORT] [--peer HOST:PORT]... [--sync-ack-quorum N] [--heartbeat-ms N] [--election-timeout-ms N] [--max-replication-lag-ms N] [--failover manual|automatic] [--backup-dir DIR] [--snapshot-interval-s N] [--pitr-retention-s N] [--control-token TOKEN] [--disable-sql-endpoint]"
                 ))
+            }
+        }
+        i += 1;
+    }
+
+    Ok(out)
+}
+
+#[derive(Debug)]
+struct McpArgs {
+    db_path: PathBuf,
+    profile: DurabilityProfile,
+    index_mode: VectorIndexMode,
+    auth_token: Option<String>,
+    print_manifest: bool,
+}
+
+impl Default for McpArgs {
+    fn default() -> Self {
+        Self {
+            db_path: PathBuf::from("sqlrite.db"),
+            profile: DurabilityProfile::Balanced,
+            index_mode: VectorIndexMode::BruteForce,
+            auth_token: None,
+            print_manifest: false,
+        }
+    }
+}
+
+fn cmd_mcp(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    let parsed = parse_mcp_args(args).map_err(std::io::Error::other)?;
+    if parsed.print_manifest {
+        let manifest = mcp_tools_manifest_document(parsed.auth_token.is_some());
+        println!("{}", serde_json::to_string_pretty(&manifest)?);
+        return Ok(());
+    }
+
+    eprintln!(
+        "starting SQLRite MCP stdio server (db={} auth_required={})",
+        parsed.db_path.display(),
+        parsed.auth_token.is_some()
+    );
+
+    run_stdio_mcp_server(McpServerConfig {
+        db_path: parsed.db_path,
+        runtime: runtime_config(parsed.profile, parsed.index_mode),
+        auth_token: parsed.auth_token,
+    })
+    .map_err(|error| error.into())
+}
+
+fn parse_mcp_args(args: &[String]) -> Result<McpArgs, String> {
+    let mut out = McpArgs::default();
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--db" => {
+                i += 1;
+                out.db_path = PathBuf::from(parse_string(args, i, "--db")?);
+            }
+            "--profile" => {
+                i += 1;
+                out.profile = parse_profile(&parse_string(args, i, "--profile")?)?;
+            }
+            "--index-mode" => {
+                i += 1;
+                out.index_mode = parse_index_mode(&parse_string(args, i, "--index-mode")?)?;
+            }
+            "--auth-token" => {
+                i += 1;
+                out.auth_token = Some(parse_string(args, i, "--auth-token")?);
+            }
+            "--print-manifest" => {
+                out.print_manifest = true;
+            }
+            "--help" | "-h" => {
+                return Err(
+                    "usage: sqlrite mcp [--db PATH] [--profile balanced|durable|fast_unsafe] [--index-mode brute_force|lsh_ann|hnsw_baseline|disabled] [--auth-token TOKEN] [--print-manifest]".to_string(),
+                );
+            }
+            other => {
+                return Err(format!(
+                    "unknown argument `{other}`\nusage: sqlrite mcp [--db PATH] [--profile balanced|durable|fast_unsafe] [--index-mode brute_force|lsh_ann|hnsw_baseline|disabled] [--auth-token TOKEN] [--print-manifest]"
+                ));
             }
         }
         i += 1;
@@ -4219,7 +4305,7 @@ fn sql_value_to_json(value: ValueRef<'_>) -> Value {
 }
 
 fn usage() -> &'static str {
-    "sqlrite unified CLI\n\nusage:\n  sqlrite <command> [options]\n\ncommands:\n  init       Create/open a SQLRite database and apply runtime profile\n  sql        Execute SQL or enter interactive SQL shell\n  ingest     Ingest a single chunk directly from CLI flags\n  query      Run text/vector/hybrid retrieval query\n  quickstart Run init->query UX flow with telemetry/gates\n  serve      Start server (health/readiness/metrics + HA control plane + SQL API)\n  backup     Create, verify, snapshot, restore, PITR-restore, or prune backups\n  compact    Run ingestion-compaction maintenance workflow\n  benchmark  Run synthetic retrieval benchmark\n  doctor     Run environment and database health checks\n\nenv overrides:\n  SQLRITE_VECTOR_STORAGE=f32|f16|int8\n  SQLRITE_ANN_MIN_CANDIDATES=<int>\n  SQLRITE_ANN_MAX_HAMMING_RADIUS=<int>\n  SQLRITE_ANN_MAX_CANDIDATE_MULTIPLIER=<int>\n  SQLRITE_ENABLE_ANN_PERSISTENCE=true|false\n  SQLRITE_SQLITE_MMAP_SIZE=<bytes>\n  SQLRITE_SQLITE_CACHE_SIZE_KIB=<kib>\n\nexamples:\n  sqlrite init --db sqlrite_demo.db --seed-demo\n  sqlrite quickstart --db sqlrite_demo.db --runs 5 --max-median-ms 180000 --min-success-rate 0.95\n  sqlrite query --db sqlrite_demo.db --text \"agents local memory\" --top-k 3\n  sqlrite backup snapshot --source sqlrite_demo.db --backup-dir ./backups --note pre_release\n  sqlrite backup pitr-restore --backup-dir ./backups --target-unix-ms 1772000000000 --dest restored.db --verify\n  sqlrite compact --db sqlrite_demo.db --json\n  sqlrite doctor --db sqlrite_demo.db --json\n  sqlrite sql --db sqlrite_demo.db\n  sqlrite sql --db sqlrite_demo.db --execute \"SELECT id, doc_id FROM chunks LIMIT 3;\""
+    "sqlrite unified CLI\n\nusage:\n  sqlrite <command> [options]\n\ncommands:\n  init       Create/open a SQLRite database and apply runtime profile\n  sql        Execute SQL or enter interactive SQL shell\n  ingest     Ingest a single chunk directly from CLI flags\n  query      Run text/vector/hybrid retrieval query\n  quickstart Run init->query UX flow with telemetry/gates\n  serve      Start server (health/readiness/metrics + HA control plane + SQL API)\n  mcp        Start MCP stdio tool server or print MCP manifest\n  backup     Create, verify, snapshot, restore, PITR-restore, or prune backups\n  compact    Run ingestion-compaction maintenance workflow\n  benchmark  Run synthetic retrieval benchmark\n  doctor     Run environment and database health checks\n\nenv overrides:\n  SQLRITE_VECTOR_STORAGE=f32|f16|int8\n  SQLRITE_ANN_MIN_CANDIDATES=<int>\n  SQLRITE_ANN_MAX_HAMMING_RADIUS=<int>\n  SQLRITE_ANN_MAX_CANDIDATE_MULTIPLIER=<int>\n  SQLRITE_ENABLE_ANN_PERSISTENCE=true|false\n  SQLRITE_SQLITE_MMAP_SIZE=<bytes>\n  SQLRITE_SQLITE_CACHE_SIZE_KIB=<kib>\n\nexamples:\n  sqlrite init --db sqlrite_demo.db --seed-demo\n  sqlrite quickstart --db sqlrite_demo.db --runs 5 --max-median-ms 180000 --min-success-rate 0.95\n  sqlrite query --db sqlrite_demo.db --text \"agents local memory\" --top-k 3\n  sqlrite mcp --db sqlrite_demo.db --print-manifest\n  sqlrite mcp --db sqlrite_demo.db --auth-token dev-token\n  sqlrite backup snapshot --source sqlrite_demo.db --backup-dir ./backups --note pre_release\n  sqlrite backup pitr-restore --backup-dir ./backups --target-unix-ms 1772000000000 --dest restored.db --verify\n  sqlrite compact --db sqlrite_demo.db --json\n  sqlrite doctor --db sqlrite_demo.db --json\n  sqlrite sql --db sqlrite_demo.db\n  sqlrite sql --db sqlrite_demo.db --execute \"SELECT id, doc_id FROM chunks LIMIT 3;\""
 }
 
 #[cfg(test)]
@@ -4396,6 +4482,40 @@ mod tests {
         assert!(usage.contains("backup snapshot"));
         assert!(usage.contains("backup pitr-restore"));
         assert!(usage.contains("backup prune"));
+    }
+
+    #[test]
+    fn mcp_args_default_values_are_stable() -> Result<(), Box<dyn std::error::Error>> {
+        let parsed = parse_mcp_args(&[]).map_err(std::io::Error::other)?;
+        assert_eq!(parsed.db_path, PathBuf::from("sqlrite.db"));
+        assert_eq!(parsed.profile, DurabilityProfile::Balanced);
+        assert_eq!(parsed.index_mode, VectorIndexMode::BruteForce);
+        assert!(parsed.auth_token.is_none());
+        assert!(!parsed.print_manifest);
+        Ok(())
+    }
+
+    #[test]
+    fn mcp_args_parse_auth_and_manifest_flags() -> Result<(), Box<dyn std::error::Error>> {
+        let parsed = parse_mcp_args(&[
+            "--db".to_string(),
+            "agent.db".to_string(),
+            "--profile".to_string(),
+            "durable".to_string(),
+            "--index-mode".to_string(),
+            "hnsw_baseline".to_string(),
+            "--auth-token".to_string(),
+            "token-1".to_string(),
+            "--print-manifest".to_string(),
+        ])
+        .map_err(std::io::Error::other)?;
+
+        assert_eq!(parsed.db_path, PathBuf::from("agent.db"));
+        assert_eq!(parsed.profile, DurabilityProfile::Durable);
+        assert_eq!(parsed.index_mode, VectorIndexMode::HnswBaseline);
+        assert_eq!(parsed.auth_token.as_deref(), Some("token-1"));
+        assert!(parsed.print_manifest);
+        Ok(())
     }
 
     #[test]

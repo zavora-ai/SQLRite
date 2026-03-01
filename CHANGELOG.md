@@ -230,6 +230,17 @@ The format is based on Keep a Changelog.
   - `project_plan/reports/s19_dr_gameday.log`
   - `project_plan/reports/s19_soak_slo_summary.json`
   - `project_plan/reports/s19_benchmark_dr_gate.json`
+- S20 MCP tool-server baseline:
+  - new unified CLI command: `sqlrite mcp`
+  - dedicated binary: `sqlrite-mcp`
+  - MCP stdio runtime with JSON-RPC + `Content-Length` framing
+  - methods: `initialize`, `ping`, `tools/list`, `tools/call`
+  - manifest generation with transport/auth/tool schemas
+- Sprint 20 evidence artifacts:
+  - `project_plan/reports/S20.md`
+  - `project_plan/reports/s20_quality_gates.log`
+  - `project_plan/reports/s20_mcp_smoke.log`
+  - `project_plan/reports/s20_benchmark_mcp.json`
 
 ### Changed
 

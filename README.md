@@ -918,6 +918,58 @@ Sample output (`/control/v1/slo/report`):
 }
 ```
 
+## MCP Tool Server Mode (Sprint 20)
+
+Start MCP stdio server from unified CLI:
+
+```bash
+sqlrite mcp --db sqlrite_demo.db --auth-token dev-token
+```
+
+Print MCP manifest document for agent/runtime wiring:
+
+```bash
+sqlrite mcp --db sqlrite_demo.db --auth-token dev-token --print-manifest
+```
+
+Dedicated binary variant:
+
+```bash
+cargo run --bin sqlrite-mcp -- --db sqlrite_demo.db --auth-token dev-token
+```
+
+Supported MCP methods:
+
+- `initialize`
+- `ping`
+- `tools/list`
+- `tools/call`
+
+Tool auth baseline:
+
+- when `--auth-token` is set, every `tools/call` request must include `arguments.auth_token`.
+- unauthorized calls return JSON-RPC error code `-32001`.
+
+Quick framed request example (`tools/list`):
+
+```text
+Content-Length: 58
+
+{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}
+```
+
+Reproducible S20 MCP smoke harness:
+
+```bash
+cargo build --bin sqlrite
+scripts/run-s20-mcp-smoke.sh
+```
+
+Artifacts produced by the harness:
+
+- `project_plan/reports/s20_mcp_smoke.log`
+- `project_plan/reports/s20_benchmark_mcp.json`
+
 Reproducible S16 smoke harness:
 
 ```bash

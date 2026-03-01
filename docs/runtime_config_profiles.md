@@ -171,3 +171,10 @@ S19 reliability gate additions:
 3. SLO validation targets used in reference drills:
 - availability `>= 99.95%`
 - RPO `<= 60s`
+
+S20 agent interoperability additions:
+
+1. MCP runtime command surface:
+- `sqlrite mcp [--db PATH] [--profile ...] [--index-mode ...] [--auth-token TOKEN] [--print-manifest]`
+2. MCP manifest generation exposes transport/tool/auth contract for agent runtimes.
+3. Dedicated MCP runtime binary available as `sqlrite-mcp`.
