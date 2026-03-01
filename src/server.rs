@@ -1,7 +1,7 @@
 use crate::{
     DurabilityProfile, FailoverMode, HaRuntimeProfile, HaRuntimeState, ReplicationLog,
-    ReplicationLogEntry, Result, RuntimeConfig, ServerRole, SqlRite, build_health_report,
-    create_backup_snapshot, execute_sql_statement_json, list_backup_snapshots,
+    ReplicationLogEntry, Result, RuntimeConfig, SearchRequest, ServerRole, SqlRite,
+    build_health_report, create_backup_snapshot, execute_sql_statement_json, list_backup_snapshots,
     prepare_sql_connection, prune_backup_snapshots, restore_backup_file_verified,
     select_backup_snapshot_for_time,
 };
@@ -130,7 +130,13 @@ impl ObservabilityState {
         }
 
         let (raw_path, _) = split_path_and_query(path);
-        if raw_path == "/v1/sql" {
+        if matches!(
+            raw_path,
+            "/v1/sql"
+                | "/v1/query"
+                | "/grpc/sqlrite.v1.QueryService/Query"
+                | "/grpc/sqlrite.v1.QueryService/Sql"
+        ) {
             self.sql_requests_total = self.sql_requests_total.saturating_add(1);
             self.sql_latency_total_ms = self
                 .sql_latency_total_ms
@@ -376,6 +382,17 @@ struct HttpRequest {
 #[derive(Debug, Deserialize)]
 struct SqlApiRequest {
     statement: String,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct QueryApiRequest {
+    query_text: Option<String>,
+    query_embedding: Option<Vec<f32>>,
+    top_k: Option<usize>,
+    alpha: Option<f32>,
+    candidate_limit: Option<usize>,
+    metadata_filters: Option<HashMap<String, String>>,
+    doc_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -1806,6 +1823,11 @@ fn build_response(
             });
             Ok((200, "application/json", payload.to_string()))
         }
+        ("GET", "/v1/openapi.json") => Ok((
+            200,
+            "application/json",
+            openapi_query_document(config.enable_sql_endpoint).to_string(),
+        )),
         ("POST", "/v1/sql") if config.enable_sql_endpoint => {
             let sql_request = match parse_json_body::<SqlApiRequest>(request) {
                 Ok(payload) => payload,
@@ -1814,36 +1836,44 @@ fn build_response(
                     return Ok((400, "application/json", payload.to_string()));
                 }
             };
-
-            if sql_request.statement.trim().is_empty() {
-                return Ok((
-                    400,
-                    "application/json",
-                    json!({"error": "statement cannot be empty"}).to_string(),
-                ));
-            }
-
-            let conn = match Connection::open(db_path) {
-                Ok(conn) => conn,
+            execute_sql_api_statement(db_path, sql_profile, &sql_request.statement)
+        }
+        ("POST", "/v1/query") if config.enable_sql_endpoint => {
+            let input = match parse_json_body::<QueryApiRequest>(request) {
+                Ok(payload) => payload,
                 Err(error) => {
-                    return Ok((
-                        500,
-                        "application/json",
-                        json!({"error": format!("failed to open database: {error}")}).to_string(),
-                    ));
+                    let payload = json!({"error": error});
+                    return Ok((400, "application/json", payload.to_string()));
                 }
             };
-
-            if let Err(error) = prepare_sql_connection(&conn, sql_profile) {
-                return Ok((
-                    500,
+            match execute_query_api(db, input) {
+                Ok(payload) => Ok((200, "application/json", payload.to_string())),
+                Err(error) => Ok((
+                    400,
                     "application/json",
-                    json!({"error": format!("failed to initialize sql runtime: {error}")})
-                        .to_string(),
-                ));
+                    json!({"error": error.to_string()}).to_string(),
+                )),
             }
-
-            match execute_sql_statement_json(&conn, &sql_request.statement) {
+        }
+        ("POST", "/grpc/sqlrite.v1.QueryService/Sql") if config.enable_sql_endpoint => {
+            let sql_request = match parse_json_body::<SqlApiRequest>(request) {
+                Ok(payload) => payload,
+                Err(error) => {
+                    let payload = json!({"error": error});
+                    return Ok((400, "application/json", payload.to_string()));
+                }
+            };
+            execute_sql_api_statement(db_path, sql_profile, &sql_request.statement)
+        }
+        ("POST", "/grpc/sqlrite.v1.QueryService/Query") if config.enable_sql_endpoint => {
+            let input = match parse_json_body::<QueryApiRequest>(request) {
+                Ok(payload) => payload,
+                Err(error) => {
+                    let payload = json!({"error": error});
+                    return Ok((400, "application/json", payload.to_string()));
+                }
+            };
+            match execute_query_api(db, input) {
                 Ok(payload) => Ok((200, "application/json", payload.to_string())),
                 Err(error) => Ok((
                     400,
@@ -1867,8 +1897,231 @@ fn build_response(
             "application/json",
             json!({"error": "method not allowed; use POST /v1/sql"}).to_string(),
         )),
+        (method, "/v1/query") if method != "POST" => Ok((
+            405,
+            "application/json",
+            json!({"error": "method not allowed; use POST /v1/query"}).to_string(),
+        )),
+        (method, "/grpc/sqlrite.v1.QueryService/Sql") if method != "POST" => Ok((
+            405,
+            "application/json",
+            json!({"error": "method not allowed; use POST /grpc/sqlrite.v1.QueryService/Sql"})
+                .to_string(),
+        )),
+        (method, "/grpc/sqlrite.v1.QueryService/Query") if method != "POST" => Ok((
+            405,
+            "application/json",
+            json!({"error": "method not allowed; use POST /grpc/sqlrite.v1.QueryService/Query"})
+                .to_string(),
+        )),
         _ => Ok((404, "text/plain; charset=utf-8", "not found".to_string())),
     }
+}
+
+fn execute_sql_api_statement(
+    db_path: &Path,
+    sql_profile: DurabilityProfile,
+    statement: &str,
+) -> Result<(u16, &'static str, String)> {
+    if statement.trim().is_empty() {
+        return Ok((
+            400,
+            "application/json",
+            json!({"error": "statement cannot be empty"}).to_string(),
+        ));
+    }
+
+    let conn = match Connection::open(db_path) {
+        Ok(conn) => conn,
+        Err(error) => {
+            return Ok((
+                500,
+                "application/json",
+                json!({"error": format!("failed to open database: {error}")}).to_string(),
+            ));
+        }
+    };
+
+    if let Err(error) = prepare_sql_connection(&conn, sql_profile) {
+        return Ok((
+            500,
+            "application/json",
+            json!({"error": format!("failed to initialize sql runtime: {error}")}).to_string(),
+        ));
+    }
+
+    match execute_sql_statement_json(&conn, statement) {
+        Ok(payload) => Ok((200, "application/json", payload.to_string())),
+        Err(error) => Ok((
+            400,
+            "application/json",
+            json!({"error": error.to_string()}).to_string(),
+        )),
+    }
+}
+
+fn execute_query_api(db: &SqlRite, input: QueryApiRequest) -> Result<Value> {
+    let mut request = SearchRequest {
+        query_text: input.query_text,
+        query_embedding: input.query_embedding,
+        ..SearchRequest::default()
+    };
+    if let Some(top_k) = input.top_k {
+        request.top_k = top_k;
+    }
+    if let Some(alpha) = input.alpha {
+        request.alpha = alpha;
+    }
+    if let Some(candidate_limit) = input.candidate_limit {
+        request.candidate_limit = candidate_limit;
+    }
+    if let Some(metadata_filters) = input.metadata_filters {
+        request.metadata_filters = metadata_filters;
+    }
+    request.doc_id = input.doc_id;
+
+    let rows = db.search(request)?;
+    Ok(json!({
+        "kind": "query",
+        "row_count": rows.len(),
+        "rows": rows,
+    }))
+}
+
+fn openapi_query_document(sql_enabled: bool) -> Value {
+    let mut paths = serde_json::Map::new();
+    if sql_enabled {
+        paths.insert(
+            "/v1/sql".to_string(),
+            json!({
+                "post": {
+                    "summary": "Execute retrieval SQL statement",
+                    "requestBody": {
+                        "required": true,
+                        "content": {
+                            "application/json": {
+                                "schema": {"$ref": "#/components/schemas/SqlRequest"}
+                            }
+                        }
+                    },
+                    "responses": {
+                        "200": {"description": "Statement executed"},
+                        "400": {"description": "Invalid SQL request"}
+                    }
+                }
+            }),
+        );
+        paths.insert(
+            "/v1/query".to_string(),
+            json!({
+                "post": {
+                    "summary": "Run semantic/lexical/hybrid retrieval query",
+                    "requestBody": {
+                        "required": true,
+                        "content": {
+                            "application/json": {
+                                "schema": {"$ref": "#/components/schemas/QueryRequest"}
+                            }
+                        }
+                    },
+                    "responses": {
+                        "200": {"description": "Query results"},
+                        "400": {"description": "Invalid query request"}
+                    }
+                }
+            }),
+        );
+        paths.insert(
+            "/grpc/sqlrite.v1.QueryService/Sql".to_string(),
+            json!({
+                "post": {
+                    "summary": "gRPC-compat SQL query method over HTTP JSON bridge",
+                    "requestBody": {
+                        "required": true,
+                        "content": {
+                            "application/json": {
+                                "schema": {"$ref": "#/components/schemas/SqlRequest"}
+                            }
+                        }
+                    },
+                    "responses": {
+                        "200": {"description": "Statement executed"},
+                        "400": {"description": "Invalid SQL request"}
+                    }
+                }
+            }),
+        );
+        paths.insert(
+            "/grpc/sqlrite.v1.QueryService/Query".to_string(),
+            json!({
+                "post": {
+                    "summary": "gRPC-compat retrieval query method over HTTP JSON bridge",
+                    "requestBody": {
+                        "required": true,
+                        "content": {
+                            "application/json": {
+                                "schema": {"$ref": "#/components/schemas/QueryRequest"}
+                            }
+                        }
+                    },
+                    "responses": {
+                        "200": {"description": "Query results"},
+                        "400": {"description": "Invalid query request"}
+                    }
+                }
+            }),
+        );
+    }
+    paths.insert(
+        "/v1/openapi.json".to_string(),
+        json!({
+            "get": {
+                "summary": "Fetch OpenAPI document for query surfaces",
+                "responses": {
+                    "200": {"description": "OpenAPI document"}
+                }
+            }
+        }),
+    );
+
+    json!({
+        "openapi": "3.1.0",
+        "info": {
+            "title": "SQLRite Query API",
+            "version": env!("CARGO_PKG_VERSION"),
+            "description": "OpenAPI baseline for SQL and retrieval query surfaces."
+        },
+        "paths": paths,
+        "components": {
+            "schemas": {
+                "SqlRequest": {
+                    "type": "object",
+                    "required": ["statement"],
+                    "properties": {
+                        "statement": {"type": "string"}
+                    }
+                },
+                "QueryRequest": {
+                    "type": "object",
+                    "properties": {
+                        "query_text": {"type": "string"},
+                        "query_embedding": {
+                            "type": "array",
+                            "items": {"type": "number"}
+                        },
+                        "top_k": {"type": "integer", "minimum": 1},
+                        "alpha": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+                        "candidate_limit": {"type": "integer", "minimum": 1},
+                        "metadata_filters": {
+                            "type": "object",
+                            "additionalProperties": {"type": "string"}
+                        },
+                        "doc_id": {"type": "string"}
+                    }
+                }
+            }
+        }
+    })
 }
 
 fn split_path_and_query(path: &str) -> (&str, HashMap<String, String>) {
@@ -2070,6 +2323,7 @@ fn chaos_blocking_response(
     if control.chaos.has(ChaosScenario::DiskFull) {
         let blocks = path == "/control/v1/replication/append"
             || path == "/v1/sql"
+            || path == "/grpc/sqlrite.v1.QueryService/Sql"
             || path == "/control/v1/recovery/start"
             || path == "/control/v1/recovery/mark-restored"
             || path == "/control/v1/recovery/snapshot"
@@ -2658,6 +2912,82 @@ mod tests {
         )?;
         assert_eq!(status, 400);
         assert!(body.contains("statement"));
+        Ok(())
+    }
+
+    #[test]
+    fn openapi_endpoint_exposes_query_and_grpc_paths() -> Result<()> {
+        let db = SqlRite::open_in_memory_with_config(RuntimeConfig::default())?;
+        let state = Arc::new(Mutex::new(ControlPlaneState::new(
+            HaRuntimeProfile::default(),
+        )));
+        let request = make_request("GET", "/v1/openapi.json", None, None);
+
+        let (status, _content_type, body) = build_response(
+            &db,
+            Path::new(":memory:"),
+            DurabilityProfile::Balanced,
+            &ServerConfig::default(),
+            &state,
+            &request,
+        )?;
+        assert_eq!(status, 200);
+        assert!(body.contains("\"/v1/query\""));
+        assert!(body.contains("\"/grpc/sqlrite.v1.QueryService/Query\""));
+        assert!(body.contains("\"/grpc/sqlrite.v1.QueryService/Sql\""));
+        Ok(())
+    }
+
+    #[test]
+    fn query_and_grpc_query_endpoints_return_results() -> Result<()> {
+        let db = SqlRite::open_in_memory_with_config(RuntimeConfig::default())?;
+        db.ingest_chunk(&ChunkInput {
+            id: "query-1".to_string(),
+            doc_id: "doc-1".to_string(),
+            content: "agent query endpoint".to_string(),
+            embedding: vec![1.0, 0.0],
+            metadata: json!({"tenant": "demo"}),
+            source: None,
+        })?;
+        let state = Arc::new(Mutex::new(ControlPlaneState::new(
+            HaRuntimeProfile::default(),
+        )));
+        let config = ServerConfig::default();
+
+        let query_req = make_request(
+            "POST",
+            "/v1/query",
+            Some(r#"{"query_text":"agent","top_k":1}"#),
+            None,
+        );
+        let (status, _, body) = build_response(
+            &db,
+            Path::new(":memory:"),
+            DurabilityProfile::Balanced,
+            &config,
+            &state,
+            &query_req,
+        )?;
+        assert_eq!(status, 200);
+        assert!(body.contains("\"kind\":\"query\""));
+        assert!(body.contains("\"row_count\":1"));
+
+        let grpc_query_req = make_request(
+            "POST",
+            "/grpc/sqlrite.v1.QueryService/Query",
+            Some(r#"{"query_text":"agent","top_k":1}"#),
+            None,
+        );
+        let (status, _, body) = build_response(
+            &db,
+            Path::new(":memory:"),
+            DurabilityProfile::Balanced,
+            &config,
+            &state,
+            &grpc_query_req,
+        )?;
+        assert_eq!(status, 200);
+        assert!(body.contains("\"kind\":\"query\""));
         Ok(())
     }
 

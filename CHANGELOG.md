@@ -236,6 +236,11 @@ The format is based on Keep a Changelog.
   - MCP stdio runtime with JSON-RPC + `Content-Length` framing
   - methods: `initialize`, `ping`, `tools/list`, `tools/call`
   - manifest generation with transport/auth/tool schemas
+- S21 query API baseline:
+  - `GET /v1/openapi.json` OpenAPI contract endpoint
+  - `POST /v1/query` retrieval query endpoint
+  - `POST /grpc/sqlrite.v1.QueryService/Sql` gRPC-style SQL bridge endpoint
+  - `POST /grpc/sqlrite.v1.QueryService/Query` gRPC-style query bridge endpoint
 - Sprint 20 evidence artifacts:
   - `project_plan/reports/S20.md`
   - `project_plan/reports/s20_quality_gates.log`

@@ -747,6 +747,10 @@ Data-plane endpoints:
 - `GET /readyz`
 - `GET /metrics`
 - `POST /v1/sql` (retrieval SQL endpoint)
+- `POST /v1/query` (semantic/lexical/hybrid retrieval endpoint)
+- `GET /v1/openapi.json` (OpenAPI contract for query surfaces)
+- `POST /grpc/sqlrite.v1.QueryService/Sql` (gRPC-style SQL bridge over HTTP JSON)
+- `POST /grpc/sqlrite.v1.QueryService/Query` (gRPC-style query bridge over HTTP JSON)
 
 Control-plane endpoints:
 
@@ -828,6 +832,30 @@ Sample output:
     }
   ]
 }
+```
+
+Query API example:
+
+```bash
+curl -fsS -X POST \
+  -H "content-type: application/json" \
+  -d '{"query_text":"agent memory","top_k":3}' \
+  http://127.0.0.1:8099/v1/query | jq
+```
+
+OpenAPI contract fetch:
+
+```bash
+curl -fsS http://127.0.0.1:8099/v1/openapi.json | jq
+```
+
+gRPC-style bridge example:
+
+```bash
+curl -fsS -X POST \
+  -H "content-type: application/json" \
+  -d '{"query_text":"agent memory","top_k":3}' \
+  http://127.0.0.1:8099/grpc/sqlrite.v1.QueryService/Query | jq
 ```
 
 Replication + election protocol example:

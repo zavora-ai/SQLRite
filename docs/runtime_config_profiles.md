@@ -178,3 +178,13 @@ S20 agent interoperability additions:
 - `sqlrite mcp [--db PATH] [--profile ...] [--index-mode ...] [--auth-token TOKEN] [--print-manifest]`
 2. MCP manifest generation exposes transport/tool/auth contract for agent runtimes.
 3. Dedicated MCP runtime binary available as `sqlrite-mcp`.
+
+S21 query-surface interoperability additions:
+
+1. OpenAPI contract endpoint for query surfaces:
+- `GET /v1/openapi.json`
+2. Retrieval query API endpoint:
+- `POST /v1/query`
+3. gRPC-style HTTP JSON bridge endpoints:
+- `POST /grpc/sqlrite.v1.QueryService/Sql`
+- `POST /grpc/sqlrite.v1.QueryService/Query`
