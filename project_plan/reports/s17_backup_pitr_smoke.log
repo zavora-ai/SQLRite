@@ -1,0 +1,74 @@
+[readyz]
+{"active_chaos_faults":0,"commit_index":0,"ha_enabled":true,"last_log_index":0,"leader_id":"node-a","ready":true,"role":"primary","schema_version":3,"term":0}\n[snapshot-via-control-plane]
+{"backup_dir":"project_plan/reports/s17_backups","snapshot":{"chunk_count":3,"created_unix_ms":1772391291333,"integrity_ok":true,"note":"control_plane_snapshot","schema_version":3,"size_bytes":110592,"snapshot_id":"snap-1772391291333","snapshot_path":"project_plan/reports/s17_backups/snapshots/snap-1772391291333-control_plane_snapshot.db","source_db_path":"project_plan/reports/s17_server_recovery_smoke.db"}}\n[snapshots-via-control-plane]
+{"backup_dir":"project_plan/reports/s17_backups","count":1,"snapshots":[{"chunk_count":3,"created_unix_ms":1772391291333,"integrity_ok":true,"note":"control_plane_snapshot","schema_version":3,"size_bytes":110592,"snapshot_id":"snap-1772391291333","snapshot_path":"project_plan/reports/s17_backups/snapshots/snap-1772391291333-control_plane_snapshot.db","source_db_path":"project_plan/reports/s17_server_recovery_smoke.db"}]}\n[verify-restore-via-control-plane]
+{"artifact_kept":false,"restore_artifact_path":"project_plan/reports/s17_backups/restore_verification/verify-snap-1772391291333-1772391291364.db","restore_verified":true,"selected_snapshot":{"chunk_count":3,"created_unix_ms":1772391291333,"integrity_ok":true,"note":"control_plane_snapshot","schema_version":3,"size_bytes":110592,"snapshot_id":"snap-1772391291333","snapshot_path":"project_plan/reports/s17_backups/snapshots/snap-1772391291333-control_plane_snapshot.db","source_db_path":"project_plan/reports/s17_server_recovery_smoke.db"},"verification":{"chunk_count":3,"integrity_check_ok":true,"schema_version":3,"vector_index_entries":3,"vector_index_estimated_memory_bytes":174,"vector_index_mode":"brute_force","vector_index_storage_kind":"f32"}}\n[snapshot-via-cli]
+{
+  "snapshot_id": "snap-1772391291376",
+  "source_db_path": "project_plan/reports/s17_server_recovery_smoke.db",
+  "snapshot_path": "project_plan/reports/s17_backups/snapshots/snap-1772391291376-cli_snapshot.db",
+  "created_unix_ms": 1772391291376,
+  "size_bytes": 110592,
+  "note": "cli_snapshot",
+  "integrity_ok": true,
+  "chunk_count": 3,
+  "schema_version": 3
+}
+\n[list-via-cli]
+[
+  {
+    "snapshot_id": "snap-1772391291376",
+    "source_db_path": "project_plan/reports/s17_server_recovery_smoke.db",
+    "snapshot_path": "project_plan/reports/s17_backups/snapshots/snap-1772391291376-cli_snapshot.db",
+    "created_unix_ms": 1772391291376,
+    "size_bytes": 110592,
+    "note": "cli_snapshot",
+    "integrity_ok": true,
+    "chunk_count": 3,
+    "schema_version": 3
+  },
+  {
+    "snapshot_id": "snap-1772391291333",
+    "source_db_path": "project_plan/reports/s17_server_recovery_smoke.db",
+    "snapshot_path": "project_plan/reports/s17_backups/snapshots/snap-1772391291333-control_plane_snapshot.db",
+    "created_unix_ms": 1772391291333,
+    "size_bytes": 110592,
+    "note": "control_plane_snapshot",
+    "integrity_ok": true,
+    "chunk_count": 3,
+    "schema_version": 3
+  }
+]
+\n[pitr-restore-via-cli]
+{
+  "destination": "project_plan/reports/s17_server_recovery_smoke.db.restored.db",
+  "selected_snapshot": {
+    "chunk_count": 3,
+    "created_unix_ms": 1772391291376,
+    "integrity_ok": true,
+    "note": "cli_snapshot",
+    "schema_version": 3,
+    "size_bytes": 110592,
+    "snapshot_id": "snap-1772391291376",
+    "snapshot_path": "project_plan/reports/s17_backups/snapshots/snap-1772391291376-cli_snapshot.db",
+    "source_db_path": "project_plan/reports/s17_server_recovery_smoke.db"
+  },
+  "target_unix_ms": 1772391291999,
+  "verification": {
+    "chunk_count": 3,
+    "integrity_check_ok": true,
+    "schema_version": 3,
+    "vector_index_entries": 3,
+    "vector_index_estimated_memory_bytes": 174,
+    "vector_index_mode": "brute_force",
+    "vector_index_storage_kind": "f32"
+  }
+}
+\n[verify-restored-db-via-cli]
+backup verification:
+- integrity_ok=true
+- chunk_count=3
+- schema_version=3
+- index_mode=brute_force
+\n[prune-via-control-plane]
+{"backup_dir":"project_plan/reports/s17_backups","report":{"cutoff_unix_ms":1772391291436,"kept_count":1,"removed_count":1,"removed_paths":["project_plan/reports/s17_backups/snapshots/snap-1772391291333-control_plane_snapshot.db"],"retention_seconds":0}}\n[s17-smoke-complete] log=project_plan/reports/s17_backup_pitr_smoke.log

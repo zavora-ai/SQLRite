@@ -1,0 +1,5 @@
+[readyz]
+{"ha_enabled":true,"leader_id":"node-a","ready":true,"role":"primary","schema_version":3}\n[control-state]
+{"role":"primary","leader_id":"node-a","current_term":0,"commit_index":0,"last_applied_index":0,"replication_lag_ms":0,"failover_in_progress":false,"last_transition_unix_ms":1772343931447,"last_heartbeat_unix_ms":null,"last_recovery_event":null}\n[failover-start]
+{"role":"primary","leader_id":"node-a","current_term":0,"commit_index":0,"last_applied_index":0,"replication_lag_ms":0,"failover_in_progress":true,"last_transition_unix_ms":1772343931473,"last_heartbeat_unix_ms":null,"last_recovery_event":null}\n[sql]
+{"elapsed_ms":0.023625,"kind":"query","rewritten_statement":"SELECT COUNT(*) AS chunk_count FROM chunks;","row_count":1,"rows":[{"chunk_count":0}],"statement":"SELECT COUNT(*) AS chunk_count FROM chunks;"}

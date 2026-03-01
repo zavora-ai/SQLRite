@@ -1,0 +1,118 @@
+version: "3.9"
+
+services:
+  sqlrite-primary:
+    image: sqlrite:local
+    container_name: sqlrite-primary
+    command:
+      - serve
+      - --db
+      - /data/sqlrite.db
+      - --bind
+      - 0.0.0.0:8099
+      - --ha-role
+      - primary
+      - --cluster-id
+      - sqlrite-ha
+      - --node-id
+      - node-a
+      - --advertise
+      - sqlrite-primary:8099
+      - --peer
+      - sqlrite-replica-1:8099
+      - --peer
+      - sqlrite-replica-2:8099
+      - --sync-ack-quorum
+      - "2"
+      - --failover
+      - automatic
+      - --control-token
+      - ${SQLRITE_CONTROL_TOKEN:-dev-token}
+    ports:
+      - "8099:8099"
+    volumes:
+      - ./data/node-a:/data
+    networks:
+      - sqlrite-ha
+
+  sqlrite-replica-1:
+    image: sqlrite:local
+    container_name: sqlrite-replica-1
+    command:
+      - serve
+      - --db
+      - /data/sqlrite.db
+      - --bind
+      - 0.0.0.0:8099
+      - --ha-role
+      - replica
+      - --cluster-id
+      - sqlrite-ha
+      - --node-id
+      - node-b
+      - --advertise
+      - sqlrite-replica-1:8099
+      - --peer
+      - sqlrite-primary:8099
+      - --peer
+      - sqlrite-replica-2:8099
+      - --sync-ack-quorum
+      - "2"
+      - --failover
+      - automatic
+      - --control-token
+      - ${SQLRITE_CONTROL_TOKEN:-dev-token}
+    ports:
+      - "8199:8099"
+    volumes:
+      - ./data/node-b:/data
+    networks:
+      - sqlrite-ha
+
+  sqlrite-replica-2:
+    image: sqlrite:local
+    container_name: sqlrite-replica-2
+    command:
+      - serve
+      - --db
+      - /data/sqlrite.db
+      - --bind
+      - 0.0.0.0:8099
+      - --ha-role
+      - replica
+      - --cluster-id
+      - sqlrite-ha
+      - --node-id
+      - node-c
+      - --advertise
+      - sqlrite-replica-2:8099
+      - --peer
+      - sqlrite-primary:8099
+      - --peer
+      - sqlrite-replica-1:8099
+      - --sync-ack-quorum
+      - "2"
+      - --failover
+      - automatic
+      - --control-token
+      - ${SQLRITE_CONTROL_TOKEN:-dev-token}
+    ports:
+      - "8299:8099"
+    volumes:
+      - ./data/node-c:/data
+    networks:
+      - sqlrite-ha
+
+  prometheus:
+    image: prom/prometheus:v2.53.1
+    container_name: sqlrite-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    networks:
+      - sqlrite-ha
+
+networks:
+  sqlrite-ha:
+    driver: bridge

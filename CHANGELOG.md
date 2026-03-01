@@ -129,6 +129,107 @@ The format is based on Keep a Changelog.
 - S13 profile tuning updated high-scale candidate limits:
   - `1m` candidate_limit `2000 -> 1800`
   - `10m` candidate_limit `4000 -> 2400`
+- S14 HA profile and control-plane scaffolding:
+  - HA profile/state module (`src/ha.rs`) with validation and role/failover transitions
+  - control-plane endpoints in server mode (`/control/v1/profile`, `/control/v1/state`, `/control/v1/peers`, failover/recovery mutation routes)
+  - optional control-token enforcement for mutating control-plane operations
+- Server SQL API surface:
+  - `POST /v1/sql` endpoint for retrieval SQL execution in server mode
+  - shared retrieval SQL runtime bootstrap module (`src/sql_semantics.rs`) with vector operator rewrite and retrieval functions
+- S14 deployment and operations docs:
+  - `deploy/ha/docker-compose.reference.yml`
+  - `deploy/ha/prometheus.yml`
+  - `deploy/ha/k8s-service.yaml`
+  - `deploy/ha/k8s-statefulset.yaml`
+  - `deploy/ha/README.md`
+  - `docs/architecture/ha_replication_reference.md`
+  - `docs/runbooks/ha_control_plane.md`
+- Sprint 14 evidence artifacts:
+  - `project_plan/reports/S14.md`
+  - `project_plan/reports/s14_quality_gates.log`
+  - `project_plan/reports/s14_server_control_smoke.log`
+  - `project_plan/reports/s14_benchmark_server_semantics.json`
+- S15 replication log and election reliability primitives:
+  - replication log structs (`ReplicationLogEntry`, `ReplicationLog`) with checksum validation and conflict truncation
+  - runtime election/vote state fields (`current_term`, `voted_for`, `last_log_index`, `last_log_term`)
+  - quorum-based commit advancement from replica acknowledgements
+- S15 control-plane protocol endpoints:
+  - `GET /control/v1/replication/log`
+  - `POST /control/v1/replication/append`
+  - `POST /control/v1/replication/receive`
+  - `POST /control/v1/replication/ack`
+  - `POST /control/v1/replication/reconcile`
+  - `POST /control/v1/election/request-vote`
+  - `POST /control/v1/election/heartbeat`
+- S15 protocol persistence catalog:
+  - `replication_log`
+  - `election_votes`
+  - `replication_reconcile_events`
+  - `ha_runtime_markers`
+- Sprint 15 evidence artifacts:
+  - `project_plan/reports/S15.md`
+  - `project_plan/reports/s15_quality_gates.log`
+  - `project_plan/reports/s15_server_replication_smoke.log`
+  - `project_plan/reports/s15_benchmark_server_replication.json`
+- S16 automatic failover controller and resilience instrumentation:
+  - `GET /control/v1/failover/status`
+  - `GET /control/v1/resilience`
+  - `POST /control/v1/failover/auto-check`
+  - `POST /control/v1/recovery/start`
+  - resilience event persistence (`ha_resilience_events`) with failover/restore duration tracking
+- S16 chaos harness control-plane support:
+  - `GET /control/v1/chaos/status`
+  - `POST /control/v1/chaos/inject`
+  - `POST /control/v1/chaos/clear`
+  - supported scenarios: `node_crash`, `disk_full`, `partition_subset`
+  - chaos event persistence (`ha_chaos_events`)
+- S16 smoke harness automation:
+  - `scripts/run-s16-failover-chaos-smoke.sh`
+- Sprint 16 evidence artifacts:
+  - `project_plan/reports/S16.md`
+  - `project_plan/reports/s16_quality_gates.log`
+  - `project_plan/reports/s16_failover_chaos_smoke.log`
+  - `project_plan/reports/s16_benchmark_resilience.json`
+- S17 backup/restore and PITR lifecycle tooling:
+  - `sqlrite backup snapshot`
+  - `sqlrite backup list`
+  - `sqlrite backup restore`
+  - `sqlrite backup pitr-restore`
+  - `sqlrite backup prune`
+  - control-plane recovery endpoints:
+    - `POST /control/v1/recovery/snapshot`
+    - `GET /control/v1/recovery/snapshots`
+    - `POST /control/v1/recovery/verify-restore`
+    - `POST /control/v1/recovery/prune-snapshots`
+  - backup catalog persistence (`backup_catalog.jsonl`) and snapshot retention pruning
+- Sprint 17 evidence artifacts:
+  - `project_plan/reports/S17.md`
+  - `project_plan/reports/s17_quality_gates.log`
+  - `project_plan/reports/s17_backup_pitr_smoke.log`
+  - `project_plan/reports/s17_benchmark_recovery.json`
+- S18 observability and SLO operations surfaces:
+  - `GET /control/v1/observability/metrics-map`
+  - `GET /control/v1/traces/recent`
+  - `POST /control/v1/observability/reset`
+  - `GET /control/v1/alerts/templates`
+  - `POST /control/v1/alerts/simulate`
+  - `GET /control/v1/slo/report`
+  - expanded `/metrics` export for request/error/latency/traces/alert counters
+- Sprint 18 evidence artifacts:
+  - `project_plan/reports/S18.md`
+  - `project_plan/reports/s18_quality_gates.log`
+  - `project_plan/reports/s18_observability_smoke.log`
+  - `project_plan/reports/s18_benchmark_observability.json`
+- S19 disaster-recovery game-day and soak gate harness:
+  - `scripts/run-s19-dr-gameday.sh`
+  - chaos validation and backup/restore drill flow
+  - soak-window SLO summary artifact output
+- Sprint 19 evidence artifacts:
+  - `project_plan/reports/S19.md`
+  - `project_plan/reports/s19_quality_gates.log`
+  - `project_plan/reports/s19_dr_gameday.log`
+  - `project_plan/reports/s19_soak_slo_summary.json`
+  - `project_plan/reports/s19_benchmark_dr_gate.json`
 
 ### Changed
 
@@ -145,6 +246,10 @@ The format is based on Keep a Changelog.
 - `sqlrite-bench-matrix` now supports `10m` profile selection.
 - Benchmark CLI human output now includes runtime storage/cache settings and ingestion payload/index footprint metrics.
 - Benchmark report payload now includes `concurrency` and temp benchmark DB cleanup now runs on both success and failure paths for parallel runs.
+- `sqlrite serve` and `sqlrite-serve` now accept HA topology/failover/recovery flags and emit HA startup profile details.
+- Runtime Docker image now includes a `/readyz` container healthcheck.
+- `/control/v1/state` and `/metrics` now include replication log/election runtime signals (`last_log_index`, `last_log_term`, log length, term/commit progression).
+- `/metrics` now includes HA resilience and chaos drill signals (failover/restore durations and chaos-block counters).
 
 ## [0.1.0] - 2026-02-28
 

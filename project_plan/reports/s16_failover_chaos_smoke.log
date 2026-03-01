@@ -1,0 +1,37 @@
+[readyz-initial]
+{"active_chaos_faults":0,"commit_index":0,"ha_enabled":true,"last_log_index":0,"leader_id":null,"ready":false,"role":"replica","schema_version":3,"term":0}\n[heartbeat-from-primary]
+{"accepted":true,"commit_index":0,"last_applied_index":0,"leader_id":"node-a","role":"replica","term":1}\n[auto-failover-check]
+{"event":{"failover_duration_ms":1,"leader_id":"node-b","promoted":true,"reason":"leader_timeout_test","term":2},"resilience":{"active_failover_started_unix_ms":null,"active_restore_started_unix_ms":null,"avg_failover_duration_ms":1.0,"avg_restore_duration_ms":0.0,"chaos_active_faults":0,"chaos_blocked_requests_total":0,"chaos_injections_total":0,"failover_completed_total":1,"failover_events_total":1,"last_failover_duration_ms":1,"last_restore_duration_ms":null,"restore_completed_total":0,"restore_events_total":0},"state":{"commit_index":0,"current_term":2,"failover_in_progress":false,"last_applied_index":0,"last_heartbeat_unix_ms":1772353514073,"last_log_index":1,"last_log_term":2,"last_recovery_event":null,"last_transition_unix_ms":1772353514081,"leader_id":"node-b","replication_lag_ms":5,"role":"primary","voted_for":"node-b"},"triggered":true}\n[chaos-inject-partition]
+{"chaos":{"active_fault_count":1,"faults":[{"blocked_nodes":[],"duration_ms":null,"injected_at_unix_ms":1772353514091,"note":"block-heartbeats","scenario":"partition_subset"}]},"scenario":"partition_subset","status":"injected"}\n[heartbeat-during-partition]
+status=503
+{"error":"chaos fault active: partition_subset","path":"/control/v1/election/heartbeat"}\n[chaos-clear-partition]
+{"chaos":{"active_fault_count":0,"faults":[]},"scenario":"partition_subset","status":"cleared"}\n[chaos-inject-disk-full]
+{"chaos":{"active_fault_count":1,"faults":[{"blocked_nodes":[],"duration_ms":null,"injected_at_unix_ms":1772353514118,"note":null,"scenario":"disk_full"}]},"scenario":"disk_full","status":"injected"}\n[replication-append-disk-full]
+status=507
+{"error":"chaos fault active: disk_full","path":"/control/v1/replication/append"}\n[chaos-clear-all]
+{"chaos":{"active_fault_count":0,"faults":[]},"scenario":null,"status":"cleared"}\n[recovery-start]
+{"restore_in_progress":true,"started_unix_ms":1772353514143}\n[recovery-mark-restored]
+{"role":"primary","leader_id":"node-b","current_term":2,"voted_for":"node-b","commit_index":0,"last_applied_index":0,"last_log_index":1,"last_log_term":2,"replication_lag_ms":5,"failover_in_progress":false,"last_transition_unix_ms":1772353514220,"last_heartbeat_unix_ms":1772353514073,"last_recovery_event":"backup_artifact=/tmp/s16.backup note=restore_complete"}\n[resilience]
+{"active_failover_started_unix_ms":null,"active_restore_started_unix_ms":null,"avg_failover_duration_ms":1.0,"avg_restore_duration_ms":77.0,"chaos_active_faults":0,"chaos_blocked_requests_total":2,"chaos_injections_total":2,"failover_completed_total":1,"failover_events_total":1,"last_failover_duration_ms":1,"last_restore_duration_ms":77,"restore_completed_total":1,"restore_events_total":1}\n[metrics]
+sqlrite_ha_enabled 1
+sqlrite_ha_role 1
+sqlrite_ha_term 2
+sqlrite_ha_commit_index 0
+sqlrite_ha_last_log_index 1
+sqlrite_ha_last_log_term 2
+sqlrite_ha_replication_log_entries 1
+sqlrite_ha_replication_lag_ms 5
+sqlrite_ha_failover_in_progress 0
+sqlrite_ha_failover_events_total 1
+sqlrite_ha_failover_completed_total 1
+sqlrite_ha_failover_last_duration_ms 1
+sqlrite_ha_failover_avg_duration_ms 1
+sqlrite_ha_restore_events_total 1
+sqlrite_ha_restore_completed_total 1
+sqlrite_ha_restore_last_duration_ms 77
+sqlrite_ha_restore_avg_duration_ms 77
+sqlrite_ha_chaos_faults_active 0
+sqlrite_ha_chaos_injections_total 2
+sqlrite_ha_chaos_blocked_requests_total 2
+\n[chaos-status-final]
+{"chaos":{"active_fault_count":0,"faults":[]},"resilience":{"active_failover_started_unix_ms":null,"active_restore_started_unix_ms":null,"avg_failover_duration_ms":1.0,"avg_restore_duration_ms":77.0,"chaos_active_faults":0,"chaos_blocked_requests_total":2,"chaos_injections_total":2,"failover_completed_total":1,"failover_events_total":1,"last_failover_duration_ms":1,"last_restore_duration_ms":77,"restore_completed_total":1,"restore_events_total":1}}\n[s16-smoke-complete] log=project_plan/reports/s16_failover_chaos_smoke.log

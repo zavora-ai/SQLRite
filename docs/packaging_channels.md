@@ -121,3 +121,10 @@ Build and run locally:
 docker build -t sqlrite:local .
 docker run --rm -p 8099:8099 -v "$PWD:/data" sqlrite:local
 ```
+
+HA reference manifests (Sprint 14):
+
+- `deploy/ha/docker-compose.reference.yml`
+- `deploy/ha/prometheus.yml`
+- `deploy/ha/k8s-service.yaml`
+- `deploy/ha/k8s-statefulset.yaml`

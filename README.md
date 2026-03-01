@@ -25,7 +25,7 @@ It is designed for developers who want:
   - custom HTTP provider
 - reindex pipeline for embedding model/version migration
 - tenant-aware secure wrapper with audit logging and key-rotation workflow
-- operations tooling: backup, verify, health checks, compaction
+- operations tooling: backup, verify, health checks, compaction, HA control-plane scaffolding
 - benchmark/eval CLIs with CI-gate integration
 - ANN snapshot persistence for faster ANN index warm-start on file-backed databases
 - SQLite mmap/cache tuning controls for performance experiments and profile hardening
@@ -649,11 +649,51 @@ sqlrite doctor
 - sqlite_cache_size_kib=65536
 ```
 
-### Backup + verify
+### Backup, snapshot, PITR + verify
 
 ```bash
 cargo run -- backup --source sqlrite_demo.db --dest sqlrite_backup.db
 cargo run -- backup verify --path sqlrite_backup.db
+
+cargo run -- backup snapshot \
+  --source sqlrite_demo.db \
+  --backup-dir project_plan/reports/s17_backups \
+  --note "manual_snapshot" \
+  --json
+
+cargo run -- backup list \
+  --backup-dir project_plan/reports/s17_backups \
+  --json
+
+cargo run -- backup pitr-restore \
+  --backup-dir project_plan/reports/s17_backups \
+  --target-unix-ms $(( $(date +%s) * 1000 )) \
+  --dest sqlrite_restored.db \
+  --verify \
+  --json
+
+cargo run -- backup prune \
+  --backup-dir project_plan/reports/s17_backups \
+  --retention-seconds 3600 \
+  --json
+```
+
+Sample output (`backup pitr-restore --verify --json`):
+
+```json
+{
+  "destination": "sqlrite_restored.db",
+  "selected_snapshot": {
+    "snapshot_id": "snap-1772391291376",
+    "note": "cli_snapshot"
+  },
+  "target_unix_ms": 1772391291999,
+  "verification": {
+    "integrity_check_ok": true,
+    "chunk_count": 3,
+    "schema_version": 3
+  }
+}
 ```
 
 ### Compaction maintenance
@@ -676,28 +716,265 @@ Sample output:
 }
 ```
 
-## Server Mode (Health/Readiness/Metrics)
+## Server Mode (Health + Control Plane + SQL API)
+
+Standalone mode:
 
 ```bash
 cargo run -- serve --db sqlrite_demo.db --bind 127.0.0.1:8099
 ```
 
-Endpoints:
-
-- `GET /healthz` -> JSON health report
-- `GET /readyz` -> readiness status
-- `GET /metrics` -> Prometheus-style metrics
-
-Example:
+HA profile example (primary node):
 
 ```bash
-curl -fsS http://127.0.0.1:8099/readyz
+cargo run -- serve \
+  --db sqlrite_demo.db \
+  --bind 127.0.0.1:8099 \
+  --ha-role primary \
+  --cluster-id sqlrite-ha \
+  --node-id node-a \
+  --advertise 127.0.0.1:8099 \
+  --peer 127.0.0.1:8199 \
+  --peer 127.0.0.1:8299 \
+  --sync-ack-quorum 2 \
+  --failover automatic \
+  --control-token dev-token
 ```
 
-Response:
+Data-plane endpoints:
+
+- `GET /healthz`
+- `GET /readyz`
+- `GET /metrics`
+- `POST /v1/sql` (retrieval SQL endpoint)
+
+Control-plane endpoints:
+
+- `GET /control/v1/profile`
+- `GET /control/v1/state`
+- `GET /control/v1/peers`
+- `GET /control/v1/failover/status`
+- `GET /control/v1/resilience`
+- `GET /control/v1/chaos/status`
+- `GET /control/v1/replication/log?from=<index>&limit=<n>`
+- `GET /control/v1/recovery/snapshots?limit=<n>`
+- `GET /control/v1/observability/metrics-map`
+- `GET /control/v1/traces/recent?limit=<n>`
+- `GET /control/v1/alerts/templates`
+- `GET /control/v1/slo/report`
+- `POST /control/v1/failover/start`
+- `POST /control/v1/failover/promote`
+- `POST /control/v1/failover/step-down`
+- `POST /control/v1/failover/auto-check`
+- `POST /control/v1/recovery/start`
+- `POST /control/v1/recovery/mark-restored`
+- `POST /control/v1/recovery/snapshot`
+- `POST /control/v1/recovery/verify-restore`
+- `POST /control/v1/recovery/prune-snapshots`
+- `POST /control/v1/observability/reset`
+- `POST /control/v1/alerts/simulate`
+- `POST /control/v1/replication/append`
+- `POST /control/v1/replication/receive`
+- `POST /control/v1/replication/ack`
+- `POST /control/v1/replication/reconcile`
+- `POST /control/v1/election/request-vote`
+- `POST /control/v1/election/heartbeat`
+- `POST /control/v1/chaos/inject`
+- `POST /control/v1/chaos/clear`
+
+Readiness response example:
+
+```bash
+curl -fsS http://127.0.0.1:8099/readyz | jq
+```
 
 ```json
-{"ready":true,"schema_version":3}
+{
+  "ready": true,
+  "schema_version": 3,
+  "ha_enabled": false,
+  "role": "standalone",
+  "leader_id": null
+}
+```
+
+SQL API example:
+
+```bash
+curl -fsS -X POST \
+  -H "content-type: application/json" \
+  -d '{"statement":"SELECT id, embedding <=> vector(\"0.95,0.05,0.0\") AS cosine_distance FROM chunks ORDER BY cosine_distance ASC, id ASC LIMIT 3;"}' \
+  http://127.0.0.1:8099/v1/sql | jq
+```
+
+Sample output:
+
+```json
+{
+  "kind": "query",
+  "row_count": 3,
+  "rows": [
+    {
+      "cosine_distance": 0.000638127326965332,
+      "id": "demo-1"
+    },
+    {
+      "cosine_distance": 0.09577643871307373,
+      "id": "demo-2"
+    },
+    {
+      "cosine_distance": 0.5582578182220459,
+      "id": "demo-3"
+    }
+  ]
+}
+```
+
+Replication + election protocol example:
+
+```bash
+curl -fsS -X POST \
+  -H "content-type: application/json" \
+  -H "x-sqlrite-control-token: dev-token" \
+  -d '{"operation":"ingest_chunk","payload":{"chunk_id":"c1","doc_id":"d1"}}' \
+  http://127.0.0.1:8099/control/v1/replication/append | jq
+
+curl -fsS -X POST \
+  -H "content-type: application/json" \
+  -H "x-sqlrite-control-token: dev-token" \
+  -d '{"node_id":"node-b","index":1}' \
+  http://127.0.0.1:8099/control/v1/replication/ack | jq
+
+curl -fsS -X POST \
+  -H "content-type: application/json" \
+  -H "x-sqlrite-control-token: dev-token" \
+  -d '{"term":2,"candidate_id":"node-b","candidate_last_log_index":1,"candidate_last_log_term":1}' \
+  http://127.0.0.1:8099/control/v1/election/request-vote | jq
+```
+
+Automatic failover + chaos harness example:
+
+```bash
+curl -fsS -X POST \
+  -H "content-type: application/json" \
+  -H "x-sqlrite-control-token: dev-token" \
+  -d '{"simulate_elapsed_ms":5000,"reason":"leader_timeout_test"}' \
+  http://127.0.0.1:8099/control/v1/failover/auto-check | jq
+
+curl -fsS -X POST \
+  -H "content-type: application/json" \
+  -H "x-sqlrite-control-token: dev-token" \
+  -d '{"scenario":"disk_full","note":"write-path-block"}' \
+  http://127.0.0.1:8099/control/v1/chaos/inject | jq
+
+curl -fsS http://127.0.0.1:8099/control/v1/resilience | jq
+curl -fsS http://127.0.0.1:8099/control/v1/failover/status | jq
+
+curl -fsS -X POST \
+  -H "x-sqlrite-control-token: dev-token" \
+  http://127.0.0.1:8099/control/v1/chaos/clear | jq
+```
+
+Sample output:
+
+```json
+{
+  "triggered": true,
+  "event": {
+    "promoted": true,
+    "reason": "leader_timeout_test",
+    "term": 2,
+    "leader_id": "node-b",
+    "failover_duration_ms": 1
+  }
+}
+```
+
+Observability API example:
+
+```bash
+curl -fsS http://127.0.0.1:8099/control/v1/observability/metrics-map | jq
+curl -fsS http://127.0.0.1:8099/control/v1/traces/recent?limit=10 | jq
+curl -fsS -X POST \
+  -H "x-sqlrite-control-token: dev-token" \
+  http://127.0.0.1:8099/control/v1/observability/reset | jq
+curl -fsS http://127.0.0.1:8099/control/v1/slo/report | jq
+```
+
+Sample output (`/control/v1/slo/report`):
+
+```json
+{
+  "availability": {
+    "observed_percent": 100.0,
+    "target_percent": 99.95,
+    "passes_target": true
+  },
+  "rpo": {
+    "observed_seconds": 0.005,
+    "target_seconds": 60.0,
+    "passes_target": true
+  }
+}
+```
+
+Reproducible S16 smoke harness:
+
+```bash
+cargo build --bin sqlrite
+scripts/run-s16-failover-chaos-smoke.sh
+```
+
+Artifacts produced by the harness:
+
+- `project_plan/reports/s16_failover_chaos_smoke.log`
+
+Reproducible S17 backup/PITR smoke harness:
+
+```bash
+cargo build --bin sqlrite
+scripts/run-s17-backup-pitr-smoke.sh
+```
+
+Artifacts produced by the harness:
+
+- `project_plan/reports/s17_backup_pitr_smoke.log`
+- `project_plan/reports/s17_backups/backup_catalog.jsonl`
+
+Reproducible S18 observability smoke harness:
+
+```bash
+cargo build --bin sqlrite
+scripts/run-s18-observability-smoke.sh
+```
+
+Artifacts produced by the harness:
+
+- `project_plan/reports/s18_observability_smoke.log`
+
+Reproducible S19 DR game-day + soak harness:
+
+```bash
+cargo build --bin sqlrite
+scripts/run-s19-dr-gameday.sh
+```
+
+Artifacts produced by the harness:
+
+- `project_plan/reports/s19_dr_gameday.log`
+- `project_plan/reports/s19_soak_slo_summary.json`
+
+Sample S19 soak summary output:
+
+```json
+{
+  "availability_percent": 100.0,
+  "availability_target_percent": 99.95,
+  "availability_pass": true,
+  "observed_rpo_seconds": 0.005,
+  "rpo_target_seconds": 60.0,
+  "rpo_pass": true
+}
 ```
 
 ## Benchmarks and Performance
@@ -969,6 +1246,18 @@ docker build -t sqlrite:local .
 docker run --rm sqlrite:local --help
 ```
 
+Run HA reference deployment (compose):
+
+```bash
+cd deploy/ha
+docker compose -f docker-compose.reference.yml up -d
+```
+
+Kubernetes reference manifests:
+
+- `deploy/ha/k8s-service.yaml`
+- `deploy/ha/k8s-statefulset.yaml`
+
 Generate Homebrew formula and winget manifests:
 
 ```bash
@@ -999,7 +1288,7 @@ cargo test --examples
 - `src/reindex.rs` - reindex orchestration
 - `src/security.rs` - tenant policy/audit/encryption workflow
 - `src/ops.rs` - health/backup/verify
-- `src/server.rs` - health/readiness/metrics HTTP server
+- `src/server.rs` - health/readiness/metrics server plus HA control-plane and `/v1/sql` endpoint
 - `src/bin/` - operational CLIs
 - `scripts/` - install, update, packaging, and release tooling
 - `packaging/` - Homebrew/winget/nfpm packaging assets

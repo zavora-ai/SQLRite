@@ -1,0 +1,28 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: sqlrite-ha-headless
+  labels:
+    app: sqlrite-ha
+spec:
+  clusterIP: None
+  selector:
+    app: sqlrite-ha
+  ports:
+    - name: http
+      port: 8099
+      targetPort: 8099
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sqlrite-ha-api
+  labels:
+    app: sqlrite-ha
+spec:
+  selector:
+    app: sqlrite-ha
+  ports:
+    - name: http
+      port: 8099
+      targetPort: 8099

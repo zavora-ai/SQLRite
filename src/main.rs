@@ -5,9 +5,12 @@ use rusqlite::types::ValueRef;
 use serde::Serialize;
 use serde_json::{Map, Value, json};
 use sqlrite::{
-    BenchmarkConfig, ChunkInput, CompactionOptions, DurabilityProfile, FusionStrategy,
-    RuntimeConfig, SearchRequest, ServerConfig, SqlRite, VectorIndexMode, VectorStorageKind,
-    backup_file, build_health_report, run_benchmark, serve_health_endpoints, verify_backup_file,
+    BenchmarkConfig, ChunkInput, CompactionOptions, DurabilityProfile, FailoverMode,
+    FusionStrategy, HaRuntimeProfile, RecoveryConfig, ReplicationConfig, RuntimeConfig,
+    SearchRequest, ServerConfig, ServerRole, SqlRite, VectorIndexMode, VectorStorageKind,
+    backup_file, build_health_report, create_backup_snapshot, list_backup_snapshots,
+    prune_backup_snapshots, restore_backup_file, restore_backup_file_verified, run_benchmark,
+    select_backup_snapshot_for_time, serve_health_endpoints, verify_backup_file,
 };
 use std::collections::{HashMap, HashSet};
 use std::env;
@@ -1021,16 +1024,75 @@ struct ServeArgs {
     bind_addr: String,
     profile: DurabilityProfile,
     index_mode: VectorIndexMode,
+    ha_role: ServerRole,
+    cluster_id: String,
+    node_id: String,
+    advertise_addr: Option<String>,
+    peers: Vec<String>,
+    sync_ack_quorum: usize,
+    heartbeat_interval_ms: u64,
+    election_timeout_ms: u64,
+    max_replication_lag_ms: u64,
+    failover_mode: FailoverMode,
+    backup_dir: String,
+    snapshot_interval_seconds: u64,
+    pitr_retention_seconds: u64,
+    control_token: Option<String>,
+    enable_sql_endpoint: bool,
 }
 
 fn cmd_serve(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     let args = parse_serve_args(args).map_err(std::io::Error::other)?;
+
+    let replication_enabled = args.ha_role != ServerRole::Standalone || !args.peers.is_empty();
+    let replication = ReplicationConfig {
+        enabled: replication_enabled,
+        cluster_id: args.cluster_id,
+        node_id: args.node_id,
+        role: if replication_enabled {
+            args.ha_role
+        } else {
+            ServerRole::Standalone
+        },
+        advertise_addr: args
+            .advertise_addr
+            .unwrap_or_else(|| args.bind_addr.clone()),
+        peers: args.peers,
+        sync_ack_quorum: args.sync_ack_quorum,
+        heartbeat_interval_ms: args.heartbeat_interval_ms,
+        election_timeout_ms: args.election_timeout_ms,
+        max_replication_lag_ms: args.max_replication_lag_ms,
+        failover_mode: args.failover_mode,
+    };
+    let recovery = RecoveryConfig {
+        backup_dir: args.backup_dir,
+        snapshot_interval_seconds: args.snapshot_interval_seconds,
+        pitr_retention_seconds: args.pitr_retention_seconds,
+    };
+    let ha_profile = HaRuntimeProfile {
+        replication,
+        recovery,
+    };
+    ha_profile.validate().map_err(std::io::Error::other)?;
+
     println!("starting SQLRite server on {}", args.bind_addr);
+    println!(
+        "ha profile: enabled={} role={:?} cluster={} node={} peers={} sql_endpoint={}",
+        ha_profile.replication.enabled,
+        ha_profile.replication.role,
+        ha_profile.replication.cluster_id,
+        ha_profile.replication.node_id,
+        ha_profile.replication.peers.len(),
+        args.enable_sql_endpoint
+    );
     serve_health_endpoints(
         args.db_path,
         runtime_config(args.profile, args.index_mode),
         ServerConfig {
             bind_addr: args.bind_addr,
+            ha_profile,
+            control_api_token: args.control_token,
+            enable_sql_endpoint: args.enable_sql_endpoint,
         },
     )
     .map_err(|error| error.into())
@@ -1042,6 +1104,21 @@ fn parse_serve_args(args: &[String]) -> Result<ServeArgs, String> {
         bind_addr: "127.0.0.1:8099".to_string(),
         profile: DurabilityProfile::Balanced,
         index_mode: VectorIndexMode::BruteForce,
+        ha_role: ServerRole::Standalone,
+        cluster_id: "local-cluster".to_string(),
+        node_id: "node-1".to_string(),
+        advertise_addr: None,
+        peers: Vec::new(),
+        sync_ack_quorum: 1,
+        heartbeat_interval_ms: 1_000,
+        election_timeout_ms: 3_000,
+        max_replication_lag_ms: 2_000,
+        failover_mode: FailoverMode::Manual,
+        backup_dir: "./backups".to_string(),
+        snapshot_interval_seconds: 300,
+        pitr_retention_seconds: 86_400,
+        control_token: None,
+        enable_sql_endpoint: true,
     };
 
     let mut i = 0;
@@ -1063,12 +1140,73 @@ fn parse_serve_args(args: &[String]) -> Result<ServeArgs, String> {
                 i += 1;
                 out.index_mode = parse_index_mode(&parse_string(args, i, "--index-mode")?)?;
             }
+            "--ha-role" => {
+                i += 1;
+                out.ha_role = parse_server_role(&parse_string(args, i, "--ha-role")?)?;
+            }
+            "--cluster-id" => {
+                i += 1;
+                out.cluster_id = parse_string(args, i, "--cluster-id")?;
+            }
+            "--node-id" => {
+                i += 1;
+                out.node_id = parse_string(args, i, "--node-id")?;
+            }
+            "--advertise" => {
+                i += 1;
+                out.advertise_addr = Some(parse_string(args, i, "--advertise")?);
+            }
+            "--peer" => {
+                i += 1;
+                out.peers.push(parse_string(args, i, "--peer")?);
+            }
+            "--sync-ack-quorum" => {
+                i += 1;
+                out.sync_ack_quorum = parse_usize(args, i, "--sync-ack-quorum")?;
+            }
+            "--heartbeat-ms" => {
+                i += 1;
+                out.heartbeat_interval_ms = parse_usize(args, i, "--heartbeat-ms")? as u64;
+            }
+            "--election-timeout-ms" => {
+                i += 1;
+                out.election_timeout_ms = parse_usize(args, i, "--election-timeout-ms")? as u64;
+            }
+            "--max-replication-lag-ms" => {
+                i += 1;
+                out.max_replication_lag_ms =
+                    parse_usize(args, i, "--max-replication-lag-ms")? as u64;
+            }
+            "--failover" => {
+                i += 1;
+                out.failover_mode = parse_failover_mode(&parse_string(args, i, "--failover")?)?;
+            }
+            "--backup-dir" => {
+                i += 1;
+                out.backup_dir = parse_string(args, i, "--backup-dir")?;
+            }
+            "--snapshot-interval-s" => {
+                i += 1;
+                out.snapshot_interval_seconds =
+                    parse_usize(args, i, "--snapshot-interval-s")? as u64;
+            }
+            "--pitr-retention-s" => {
+                i += 1;
+                out.pitr_retention_seconds = parse_usize(args, i, "--pitr-retention-s")? as u64;
+            }
+            "--control-token" => {
+                i += 1;
+                out.control_token = Some(parse_string(args, i, "--control-token")?);
+            }
+            "--disable-sql-endpoint" => {
+                out.enable_sql_endpoint = false;
+            }
             "--help" | "-h" => {
-                return Err("usage: sqlrite serve [--db PATH] [--bind HOST:PORT] [--profile balanced|durable|fast_unsafe] [--index-mode brute_force|lsh_ann|hnsw_baseline|disabled]".to_string())
+                return Err("usage: sqlrite serve [--db PATH] [--bind HOST:PORT] [--profile balanced|durable|fast_unsafe] [--index-mode brute_force|lsh_ann|hnsw_baseline|disabled] [--ha-role standalone|primary|replica] [--cluster-id ID] [--node-id ID] [--advertise HOST:PORT] [--peer HOST:PORT]... [--sync-ack-quorum N] [--heartbeat-ms N] [--election-timeout-ms N] [--max-replication-lag-ms N] [--failover manual|automatic] [--backup-dir DIR] [--snapshot-interval-s N] [--pitr-retention-s N] [--control-token TOKEN] [--disable-sql-endpoint]".to_string())
             }
             other => {
                 return Err(format!(
-                    "unknown argument `{other}`\nusage: sqlrite serve [--db PATH] [--bind HOST:PORT] [--profile balanced|durable|fast_unsafe] [--index-mode brute_force|lsh_ann|hnsw_baseline|disabled]"
+                    "unknown argument `{other}`\nusage: sqlrite serve [--db PATH] [--bind HOST:PORT] [--profile balanced|durable|fast_unsafe] [--index-mode brute_force|lsh_ann|hnsw_baseline|disabled] [--ha-role standalone|primary|replica] [--cluster-id ID] [--node-id ID] [--advertise HOST:PORT] [--peer HOST:PORT]... [--sync-ack-quorum N] [--heartbeat-ms N] [--election-timeout-ms N] [--max-replication-lag-ms N] [--failover manual|automatic] [--backup-dir DIR] [--snapshot-interval-s N] [--pitr-retention-s N] [--control-token TOKEN] [--disable-sql-endpoint]"
                 ))
             }
         }
@@ -1079,8 +1217,15 @@ fn parse_serve_args(args: &[String]) -> Result<ServeArgs, String> {
 }
 
 fn cmd_backup(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
-    if matches!(args.first().map(String::as_str), Some("verify")) {
-        return cmd_backup_verify(&args[1..]);
+    match args.first().map(String::as_str) {
+        Some("verify") => return cmd_backup_verify(&args[1..]),
+        Some("snapshot") => return cmd_backup_snapshot(&args[1..]),
+        Some("list") => return cmd_backup_list(&args[1..]),
+        Some("restore") => return cmd_backup_restore(&args[1..]),
+        Some("pitr-restore") => return cmd_backup_pitr_restore(&args[1..]),
+        Some("prune") => return cmd_backup_prune(&args[1..]),
+        Some("--help") | Some("-h") => return Err(std::io::Error::other(backup_usage()).into()),
+        _ => {}
     }
 
     let mut source = None;
@@ -1097,15 +1242,61 @@ fn cmd_backup(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
                 i += 1;
                 destination = Some(parse_string(args, i, "--dest")?);
             }
+            "--help" | "-h" => return Err(std::io::Error::other(backup_usage()).into()),
+            other => {
+                return Err(std::io::Error::other(format!(
+                    "unknown argument `{other}`\n{}",
+                    backup_usage()
+                ))
+                .into());
+            }
+        }
+        i += 1;
+    }
+
+    let source = source
+        .ok_or_else(|| std::io::Error::other(format!("missing --source\n{}", backup_usage())))?;
+    let destination = destination
+        .ok_or_else(|| std::io::Error::other(format!("missing --dest\n{}", backup_usage())))?;
+
+    backup_file(source, destination)?;
+    println!("backup complete");
+    Ok(())
+}
+
+fn cmd_backup_snapshot(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    let mut source = None;
+    let mut backup_dir = None;
+    let mut note = None;
+    let mut json_output = false;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--source" => {
+                i += 1;
+                source = Some(parse_string(args, i, "--source")?);
+            }
+            "--backup-dir" => {
+                i += 1;
+                backup_dir = Some(parse_string(args, i, "--backup-dir")?);
+            }
+            "--note" => {
+                i += 1;
+                note = Some(parse_string(args, i, "--note")?);
+            }
+            "--json" => {
+                json_output = true;
+            }
             "--help" | "-h" => {
                 return Err(std::io::Error::other(
-                    "usage:\n  sqlrite backup --source <db_path> --dest <backup_path>\n  sqlrite backup verify --path <backup_path>",
+                    "usage: sqlrite backup snapshot --source <db_path> --backup-dir <dir> [--note <text>] [--json]",
                 )
                 .into())
             }
             other => {
                 return Err(std::io::Error::other(format!(
-                    "unknown argument `{other}`\nusage:\n  sqlrite backup --source <db_path> --dest <backup_path>\n  sqlrite backup verify --path <backup_path>"
+                    "unknown argument `{other}`\nusage: sqlrite backup snapshot --source <db_path> --backup-dir <dir> [--note <text>] [--json]"
                 ))
                 .into())
             }
@@ -1115,17 +1306,342 @@ fn cmd_backup(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
 
     let source = source.ok_or_else(|| {
         std::io::Error::other(
-            "missing --source\nusage:\n  sqlrite backup --source <db_path> --dest <backup_path>\n  sqlrite backup verify --path <backup_path>",
+            "missing --source\nusage: sqlrite backup snapshot --source <db_path> --backup-dir <dir> [--note <text>] [--json]",
+        )
+    })?;
+    let backup_dir = backup_dir.ok_or_else(|| {
+        std::io::Error::other(
+            "missing --backup-dir\nusage: sqlrite backup snapshot --source <db_path> --backup-dir <dir> [--note <text>] [--json]",
+        )
+    })?;
+
+    let snapshot = create_backup_snapshot(&source, &backup_dir, note.as_deref())?;
+    if json_output {
+        println!("{}", serde_json::to_string_pretty(&snapshot)?);
+        return Ok(());
+    }
+
+    println!("backup snapshot created");
+    println!("- snapshot_id={}", snapshot.snapshot_id);
+    println!("- created_unix_ms={}", snapshot.created_unix_ms);
+    println!("- snapshot_path={}", snapshot.snapshot_path);
+    println!("- size_bytes={}", snapshot.size_bytes);
+    println!("- integrity_ok={}", snapshot.integrity_ok.unwrap_or(false));
+    println!("- chunk_count={}", snapshot.chunk_count.unwrap_or(0));
+    println!("- schema_version={}", snapshot.schema_version.unwrap_or(0));
+    Ok(())
+}
+
+fn cmd_backup_list(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    let mut backup_dir = None;
+    let mut json_output = false;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--backup-dir" => {
+                i += 1;
+                backup_dir = Some(parse_string(args, i, "--backup-dir")?);
+            }
+            "--json" => {
+                json_output = true;
+            }
+            "--help" | "-h" => {
+                return Err(std::io::Error::other(
+                    "usage: sqlrite backup list --backup-dir <dir> [--json]",
+                )
+                .into());
+            }
+            other => return Err(std::io::Error::other(format!(
+                "unknown argument `{other}`\nusage: sqlrite backup list --backup-dir <dir> [--json]"
+            ))
+            .into()),
+        }
+        i += 1;
+    }
+
+    let backup_dir = backup_dir.ok_or_else(|| {
+        std::io::Error::other(
+            "missing --backup-dir\nusage: sqlrite backup list --backup-dir <dir> [--json]",
+        )
+    })?;
+    let snapshots = list_backup_snapshots(&backup_dir)?;
+    if json_output {
+        println!("{}", serde_json::to_string_pretty(&snapshots)?);
+        return Ok(());
+    }
+
+    println!("backup snapshots:");
+    println!("- backup_dir={backup_dir}");
+    println!("- count={}", snapshots.len());
+    for snapshot in snapshots {
+        println!(
+            "- id={} created_unix_ms={} path={} integrity_ok={}",
+            snapshot.snapshot_id,
+            snapshot.created_unix_ms,
+            snapshot.snapshot_path,
+            snapshot
+                .integrity_ok
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "unknown".to_string())
+        );
+    }
+    Ok(())
+}
+
+fn cmd_backup_restore(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    let mut source = None;
+    let mut destination = None;
+    let mut verify = true;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--source" => {
+                i += 1;
+                source = Some(parse_string(args, i, "--source")?);
+            }
+            "--dest" => {
+                i += 1;
+                destination = Some(parse_string(args, i, "--dest")?);
+            }
+            "--verify" => {
+                verify = true;
+            }
+            "--no-verify" => {
+                verify = false;
+            }
+            "--help" | "-h" => {
+                return Err(std::io::Error::other(
+                    "usage: sqlrite backup restore --source <backup_path> --dest <db_path> [--verify|--no-verify]",
+                )
+                .into())
+            }
+            other => {
+                return Err(std::io::Error::other(format!(
+                    "unknown argument `{other}`\nusage: sqlrite backup restore --source <backup_path> --dest <db_path> [--verify|--no-verify]"
+                ))
+                .into())
+            }
+        }
+        i += 1;
+    }
+
+    let source = source.ok_or_else(|| {
+        std::io::Error::other(
+            "missing --source\nusage: sqlrite backup restore --source <backup_path> --dest <db_path> [--verify|--no-verify]",
         )
     })?;
     let destination = destination.ok_or_else(|| {
         std::io::Error::other(
-            "missing --dest\nusage:\n  sqlrite backup --source <db_path> --dest <backup_path>\n  sqlrite backup verify --path <backup_path>",
+            "missing --dest\nusage: sqlrite backup restore --source <backup_path> --dest <db_path> [--verify|--no-verify]",
         )
     })?;
 
-    backup_file(source, destination)?;
-    println!("backup complete");
+    if verify {
+        let report = restore_backup_file_verified(&source, &destination)?;
+        println!("backup restore complete");
+        println!("- source={source}");
+        println!("- dest={destination}");
+        println!("- integrity_ok={}", report.integrity_check_ok);
+        println!("- chunk_count={}", report.chunk_count);
+        println!("- schema_version={}", report.schema_version);
+        println!("- index_mode={}", report.vector_index_mode);
+    } else {
+        restore_backup_file(&source, &destination)?;
+        println!("backup restore complete");
+        println!("- source={source}");
+        println!("- dest={destination}");
+        println!("- verification=skipped");
+    }
+    Ok(())
+}
+
+fn cmd_backup_pitr_restore(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    let mut backup_dir = None;
+    let mut target_unix_ms = None;
+    let mut destination = None;
+    let mut verify = true;
+    let mut json_output = false;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--backup-dir" => {
+                i += 1;
+                backup_dir = Some(parse_string(args, i, "--backup-dir")?);
+            }
+            "--target-unix-ms" => {
+                i += 1;
+                target_unix_ms = Some(parse_u64(args, i, "--target-unix-ms")?);
+            }
+            "--dest" => {
+                i += 1;
+                destination = Some(parse_string(args, i, "--dest")?);
+            }
+            "--verify" => {
+                verify = true;
+            }
+            "--no-verify" => {
+                verify = false;
+            }
+            "--json" => {
+                json_output = true;
+            }
+            "--help" | "-h" => {
+                return Err(std::io::Error::other(
+                    "usage: sqlrite backup pitr-restore --backup-dir <dir> --target-unix-ms <ms> --dest <db_path> [--verify|--no-verify] [--json]",
+                )
+                .into())
+            }
+            other => {
+                return Err(std::io::Error::other(format!(
+                    "unknown argument `{other}`\nusage: sqlrite backup pitr-restore --backup-dir <dir> --target-unix-ms <ms> --dest <db_path> [--verify|--no-verify] [--json]"
+                ))
+                .into())
+            }
+        }
+        i += 1;
+    }
+
+    let backup_dir = backup_dir.ok_or_else(|| {
+        std::io::Error::other(
+            "missing --backup-dir\nusage: sqlrite backup pitr-restore --backup-dir <dir> --target-unix-ms <ms> --dest <db_path> [--verify|--no-verify] [--json]",
+        )
+    })?;
+    let target_unix_ms = target_unix_ms.ok_or_else(|| {
+        std::io::Error::other(
+            "missing --target-unix-ms\nusage: sqlrite backup pitr-restore --backup-dir <dir> --target-unix-ms <ms> --dest <db_path> [--verify|--no-verify] [--json]",
+        )
+    })?;
+    let destination = destination.ok_or_else(|| {
+        std::io::Error::other(
+            "missing --dest\nusage: sqlrite backup pitr-restore --backup-dir <dir> --target-unix-ms <ms> --dest <db_path> [--verify|--no-verify] [--json]",
+        )
+    })?;
+
+    let selected =
+        select_backup_snapshot_for_time(&backup_dir, target_unix_ms)?.ok_or_else(|| {
+            std::io::Error::other("no snapshot exists at or before requested --target-unix-ms")
+        })?;
+
+    if verify {
+        let report = restore_backup_file_verified(&selected.snapshot_path, &destination)?;
+        let payload = json!({
+            "selected_snapshot": selected,
+            "target_unix_ms": target_unix_ms,
+            "destination": destination,
+            "verification": report,
+        });
+        if json_output {
+            println!("{}", serde_json::to_string_pretty(&payload)?);
+        } else {
+            println!("pitr restore complete");
+            println!("- target_unix_ms={target_unix_ms}");
+            println!(
+                "- selected_snapshot_id={}",
+                payload["selected_snapshot"]["snapshot_id"]
+            );
+            println!(
+                "- selected_snapshot_path={}",
+                payload["selected_snapshot"]["snapshot_path"]
+            );
+            println!("- destination={destination}");
+            println!(
+                "- integrity_ok={}",
+                payload["verification"]["integrity_check_ok"]
+            );
+            println!("- chunk_count={}", payload["verification"]["chunk_count"]);
+            println!(
+                "- schema_version={}",
+                payload["verification"]["schema_version"]
+            );
+        }
+    } else {
+        restore_backup_file(&selected.snapshot_path, &destination)?;
+        let payload = json!({
+            "selected_snapshot": selected,
+            "target_unix_ms": target_unix_ms,
+            "destination": destination,
+            "verification": "skipped",
+        });
+        if json_output {
+            println!("{}", serde_json::to_string_pretty(&payload)?);
+        } else {
+            println!("pitr restore complete");
+            println!("- target_unix_ms={target_unix_ms}");
+            println!(
+                "- selected_snapshot_id={}",
+                payload["selected_snapshot"]["snapshot_id"]
+            );
+            println!(
+                "- selected_snapshot_path={}",
+                payload["selected_snapshot"]["snapshot_path"]
+            );
+            println!("- destination={destination}");
+            println!("- verification=skipped");
+        }
+    }
+    Ok(())
+}
+
+fn cmd_backup_prune(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    let mut backup_dir = None;
+    let mut retention_seconds = None;
+    let mut json_output = false;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--backup-dir" => {
+                i += 1;
+                backup_dir = Some(parse_string(args, i, "--backup-dir")?);
+            }
+            "--retention-seconds" => {
+                i += 1;
+                retention_seconds = Some(parse_u64(args, i, "--retention-seconds")?);
+            }
+            "--json" => {
+                json_output = true;
+            }
+            "--help" | "-h" => {
+                return Err(std::io::Error::other(
+                    "usage: sqlrite backup prune --backup-dir <dir> --retention-seconds <n> [--json]",
+                )
+                .into())
+            }
+            other => {
+                return Err(std::io::Error::other(format!(
+                    "unknown argument `{other}`\nusage: sqlrite backup prune --backup-dir <dir> --retention-seconds <n> [--json]"
+                ))
+                .into())
+            }
+        }
+        i += 1;
+    }
+
+    let backup_dir = backup_dir.ok_or_else(|| {
+        std::io::Error::other(
+            "missing --backup-dir\nusage: sqlrite backup prune --backup-dir <dir> --retention-seconds <n> [--json]",
+        )
+    })?;
+    let retention_seconds = retention_seconds.ok_or_else(|| {
+        std::io::Error::other(
+            "missing --retention-seconds\nusage: sqlrite backup prune --backup-dir <dir> --retention-seconds <n> [--json]",
+        )
+    })?;
+
+    let report = prune_backup_snapshots(&backup_dir, retention_seconds)?;
+    if json_output {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+        return Ok(());
+    }
+
+    println!("backup snapshot prune complete");
+    println!("- backup_dir={backup_dir}");
+    println!("- retention_seconds={}", report.retention_seconds);
+    println!("- cutoff_unix_ms={}", report.cutoff_unix_ms);
+    println!("- removed_count={}", report.removed_count);
+    println!("- kept_count={}", report.kept_count);
     Ok(())
 }
 
@@ -1164,6 +1680,10 @@ fn cmd_backup_verify(args: &[String]) -> Result<(), Box<dyn std::error::Error>> 
     println!("- schema_version={}", report.schema_version);
     println!("- index_mode={}", report.vector_index_mode);
     Ok(())
+}
+
+fn backup_usage() -> &'static str {
+    "usage:\n  sqlrite backup --source <db_path> --dest <backup_path>\n  sqlrite backup verify --path <backup_path>\n  sqlrite backup snapshot --source <db_path> --backup-dir <dir> [--note <text>] [--json]\n  sqlrite backup list --backup-dir <dir> [--json]\n  sqlrite backup restore --source <backup_path> --dest <db_path> [--verify|--no-verify]\n  sqlrite backup pitr-restore --backup-dir <dir> --target-unix-ms <ms> --dest <db_path> [--verify|--no-verify] [--json]\n  sqlrite backup prune --backup-dir <dir> --retention-seconds <n> [--json]"
 }
 
 #[derive(Debug)]
@@ -1748,6 +2268,27 @@ fn parse_index_mode(value: &str) -> Result<VectorIndexMode, String> {
     }
 }
 
+fn parse_server_role(value: &str) -> Result<ServerRole, String> {
+    match value {
+        "standalone" => Ok(ServerRole::Standalone),
+        "primary" => Ok(ServerRole::Primary),
+        "replica" => Ok(ServerRole::Replica),
+        other => Err(format!(
+            "invalid --ha-role `{other}`; expected standalone, primary, or replica"
+        )),
+    }
+}
+
+fn parse_failover_mode(value: &str) -> Result<FailoverMode, String> {
+    match value {
+        "manual" => Ok(FailoverMode::Manual),
+        "automatic" => Ok(FailoverMode::Automatic),
+        other => Err(format!(
+            "invalid --failover `{other}`; expected manual or automatic"
+        )),
+    }
+}
+
 fn parse_vector_storage_kind(value: &str) -> Result<VectorStorageKind, String> {
     match value {
         "f32" => Ok(VectorStorageKind::F32),
@@ -1776,6 +2317,12 @@ fn parse_string(args: &[String], index: usize, flag: &str) -> Result<String, Str
 fn parse_usize(args: &[String], index: usize, flag: &str) -> Result<usize, String> {
     let raw = parse_string(args, index, flag)?;
     raw.parse::<usize>()
+        .map_err(|_| format!("invalid integer for {flag}: `{raw}`"))
+}
+
+fn parse_u64(args: &[String], index: usize, flag: &str) -> Result<u64, String> {
+    let raw = parse_string(args, index, flag)?;
+    raw.parse::<u64>()
         .map_err(|_| format!("invalid integer for {flag}: `{raw}`"))
 }
 
@@ -3672,7 +4219,7 @@ fn sql_value_to_json(value: ValueRef<'_>) -> Value {
 }
 
 fn usage() -> &'static str {
-    "sqlrite unified CLI\n\nusage:\n  sqlrite <command> [options]\n\ncommands:\n  init       Create/open a SQLRite database and apply runtime profile\n  sql        Execute SQL or enter interactive SQL shell\n  ingest     Ingest a single chunk directly from CLI flags\n  query      Run text/vector/hybrid retrieval query\n  quickstart Run init->query UX flow with telemetry/gates\n  serve      Start health/metrics HTTP server\n  backup     Create or verify backup files\n  compact    Run ingestion-compaction maintenance workflow\n  benchmark  Run synthetic retrieval benchmark\n  doctor     Run environment and database health checks\n\nenv overrides:\n  SQLRITE_VECTOR_STORAGE=f32|f16|int8\n  SQLRITE_ANN_MIN_CANDIDATES=<int>\n  SQLRITE_ANN_MAX_HAMMING_RADIUS=<int>\n  SQLRITE_ANN_MAX_CANDIDATE_MULTIPLIER=<int>\n  SQLRITE_ENABLE_ANN_PERSISTENCE=true|false\n  SQLRITE_SQLITE_MMAP_SIZE=<bytes>\n  SQLRITE_SQLITE_CACHE_SIZE_KIB=<kib>\n\nexamples:\n  sqlrite init --db sqlrite_demo.db --seed-demo\n  sqlrite quickstart --db sqlrite_demo.db --runs 5 --max-median-ms 180000 --min-success-rate 0.95\n  sqlrite query --db sqlrite_demo.db --text \"agents local memory\" --top-k 3\n  sqlrite compact --db sqlrite_demo.db --json\n  sqlrite doctor --db sqlrite_demo.db --json\n  sqlrite sql --db sqlrite_demo.db\n  sqlrite sql --db sqlrite_demo.db --execute \"SELECT id, doc_id FROM chunks LIMIT 3;\""
+    "sqlrite unified CLI\n\nusage:\n  sqlrite <command> [options]\n\ncommands:\n  init       Create/open a SQLRite database and apply runtime profile\n  sql        Execute SQL or enter interactive SQL shell\n  ingest     Ingest a single chunk directly from CLI flags\n  query      Run text/vector/hybrid retrieval query\n  quickstart Run init->query UX flow with telemetry/gates\n  serve      Start server (health/readiness/metrics + HA control plane + SQL API)\n  backup     Create, verify, snapshot, restore, PITR-restore, or prune backups\n  compact    Run ingestion-compaction maintenance workflow\n  benchmark  Run synthetic retrieval benchmark\n  doctor     Run environment and database health checks\n\nenv overrides:\n  SQLRITE_VECTOR_STORAGE=f32|f16|int8\n  SQLRITE_ANN_MIN_CANDIDATES=<int>\n  SQLRITE_ANN_MAX_HAMMING_RADIUS=<int>\n  SQLRITE_ANN_MAX_CANDIDATE_MULTIPLIER=<int>\n  SQLRITE_ENABLE_ANN_PERSISTENCE=true|false\n  SQLRITE_SQLITE_MMAP_SIZE=<bytes>\n  SQLRITE_SQLITE_CACHE_SIZE_KIB=<kib>\n\nexamples:\n  sqlrite init --db sqlrite_demo.db --seed-demo\n  sqlrite quickstart --db sqlrite_demo.db --runs 5 --max-median-ms 180000 --min-success-rate 0.95\n  sqlrite query --db sqlrite_demo.db --text \"agents local memory\" --top-k 3\n  sqlrite backup snapshot --source sqlrite_demo.db --backup-dir ./backups --note pre_release\n  sqlrite backup pitr-restore --backup-dir ./backups --target-unix-ms 1772000000000 --dest restored.db --verify\n  sqlrite compact --db sqlrite_demo.db --json\n  sqlrite doctor --db sqlrite_demo.db --json\n  sqlrite sql --db sqlrite_demo.db\n  sqlrite sql --db sqlrite_demo.db --execute \"SELECT id, doc_id FROM chunks LIMIT 3;\""
 }
 
 #[cfg(test)]
@@ -3800,6 +4347,55 @@ mod tests {
         assert_eq!(parsed.config.corpus_size, 3000);
         assert_eq!(parsed.config.query_count, 200);
         Ok(())
+    }
+
+    #[test]
+    fn serve_args_default_to_standalone_profile() -> Result<(), Box<dyn std::error::Error>> {
+        let parsed = parse_serve_args(&[]).map_err(std::io::Error::other)?;
+        assert_eq!(parsed.ha_role, ServerRole::Standalone);
+        assert_eq!(parsed.cluster_id, "local-cluster");
+        assert!(parsed.peers.is_empty());
+        assert!(parsed.enable_sql_endpoint);
+        Ok(())
+    }
+
+    #[test]
+    fn serve_args_parse_ha_flags() -> Result<(), Box<dyn std::error::Error>> {
+        let parsed = parse_serve_args(&[
+            "--ha-role".to_string(),
+            "primary".to_string(),
+            "--cluster-id".to_string(),
+            "prod-cluster".to_string(),
+            "--node-id".to_string(),
+            "node-a".to_string(),
+            "--peer".to_string(),
+            "node-b:8099".to_string(),
+            "--peer".to_string(),
+            "node-c:8099".to_string(),
+            "--sync-ack-quorum".to_string(),
+            "2".to_string(),
+            "--failover".to_string(),
+            "automatic".to_string(),
+            "--disable-sql-endpoint".to_string(),
+        ])
+        .map_err(std::io::Error::other)?;
+
+        assert_eq!(parsed.ha_role, ServerRole::Primary);
+        assert_eq!(parsed.cluster_id, "prod-cluster");
+        assert_eq!(parsed.node_id, "node-a");
+        assert_eq!(parsed.peers.len(), 2);
+        assert_eq!(parsed.sync_ack_quorum, 2);
+        assert_eq!(parsed.failover_mode, FailoverMode::Automatic);
+        assert!(!parsed.enable_sql_endpoint);
+        Ok(())
+    }
+
+    #[test]
+    fn backup_usage_includes_snapshot_and_pitr_commands() {
+        let usage = backup_usage();
+        assert!(usage.contains("backup snapshot"));
+        assert!(usage.contains("backup pitr-restore"));
+        assert!(usage.contains("backup prune"));
     }
 
     #[test]

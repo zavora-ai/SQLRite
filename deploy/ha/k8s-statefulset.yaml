@@ -1,0 +1,61 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: sqlrite-ha
+  labels:
+    app: sqlrite-ha
+spec:
+  serviceName: sqlrite-ha-headless
+  replicas: 3
+  selector:
+    matchLabels:
+      app: sqlrite-ha
+  template:
+    metadata:
+      labels:
+        app: sqlrite-ha
+    spec:
+      containers:
+        - name: sqlrite
+          image: sqlrite:local
+          command:
+            - /bin/sh
+            - -c
+          args:
+            - |
+              ROLE="replica"
+              if [ "${HOSTNAME##*-}" = "0" ]; then ROLE="primary"; fi
+              exec sqlrite serve \
+                --db /var/lib/sqlrite/sqlrite.db \
+                --bind 0.0.0.0:8099 \
+                --ha-role "${ROLE}" \
+                --cluster-id sqlrite-ha \
+                --node-id "${HOSTNAME}" \
+                --advertise "${HOSTNAME}.sqlrite-ha-headless:8099" \
+                --peer sqlrite-ha-0.sqlrite-ha-headless:8099 \
+                --peer sqlrite-ha-1.sqlrite-ha-headless:8099 \
+                --peer sqlrite-ha-2.sqlrite-ha-headless:8099 \
+                --sync-ack-quorum 2 \
+                --failover automatic \
+                --control-token "${SQLRITE_CONTROL_TOKEN}"
+          ports:
+            - containerPort: 8099
+              name: http
+          env:
+            - name: SQLRITE_CONTROL_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: sqlrite-ha-secret
+                  key: control_token
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/sqlrite
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 5Gi

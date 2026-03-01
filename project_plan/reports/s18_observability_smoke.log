@@ -1,0 +1,41 @@
+[readyz]
+{"active_chaos_faults":0,"commit_index":0,"ha_enabled":true,"last_log_index":0,"leader_id":"node-a","ready":true,"role":"primary","schema_version":3,"term":0}\n[sql-success]
+{"elapsed_ms":0.044667,"kind":"query","rewritten_statement":"SELECT id, doc_id FROM chunks ORDER BY id ASC LIMIT 2;","row_count":2,"rows":[{"doc_id":"doc-a","id":"demo-1"},{"doc_id":"doc-b","id":"demo-2"}],"statement":"SELECT id, doc_id FROM chunks ORDER BY id ASC LIMIT 2;"}\n[sql-failure]
+{"error":"near \"FROM\": syntax error in SELECT FROM bad_syntax at offset 7"}\n[metrics-map]
+{"metrics":[{"group":"storage","name":"sqlrite_chunk_count","type":"gauge"},{"group":"storage","name":"sqlrite_schema_version","type":"gauge"},{"group":"retrieval","name":"sqlrite_index_entries","type":"gauge"},{"group":"ha","name":"sqlrite_ha_enabled","type":"gauge"},{"group":"ha","name":"sqlrite_ha_role","type":"gauge"},{"group":"ha","name":"sqlrite_ha_term","type":"gauge"},{"group":"ha","name":"sqlrite_ha_commit_index","type":"gauge"},{"group":"ha","name":"sqlrite_ha_last_log_index","type":"gauge"},{"group":"ha","name":"sqlrite_ha_last_log_term","type":"gauge"},{"group":"ha","name":"sqlrite_ha_replication_lag_ms","type":"gauge"},{"group":"resilience","name":"sqlrite_ha_failover_events_total","type":"counter"},{"group":"resilience","name":"sqlrite_ha_failover_completed_total","type":"counter"},{"group":"resilience","name":"sqlrite_ha_restore_events_total","type":"counter"},{"group":"resilience","name":"sqlrite_ha_restore_completed_total","type":"counter"},{"group":"chaos","name":"sqlrite_ha_chaos_injections_total","type":"counter"},{"group":"chaos","name":"sqlrite_ha_chaos_blocked_requests_total","type":"counter"},{"group":"http","name":"sqlrite_requests_total","type":"counter"},{"group":"http","name":"sqlrite_requests_server_errors_total","type":"counter"},{"group":"http","name":"sqlrite_requests_client_errors_total","type":"counter"},{"group":"sql","name":"sqlrite_requests_sql_total","type":"counter"},{"group":"sql","name":"sqlrite_requests_sql_errors_total","type":"counter"},{"group":"sql","name":"sqlrite_requests_sql_avg_latency_ms","type":"gauge"},{"group":"sql","name":"sqlrite_requests_sql_max_latency_ms","type":"gauge"},{"group":"observability","name":"sqlrite_observability_traces_buffered","type":"gauge"},{"group":"observability","name":"sqlrite_alert_simulations_total","type":"counter"}],"state":{"alert_simulations_total":0,"requests_client_errors_total":1,"requests_server_errors_total":0,"requests_total":4,"sql_avg_latency_ms":0.5,"sql_latency_max_ms":1,"sql_requests_failed_total":1,"sql_requests_total":2,"trace_buffered":4,"trace_capacity":512}}\n[recent-traces]
+{"limit":10,"traces":[{"duration_ms":0,"method":"GET","path":"/control/v1/observability/metrics-map","seq":5,"status":200,"timestamp_unix_ms":1772391068213},{"duration_ms":0,"method":"POST","path":"/v1/sql","seq":4,"status":400,"timestamp_unix_ms":1772391068205},{"duration_ms":1,"method":"POST","path":"/v1/sql","seq":3,"status":200,"timestamp_unix_ms":1772391068195},{"duration_ms":1,"method":"GET","path":"/readyz","seq":2,"status":200,"timestamp_unix_ms":1772391068187},{"duration_ms":1,"method":"GET","path":"/readyz","seq":1,"status":200,"timestamp_unix_ms":1772391068177}]}\n[alert-templates]
+{"templates":[{"description":"SQL API error rate exceeded 5%","id":"sql_error_rate_high","severity":"warning","threshold":{"sql_error_rate_gt":0.05}},{"description":"SQL API average latency exceeded 50ms","id":"sql_latency_high","severity":"warning","threshold":{"sql_avg_latency_ms_gt":50.0}},{"description":"Replication lag exceeded configured max_replication_lag_ms","id":"replication_lag_high","severity":"critical","threshold":{"replication_lag_ms_gt":2000}},{"description":"Restore workflow appears stuck beyond snapshot interval","id":"restore_stuck","severity":"critical","threshold":{"restore_active_ms_gt":60000}}]}\n[alert-simulate]
+{"evaluated":{"replication_lag_ms":1000,"restore_active_ms":0,"sql_avg_latency_ms":75.0,"sql_error_rate":0.2},"fired_alerts":[{"id":"sql_error_rate_high","severity":"warning","value":0.2},{"id":"sql_latency_high","severity":"warning","value":75.0}],"simulation_count":1}\n[slo-report]
+{"availability":{"observed_percent":100.0,"passes_target":true,"requests_total":8,"server_errors_total":0,"target_percent":99.95},"observability":{"alert_simulations_total":1,"requests_client_errors_total":1,"requests_server_errors_total":0,"requests_total":8,"sql_avg_latency_ms":0.5,"sql_latency_max_ms":1,"sql_requests_failed_total":1,"sql_requests_total":2,"trace_buffered":8,"trace_capacity":512},"resilience":{"active_failover_started_unix_ms":null,"active_restore_started_unix_ms":null,"avg_failover_duration_ms":0.0,"avg_restore_duration_ms":0.0,"chaos_active_faults":0,"chaos_blocked_requests_total":0,"chaos_injections_total":0,"failover_completed_total":0,"failover_events_total":0,"last_failover_duration_ms":null,"last_restore_duration_ms":null,"restore_completed_total":0,"restore_events_total":0},"rpo":{"observed_seconds":0.0,"passes_target":true,"target_seconds":60.0}}\n[metrics]
+sqlrite_chunk_count 3
+sqlrite_schema_version 3
+sqlrite_ha_enabled 1
+sqlrite_ha_role 1
+sqlrite_ha_term 0
+sqlrite_ha_commit_index 0
+sqlrite_ha_last_log_index 0
+sqlrite_ha_last_log_term 0
+sqlrite_ha_replication_log_entries 0
+sqlrite_ha_replication_lag_ms 0
+sqlrite_ha_failover_in_progress 0
+sqlrite_ha_failover_events_total 0
+sqlrite_ha_failover_completed_total 0
+sqlrite_ha_failover_last_duration_ms 0
+sqlrite_ha_failover_avg_duration_ms 0
+sqlrite_ha_restore_events_total 0
+sqlrite_ha_restore_completed_total 0
+sqlrite_ha_restore_last_duration_ms 0
+sqlrite_ha_restore_avg_duration_ms 0
+sqlrite_ha_chaos_faults_active 0
+sqlrite_ha_chaos_injections_total 0
+sqlrite_ha_chaos_blocked_requests_total 0
+sqlrite_requests_total 9
+sqlrite_requests_server_errors_total 0
+sqlrite_requests_client_errors_total 1
+sqlrite_requests_sql_total 2
+sqlrite_requests_sql_errors_total 1
+sqlrite_requests_sql_avg_latency_ms 0.5
+sqlrite_requests_sql_max_latency_ms 1
+sqlrite_observability_traces_buffered 9
+sqlrite_alert_simulations_total 1
+\n[s18-smoke-complete] log=project_plan/reports/s18_observability_smoke.log

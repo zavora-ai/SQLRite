@@ -2,11 +2,13 @@ mod adapter;
 mod bench;
 mod error;
 mod eval;
+mod ha;
 mod ingest;
 mod ops;
 mod reindex;
 mod security;
 mod server;
+mod sql_semantics;
 mod vector_index;
 
 pub use adapter::{SqlRiteToolAdapter, ToolRequest, ToolResponse, ToolSpec};
@@ -16,13 +18,21 @@ pub use eval::{
     EvalDataset, EvalMetricsAtK, EvalQuery, EvalReport, EvalSummary, QueryEvalResult,
     evaluate_dataset,
 };
+pub use ha::{
+    FailoverMode, HaRuntimeProfile, HaRuntimeState, RecoveryConfig, ReplicationConfig,
+    ReplicationLog, ReplicationLogEntry, ServerRole,
+};
 pub use ingest::{
     ChunkingStrategy, CustomHttpEmbeddingProvider, DeterministicEmbeddingProvider,
     EmbeddingProvider, EmbeddingRetryPolicy, IngestionBatchTuning, IngestionCheckpoint,
     IngestionReport, IngestionRequest, IngestionSource, IngestionWorker,
     OpenAiCompatibleEmbeddingProvider,
 };
-pub use ops::{HealthReport, backup_file, build_health_report, verify_backup_file};
+pub use ops::{
+    BackupPruneReport, BackupSnapshotRecord, HealthReport, backup_file, build_health_report,
+    create_backup_snapshot, list_backup_snapshots, prune_backup_snapshots, restore_backup_file,
+    restore_backup_file_verified, select_backup_snapshot_for_time, verify_backup_file,
+};
 pub use reindex::{ReindexCheckpoint, ReindexOptions, ReindexReport, reindex_embeddings};
 pub use security::{
     AccessContext, AccessOperation, AccessPolicy, AllowAllPolicy, AuditEvent, AuditLogger,
@@ -30,6 +40,7 @@ pub use security::{
     rotate_tenant_encryption_key,
 };
 pub use server::{ServerConfig, serve_health_endpoints};
+pub use sql_semantics::{execute_sql_statement_json, prepare_sql_connection};
 use vector_index::BuiltinVectorIndex;
 pub use vector_index::{
     AnnTuningConfig, BruteForceVectorIndex, LshAnnVectorIndex, VectorCandidate, VectorIndex,

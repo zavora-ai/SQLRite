@@ -1,0 +1,16 @@
+{
+  "soak_total_requests": 200,
+  "soak_success_requests": 200,
+  "soak_server_error_requests": 0,
+  "availability_percent": 100.0000,
+  "availability_target_percent": 99.95,
+  "availability_pass": true,
+  "observed_rpo_seconds": 0.0050,
+  "rpo_target_seconds": 60.0,
+  "rpo_pass": true,
+  "chaos_validation": {
+    "partition_status_code": 503,
+    "disk_full_status_code": 507,
+    "node_crash_status_code": 503
+  }
+}
