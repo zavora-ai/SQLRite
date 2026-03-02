@@ -1,0 +1,22 @@
+[setup-under-15m]
+[build] cargo build --bin sqlrite
+[seed] target/debug/sqlrite init --db project_plan/reports/s25_agent_contract.db --seed-demo
+[start-server] bind=127.0.0.1:8332
+[python-sdk-query]
+[typescript-sdk-query]
+elapsed_seconds=2
+passes_under_15_minutes=true
+[s25-agent-memory-setup-complete] report=project_plan/reports/s25_agent_memory_setup.json log=project_plan/reports/s25_agent_memory_setup.log
+[start-http-server] bind=127.0.0.1:8333
+[http-query]
+[grpc-bridge-query]
+[python-sdk-query]
+[typescript-sdk-query]
+[mcp-query]
+[contract-assertions]
+deterministic_first_chunk=True
+deterministic_row_count=True
+all_kind_query=True
+setup_under_15_minutes=True
+pass=True
+[s25-agent-contract-suite-complete] report=project_plan/reports/s25_agent_contract_report.json log=project_plan/reports/s25_agent_contract_suite.log

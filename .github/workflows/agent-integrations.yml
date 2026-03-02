@@ -1,0 +1,31 @@
+name: Agent Integrations
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  reference-integrations:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build sqlrite binaries
+        run: cargo build --bin sqlrite --bin sqlrite-grpc-client
+      - name: Run reference integration contract suite
+        run: bash scripts/run-s25-agent-contract-suite.sh
+      - name: Upload integration evidence artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: s25-agent-integrations
+          path: |
+            project_plan/reports/s25_agent_contract_suite.log
+            project_plan/reports/s25_agent_contract_report.json
+            project_plan/reports/s25_agent_memory_setup.log
+            project_plan/reports/s25_agent_memory_setup.json

@@ -223,3 +223,16 @@ S24 TypeScript SDK additions:
 - `.github/workflows/typescript-sdk.yml`
 4. TypeScript SDK smoke + npm pack generation:
 - `scripts/run-s24-typescript-sdk-smoke.sh`
+
+S25 reference integration and phase-E gate additions:
+
+1. Agent integration reference examples:
+- `examples/agent_integrations/`
+2. Deterministic cross-surface contract suite:
+- `scripts/run-s25-agent-contract-suite.sh`
+3. Agent memory setup-time gate (`< 15 minutes` target):
+- `scripts/run-s25-agent-memory-setup.sh`
+4. Monthly release-gate evidence generation:
+- `scripts/run-s25-release-gate-review.sh`
+5. Reference integration CI validation:
+- `.github/workflows/agent-integrations.yml`

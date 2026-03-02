@@ -1190,6 +1190,45 @@ Artifacts produced by the harness:
 - `project_plan/reports/s24_typescript_sdk_smoke.log`
 - `project_plan/reports/s24_typescript_dist/`
 
+## Agent Integrations (Sprint 25)
+
+Reference integration examples:
+
+```bash
+python3 examples/agent_integrations/python_memory_agent.py --base-url http://127.0.0.1:8099 --query "agent memory" --top-k 2
+
+npm --prefix sdk/typescript install
+npm --prefix sdk/typescript run build
+node examples/agent_integrations/typescript_memory_agent.mjs --base-url http://127.0.0.1:8099 --query "agent memory" --top-k 2
+
+examples/agent_integrations/mcp_memory_agent.sh
+```
+
+Deterministic cross-surface contract suite:
+
+```bash
+bash scripts/run-s25-agent-contract-suite.sh
+```
+
+Setup-time gate (<15 minutes):
+
+```bash
+bash scripts/run-s25-agent-memory-setup.sh
+```
+
+Monthly release-gate evidence generation:
+
+```bash
+bash scripts/run-s25-release-gate-review.sh
+```
+
+Artifacts produced by S25 harnesses:
+
+- `project_plan/reports/s25_agent_contract_suite.log`
+- `project_plan/reports/s25_agent_contract_report.json`
+- `project_plan/reports/s25_agent_memory_setup.json`
+- `project_plan/reports/s25_release_gate_review.md`
+
 Reproducible S16 smoke harness:
 
 ```bash

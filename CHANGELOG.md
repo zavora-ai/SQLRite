@@ -260,6 +260,12 @@ The format is based on Keep a Changelog.
   - integration tests: `sdk/typescript/tests/integration.test.mjs`
   - packaging metadata: `sdk/typescript/package.json`, `sdk/typescript/tsconfig.json`
   - cross-platform CI matrix: `.github/workflows/typescript-sdk.yml`
+- S25 reference integration closure:
+  - reference integration examples: `examples/agent_integrations/`
+  - deterministic contract suite: `scripts/run-s25-agent-contract-suite.sh`
+  - setup-time gate (`< 15 min` target): `scripts/run-s25-agent-memory-setup.sh`
+  - release-gate evidence generator: `scripts/run-s25-release-gate-review.sh`
+  - reference integration CI workflow: `.github/workflows/agent-integrations.yml`
 - Sprint 20 evidence artifacts:
   - `project_plan/reports/S20.md`
   - `project_plan/reports/s20_quality_gates.log`
@@ -285,6 +291,14 @@ The format is based on Keep a Changelog.
   - `project_plan/reports/s24_quality_gates.log`
   - `project_plan/reports/s24_typescript_sdk_smoke.log`
   - `project_plan/reports/s24_benchmark_typescript_sdk.json`
+- Sprint 25 evidence artifacts:
+  - `project_plan/reports/S25.md`
+  - `project_plan/reports/s25_quality_gates.log`
+  - `project_plan/reports/s25_agent_contract_suite.log`
+  - `project_plan/reports/s25_agent_contract_report.json`
+  - `project_plan/reports/s25_agent_memory_setup.json`
+  - `project_plan/reports/s25_benchmark_reference_integrations.json`
+  - `project_plan/reports/s25_release_gate_review.md`
 
 ### Changed
 

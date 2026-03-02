@@ -2,6 +2,9 @@
 /target/
 /.sqlrite/
 dist/
+**/node_modules/
+**/*.egg-info/
+**/__pycache__/
 *.db
 *.sqlite
 sprint1_bench_smoke.json

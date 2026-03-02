@@ -1,0 +1,14 @@
+{
+  "started_unix_ms": 1772424653000,
+  "finished_unix_ms": 1772424655000,
+  "elapsed_seconds": 2,
+  "passes_under_15_minutes": true,
+  "setup_target_seconds": 900,
+  "steps": [
+    "build_sqlrite",
+    "seed_demo_db",
+    "start_server",
+    "python_sdk_query",
+    "typescript_sdk_query"
+  ]
+}
