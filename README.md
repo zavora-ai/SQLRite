@@ -1315,11 +1315,14 @@ Start here depending on what you need:
 
 | Need | Documents |
 |---|---|
-| SQL usage and patterns | `docs/sql_cookbook.md` |
-| Migration | `docs/migrations/sqlite_to_sqlrite.md`, `docs/migrations/pgvector_to_sqlrite.md`, `docs/migrations/api_first_vector_db_patterns.md` |
-| Operations | `docs/runbooks/migration_cli_workflow.md`, `docs/runbooks/ha_control_plane.md`, `docs/runtime_config_profiles.md` |
-| Security | `docs/security/threat_model.md`, `docs/security/compliance_posture.md`, `docs/runbooks/security_rbac_defaults.md`, `docs/runbooks/audit_export_key_rotation.md` |
-| Integration surfaces | `docs/runbooks/mcp_tool_server.md`, `docs/runbooks/grpc_query_service.md`, `docs/contracts/api_freeze_v1.json` |
+| Full curated product guide | `official_docs/README.md` |
+| Full example-by-example guide | `example_docs/README.md` |
+| Current docs tree mirror | `project_docs/README.md` |
+| SQL usage and patterns | `official_docs/sql/sql_retrieval_guide.md`, `project_docs/sql_cookbook.md` |
+| Migration | `official_docs/migrations/migration_guide.md`, `project_docs/migrations/sqlite_to_sqlrite.md`, `project_docs/migrations/pgvector_to_sqlrite.md`, `project_docs/migrations/api_first_vector_db_patterns.md` |
+| Operations | `official_docs/operations/operations_and_benchmarks.md`, `project_docs/runbooks/migration_cli_workflow.md`, `project_docs/runbooks/ha_control_plane.md`, `project_docs/runtime_config_profiles.md` |
+| Security | `official_docs/security/security_and_multi_tenant.md`, `project_docs/security/threat_model.md`, `project_docs/security/compliance_posture.md`, `project_docs/runbooks/security_rbac_defaults.md`, `project_docs/runbooks/audit_export_key_rotation.md` |
+| Integration surfaces | `official_docs/integrations/server_and_api_guide.md`, `official_docs/integrations/sdk_guide.md`, `project_docs/runbooks/mcp_tool_server.md`, `project_docs/runbooks/grpc_query_service.md`, `project_docs/contracts/api_freeze_v1.json` |
 
 ## Development
 
@@ -1357,7 +1360,10 @@ cargo clippy --all-targets --all-features -- -D warnings
 | `src/bin/` | companion binaries such as `sqlrite-security`, `sqlrite-reindex`, and `sqlrite-grpc-client` |
 | `sdk/python/` | Python SDK |
 | `sdk/typescript/` | TypeScript SDK |
-| `docs/` | product, operator, and release documentation |
+| `official_docs/` | curated official documentation by topic |
+| `example_docs/` | comprehensive documentation for each example |
+| `project_docs/` | mirrored copy of the current `docs/` tree |
+| `docs/` | current compatibility docs still referenced by scripts and release tooling |
 | `examples/` | runnable examples and datasets |
 | `scripts/` | install, packaging, and release automation |
 

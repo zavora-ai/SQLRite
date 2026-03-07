@@ -1,0 +1,303 @@
+# SQLRite Runtime Profile Contract
+
+Status: Active
+Date: March 1, 2026
+Owner: SQLRite core
+
+## Objective
+
+Define stable runtime configuration profiles for operator-safe defaults across embedded and server workflows.
+
+## S01 Contract
+
+Runtime profile is selected with:
+
+- `--profile balanced|durable|fast_unsafe`
+
+Vector index mode is selected with:
+
+- `--index-mode brute_force|lsh_ann|disabled`
+
+## Profile Definitions
+
+### `balanced` (default)
+
+Use when:
+- General production/dev use where durability and performance are both required.
+
+Configuration:
+- `journal_mode = WAL`
+- `synchronous = NORMAL`
+- `foreign_keys = ON`
+- `temp_store = MEMORY`
+
+### `durable`
+
+Use when:
+- Stronger durability guarantees are required (accepting lower write throughput).
+
+Configuration:
+- `journal_mode = WAL`
+- `synchronous = FULL`
+- `foreign_keys = ON`
+- `temp_store = MEMORY`
+
+### `fast_unsafe`
+
+Use when:
+- Benchmarking or ephemeral development speed is prioritized over durability.
+
+Configuration:
+- `journal_mode = WAL`
+- `synchronous = OFF`
+- `foreign_keys = ON`
+- `temp_store = MEMORY`
+
+## Index Mode Definitions
+
+### `brute_force`
+
+- Exact cosine search.
+- Deterministic quality baseline.
+- Default for correctness-sensitive workflows.
+
+### `lsh_ann`
+
+- Approximate nearest-neighbor mode.
+- Lower latency at larger corpus sizes.
+- Must preserve fallback behavior and deterministic tie-breaking in planner output.
+
+### `disabled`
+
+- No in-memory vector index.
+- Useful for text-only, low-memory, or debugging workflows.
+
+## Stability Guarantees
+
+1. Option names (`--profile`, `--index-mode`) are stable in `v1.x`; breaking changes require major-version policy.
+2. Profile semantics are documented release-to-release; any change requires release note callout.
+3. Default profile remains `balanced` unless major-version policy says otherwise.
+
+## Validation Requirements
+
+Per CI and release checks:
+
+1. `balanced` profile must pass unit/integration tests.
+2. `durable` profile must pass write/read consistency tests.
+3. `fast_unsafe` profile is allowed only in non-production benchmark profiles.
+
+## S14 Server HA Profile Scaffold
+
+Server mode now includes a high-availability runtime profile surface for replication/failover/recovery scaffolding.
+
+CLI flags:
+
+- `--ha-role standalone|primary|replica`
+- `--cluster-id <id>`
+- `--node-id <id>`
+- `--advertise <host:port>`
+- `--peer <host:port>` (repeatable)
+- `--sync-ack-quorum <n>`
+- `--heartbeat-ms <n>`
+- `--election-timeout-ms <n>`
+- `--max-replication-lag-ms <n>`
+- `--failover manual|automatic`
+- `--backup-dir <dir>`
+- `--snapshot-interval-s <n>`
+- `--pitr-retention-s <n>`
+- `--control-token <token>`
+- `--disable-sql-endpoint`
+
+Validation contract:
+
+1. Replication disabled requires role `standalone` and no peers.
+2. Replication enabled requires role `primary` or `replica`.
+3. `sync_ack_quorum >= 1`.
+4. `election_timeout_ms > heartbeat_interval_ms`.
+5. `max_replication_lag_ms > 0`.
+6. Primary quorum cannot exceed cluster size (`peers + self`).
+
+S15 protocol reliability additions:
+
+1. Replication log entries use term/index/checksum validation.
+2. Commit index advances only when ACK quorum is satisfied.
+3. Vote requests are term-gated and candidate log freshness-checked.
+4. Heartbeat updates apply commit progress without exceeding local log head.
+
+S16 resilience additions:
+
+1. `--failover automatic` enables timeout-based automatic promotion checks.
+2. Recovery timing can be tracked via `/control/v1/recovery/start` and `/control/v1/recovery/mark-restored`.
+3. Chaos scenarios can be injected/cleared for drills:
+- `node_crash`
+- `disk_full`
+- `partition_subset`
+4. New resilience read surfaces:
+- `GET /control/v1/failover/status`
+- `GET /control/v1/resilience`
+- `GET /control/v1/chaos/status`
+5. `/metrics` now emits HA resilience and chaos counters/gauges for failover and restore duration tracking.
+
+S17 recovery lifecycle additions:
+
+1. Backup/PITR CLI operations:
+- `sqlrite backup snapshot`
+- `sqlrite backup list`
+- `sqlrite backup restore`
+- `sqlrite backup pitr-restore`
+- `sqlrite backup prune`
+2. Recovery control-plane endpoints:
+- `POST /control/v1/recovery/snapshot`
+- `GET /control/v1/recovery/snapshots`
+- `POST /control/v1/recovery/verify-restore`
+- `POST /control/v1/recovery/prune-snapshots`
+
+S18 observability additions:
+
+1. Observability control-plane endpoints:
+- `GET /control/v1/observability/metrics-map`
+- `GET /control/v1/traces/recent`
+- `POST /control/v1/observability/reset`
+- `GET /control/v1/alerts/templates`
+- `POST /control/v1/alerts/simulate`
+- `GET /control/v1/slo/report`
+2. `/metrics` now emits request/error/latency/tracing/alert counters for SLO analysis.
+
+S19 reliability gate additions:
+
+1. DR game-day and soak validation harness:
+- `scripts/run-s19-dr-gameday.sh`
+2. SLO window reset support via `POST /control/v1/observability/reset` before soak windows.
+3. SLO validation targets used in reference drills:
+- availability `>= 99.95%`
+- RPO `<= 60s`
+
+S20 agent interoperability additions:
+
+1. MCP runtime command surface:
+- `sqlrite mcp [--db PATH] [--profile ...] [--index-mode ...] [--auth-token TOKEN] [--print-manifest]`
+2. MCP manifest generation exposes transport/tool/auth contract for agent runtimes.
+3. Dedicated MCP runtime binary available as `sqlrite-mcp`.
+
+S21 query-surface interoperability additions:
+
+1. OpenAPI contract endpoint for query surfaces:
+- `GET /v1/openapi.json`
+2. Retrieval query API endpoint:
+- `POST /v1/query`
+3. gRPC-style HTTP JSON bridge endpoints:
+- `POST /grpc/sqlrite.v1.QueryService/Sql`
+- `POST /grpc/sqlrite.v1.QueryService/Query`
+4. Interop smoke harness:
+- `scripts/run-s21-openapi-grpc-smoke.sh`
+
+S22 native gRPC service additions:
+
+1. Native gRPC QueryService endpoint:
+- `sqlrite grpc [--db PATH] [--bind HOST:PORT] [--profile ...] [--index-mode ...]`
+2. Dedicated client utility for contract validation:
+- `sqlrite-grpc-client`
+3. Shared SDK protocol contract crate:
+- `crates/sqlrite-sdk-core`
+4. gRPC + SDK smoke harness:
+- `scripts/run-s22-grpc-sdk-smoke.sh`
+
+S23 Python SDK additions:
+
+1. Python package root:
+- `sdk/python/`
+2. Integration tests against `sqlrite serve`:
+- `sdk/python/tests/test_client.py`
+3. Python package CI/build workflow:
+- `.github/workflows/python-sdk.yml`
+4. Python SDK smoke + dist generation:
+- `scripts/run-s23-python-sdk-smoke.sh`
+
+S24 TypeScript SDK additions:
+
+1. TypeScript package root:
+- `sdk/typescript/`
+2. Integration tests against `sqlrite serve`:
+- `sdk/typescript/tests/integration.test.mjs`
+3. Cross-platform TypeScript SDK CI matrix:
+- `.github/workflows/typescript-sdk.yml`
+4. TypeScript SDK smoke + npm pack generation:
+- `scripts/run-s24-typescript-sdk-smoke.sh`
+
+S25 reference integration and phase-E gate additions:
+
+1. Agent integration reference examples:
+- `examples/agent_integrations/`
+2. Deterministic cross-surface contract suite:
+- `scripts/run-s25-agent-contract-suite.sh`
+3. Agent memory setup-time gate (`< 15 minutes` target):
+- `scripts/run-s25-agent-memory-setup.sh`
+4. Monthly release-gate evidence generation:
+- `scripts/run-s25-release-gate-review.sh`
+5. Reference integration CI validation:
+- `.github/workflows/agent-integrations.yml`
+
+S26 API-freeze and edge-story additions:
+
+1. Frozen API contract manifest:
+- `docs/contracts/api_freeze_v1.json`
+2. Compatibility contract suite:
+- `scripts/run-s26-api-compat-suite.sh`
+3. API compatibility CI workflow:
+- `.github/workflows/api-compatibility.yml`
+4. Edge/WASM read-query architecture RFC:
+- `docs/rfcs/0002-edge-read-query-wasm.md`
+5. API freeze operation runbook:
+- `docs/runbooks/api_compatibility_freeze.md`
+
+S27 security and RBAC additions:
+
+1. Secure server flags:
+- `--secure-defaults`
+- `--require-auth-context`
+- `--authz-policy PATH`
+- `--audit-log PATH`
+2. Security summary endpoint:
+- `GET /control/v1/security`
+3. Default RBAC policy roles:
+- `reader`
+- `writer`
+- `tenant_admin`
+- `admin`
+4. Security smoke harness:
+- `scripts/run-s27-security-rbac-smoke.sh`
+5. Security operations runbook:
+- `docs/runbooks/security_rbac_defaults.md`
+
+S28 audit export and key-rotation additions:
+
+1. Audit export CLI:
+- `sqlrite-security export-audit`
+2. Key verification CLI:
+- `sqlrite-security verify-key`
+3. Control-plane audit export endpoint:
+- `POST /control/v1/security/audit/export`
+4. Rerank hook endpoint:
+- `POST /v1/rerank-hook`
+5. Documentation:
+- `docs/runbooks/audit_export_key_rotation.md`
+- `docs/security/compliance_posture.md`
+- `docs/security/threat_model.md`
+6. Security hardening harness:
+- `scripts/run-s28-security-audit-hardening.sh`
+
+S29 query profile hint additions:
+
+1. Query CLI hint:
+- `sqlrite query --query-profile balanced|latency|recall`
+2. Benchmark CLI hint:
+- `sqlrite benchmark --query-profile balanced|latency|recall`
+3. HTTP and gRPC request field:
+- `query_profile`
+4. Rerank hook request field:
+- `query_profile`
+5. Documentation:
+- `docs/runbooks/query_profile_hints.md`
+- `docs/rfcs/0003-query-profile-hints.md`
+6. Validation harness:
+- `scripts/run-s29-query-profile-hints.sh`
