@@ -52,7 +52,7 @@ SQLRite targets:
 
 Commands below assume you want `sqlrite` on your `PATH`.
 
-### Option 1: Install from source with Cargo
+### Option 1: Install from source with Cargo (Recommended)
 
 This works on macOS, Linux, and Windows anywhere Rust is available.
 
@@ -69,6 +69,16 @@ If you already have the repository locally:
 ```bash
 cargo install --path .
 ```
+
+Verify the install:
+
+```bash
+sqlrite --help
+sqlrite init --db sqlrite_verify.db --seed-demo
+sqlrite query --db sqlrite_verify.db --text "local memory" --top-k 1
+```
+
+If the install worked, `sqlrite --help` prints the CLI usage and the query command returns at least one result.
 
 ### Option 2: Build and install from this repo
 
