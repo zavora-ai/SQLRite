@@ -1,0 +1,16 @@
+{
+  "release_version": "1.0.0",
+  "generated_on": "2026-03-07",
+  "signoff_pass": true,
+  "artifacts": [
+    "dist/sqlrite-v1.0.0-aarch64-apple-darwin.tar.gz",
+    "dist/sqlrite-v1.0.0-aarch64-apple-darwin.sha256",
+    "project_plan/reports/s32_blocker_audit.json",
+    "project_plan/reports/s32_bench_suite.json",
+    "project_plan/reports/s33_ga_checklist.md",
+    "project_plan/reports/s33_benchmark_reliability_report.md",
+    "project_plan/reports/s33_benchmark_repro_manifest.json",
+    "project_plan/reports/s33_final_signoff.json",
+    "project_plan/reports/S33.md"
+  ]
+}

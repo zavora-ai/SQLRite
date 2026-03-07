@@ -1,5 +1,5 @@
-{"unix_ms":1772863341051,"actor_id":"anonymous","tenant_id":"unknown","operation":"query","allowed":false,"detail":{"path":"/v1/query","reason":"missing_auth_context"}}
-{"unix_ms":1772863341070,"actor_id":"reader-1","tenant_id":"demo","operation":"query","allowed":true,"detail":{"path":"/v1/query","row_count":2}}
-{"unix_ms":1772863341091,"actor_id":"reader-1","tenant_id":"demo","operation":"query","allowed":false,"detail":{"path":"/v1/query","reason":"tenant filter mismatch"}}
-{"unix_ms":1772863341118,"actor_id":"reader-1","tenant_id":"demo","operation":"sql_admin","allowed":false,"detail":{"path":"/v1/sql","reason":"authorization denied: actor `reader-1` lacks role permission for SqlAdmin"}}
-{"unix_ms":1772863341131,"actor_id":"admin-1","tenant_id":"demo","operation":"sql_admin","allowed":true,"detail":{"path":"/v1/sql","statement_len":46}}
+{"unix_ms":1772864939661,"actor_id":"anonymous","tenant_id":"unknown","operation":"query","allowed":false,"detail":{"path":"/v1/query","reason":"missing_auth_context"}}
+{"unix_ms":1772864939677,"actor_id":"reader-1","tenant_id":"demo","operation":"query","allowed":true,"detail":{"path":"/v1/query","row_count":2}}
+{"unix_ms":1772864939690,"actor_id":"reader-1","tenant_id":"demo","operation":"query","allowed":false,"detail":{"path":"/v1/query","reason":"tenant filter mismatch"}}
+{"unix_ms":1772864939704,"actor_id":"reader-1","tenant_id":"demo","operation":"sql_admin","allowed":false,"detail":{"path":"/v1/sql","reason":"authorization denied: actor `reader-1` lacks role permission for SqlAdmin"}}
+{"unix_ms":1772864939717,"actor_id":"admin-1","tenant_id":"demo","operation":"sql_admin","allowed":true,"detail":{"path":"/v1/sql","statement_len":46}}

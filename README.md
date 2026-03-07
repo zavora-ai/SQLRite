@@ -625,6 +625,48 @@ Sample release-quality highlights from the current S32 audit:
 - observed_rpo_seconds: 0.0050
 ```
 
+## GA Release Train (Sprint 33)
+
+Sprint 33 closes the `v1.0.0` train with a host release archive, a publishable benchmark/reliability report, and a machine-readable final sign-off bundle.
+
+### Run the GA release train
+
+```bash
+bash scripts/run-s33-ga-release-train.sh
+```
+
+This runs:
+
+- `bash scripts/run-s32-release-candidate-audit.sh`
+- `bash scripts/create-release-archive.sh --version 1.0.0`
+- GA checklist/sign-off/report synthesis
+- evidence tarball packaging
+
+### Generated S33 artifacts
+
+- `project_plan/reports/s33_quality_gates.log`
+- `project_plan/reports/s33_ga_checklist.md`
+- `project_plan/reports/s33_benchmark_reliability_report.md`
+- `project_plan/reports/s33_benchmark_repro_manifest.json`
+- `project_plan/reports/s33_release_train_bundle_manifest.json`
+- `project_plan/reports/s33_final_signoff.json`
+- `project_plan/reports/sqlrite-v1.0.0-ga-evidence.tar.gz`
+- `project_plan/reports/S33.md`
+- `dist/sqlrite-v1.0.0-aarch64-apple-darwin.tar.gz`
+- `dist/sqlrite-v1.0.0-aarch64-apple-darwin.sha256`
+
+Sample GA highlights from the current S33 train:
+
+```text
+- signoff_pass: true
+- release_gate_pass: true
+- open_p0_count: 0
+- open_p1_count: 0
+- quick_qps: 166.73
+- 10k_p95_ms: 12.3622
+- availability_percent: 100.00
+```
+
 Run SQL-only conformance for cookbook patterns:
 
 ```bash

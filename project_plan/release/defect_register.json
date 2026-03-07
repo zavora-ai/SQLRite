@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "release_target": "v1.0.0-rc1",
+  "release_target": "v1.0.0",
   "updated_at": "2026-03-07",
   "policy": {
     "release_blocker_severities": ["P0", "P1"],

@@ -1,5 +1,5 @@
 [build]
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.07s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.05s
 [quality-gates]
 [create-fixtures] work_dir=project_plan/reports/s30_fixture_workspace
 [migrate-sqlite]
@@ -10,8 +10,8 @@ sqlite_ok=True
 libsql_alias_ok=True
 pgvector_ok=True
 hardware_class=darwin-arm64-10cpu
-sqlite_rows_per_sec=175.7971
-libsql_alias_rows_per_sec=398.4195
-pgvector_rows_per_sec=605.1818
+sqlite_rows_per_sec=412.0349
+libsql_alias_rows_per_sec=442.837
+pgvector_rows_per_sec=630.6496
 pass=True
 [s30-migration-suite-complete] report=project_plan/reports/s30_migration_report.json benchmark=project_plan/reports/s30_benchmark_migration.json quality_log=project_plan/reports/s30_quality_gates.log

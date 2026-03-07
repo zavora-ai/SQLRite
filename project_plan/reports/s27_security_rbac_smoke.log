@@ -61,7 +61,7 @@ rbac policy written to project_plan/reports/s27_rbac_policy.json
 }
 [sql-admin-ok]
 {
-  "elapsed_ms": 0.06475,
+  "elapsed_ms": 0.048458,
   "kind": "query",
   "rewritten_statement": "SELECT id FROM chunks ORDER BY id ASC LIMIT 1;",
   "row_count": 1,

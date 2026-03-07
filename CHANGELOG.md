@@ -74,6 +74,17 @@ The format is based on Keep a Changelog.
   - `project_plan/reports/s32_release_quality_report.md`
   - `project_plan/reports/s32_release_notes_draft.md`
   - `project_plan/reports/s32_risk_register.md`
+- GA release-train publication and sign-off artifacts:
+  - `docs/runbooks/ga_release_train.md`
+  - `scripts/run-s33-ga-release-train.sh`
+  - `.github/workflows/ga-release-train.yml`
+  - `project_plan/reports/s33_ga_checklist.md`
+  - `project_plan/reports/s33_benchmark_reliability_report.md`
+  - `project_plan/reports/s33_benchmark_repro_manifest.json`
+  - `project_plan/reports/s33_release_train_bundle_manifest.json`
+  - `project_plan/reports/s33_final_signoff.json`
+  - `project_plan/reports/sqlrite-v1.0.0-ga-evidence.tar.gz`
+  - `project_plan/reports/S33.md`
 - SQL-only conformance runner:
   - `scripts/run-sql-cookbook-conformance.sh`
 - Sprint 7 evidence artifacts:

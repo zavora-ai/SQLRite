@@ -1,0 +1,17 @@
+{
+  "release_version": "1.0.0",
+  "generated_on": "2026-03-07",
+  "host_target": "aarch64-apple-darwin",
+  "release_gate_pass": true,
+  "open_p0_count": 0,
+  "open_p1_count": 0,
+  "availability_percent": 100.0,
+  "availability_target_percent": 99.95,
+  "observed_rpo_seconds": 0.005,
+  "rpo_target_seconds": 60.0,
+  "archive_path": "dist/sqlrite-v1.0.0-aarch64-apple-darwin.tar.gz",
+  "archive_sha_path": "dist/sqlrite-v1.0.0-aarch64-apple-darwin.sha256",
+  "archive_sha256": "be1524ca89f18c005040b761de5b79c090c103e4caf1d378bdfa96e516345fe7",
+  "signoff_pass": true,
+  "evidence_bundle": "project_plan/reports/sqlrite-v1.0.0-ga-evidence.tar.gz"
+}

@@ -1,13 +1,5 @@
 {
   "role_permissions": {
-    "reader": [
-      "query"
-    ],
-    "tenant_admin": [
-      "query",
-      "ingest",
-      "delete_tenant"
-    ],
     "admin": [
       "query",
       "ingest",
@@ -17,6 +9,14 @@
     "writer": [
       "query",
       "ingest"
+    ],
+    "tenant_admin": [
+      "query",
+      "ingest",
+      "delete_tenant"
+    ],
+    "reader": [
+      "query"
     ]
   },
   "cross_tenant_roles": [

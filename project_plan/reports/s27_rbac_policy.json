@@ -1,21 +1,21 @@
 {
   "role_permissions": {
-    "reader": [
-      "query"
-    ],
     "writer": [
       "query",
       "ingest"
     ],
-    "tenant_admin": [
-      "query",
-      "ingest",
-      "delete_tenant"
+    "reader": [
+      "query"
     ],
     "admin": [
       "query",
       "ingest",
       "sql_admin",
+      "delete_tenant"
+    ],
+    "tenant_admin": [
+      "query",
+      "ingest",
       "delete_tenant"
     ]
   },
