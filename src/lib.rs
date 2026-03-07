@@ -43,9 +43,11 @@ pub use sdk_runtime::{
     SdkRuntimeError, execute_query as execute_sdk_query, execute_sql as execute_sdk_sql,
 };
 pub use security::{
-    AccessContext, AccessOperation, AccessPolicy, AllowAllPolicy, AuditEvent, AuditLogger,
-    InMemoryTenantKeyRegistry, JsonlAuditLogger, RbacPolicy, RbacPolicyConfig, SecureSqlRite,
-    TenantKey, TenantKeyRegistry, rotate_tenant_encryption_key,
+    AccessContext, AccessOperation, AccessPolicy, AllowAllPolicy, AuditEvent, AuditExportFormat,
+    AuditExportReport, AuditLogger, AuditQuery, InMemoryTenantKeyRegistry, JsonlAuditLogger,
+    KeyRotationReport, RbacPolicy, RbacPolicyConfig, SecureSqlRite, TenantKey, TenantKeyRegistry,
+    export_audit_events, inspect_tenant_key_rotation, read_audit_events,
+    rotate_tenant_encryption_key, rotate_tenant_encryption_key_with_report,
 };
 pub use server::{ServerConfig, ServerSecurityConfig, serve_health_endpoints};
 pub use sql_semantics::{execute_sql_statement_json, prepare_sql_connection};

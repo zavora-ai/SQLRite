@@ -1,9 +1,11 @@
+use crate::security::{AccessPolicy, AuditLogger};
 use crate::{
-    AccessContext, AccessOperation, AccessPolicy, AuditEvent, AuditLogger, DurabilityProfile,
+    AccessContext, AccessOperation, AuditEvent, AuditExportFormat, AuditQuery, DurabilityProfile,
     FailoverMode, HaRuntimeProfile, HaRuntimeState, JsonlAuditLogger, RbacPolicy, ReplicationLog,
-    ReplicationLogEntry, Result, RuntimeConfig, ServerRole, SqlRite, build_health_report,
-    create_backup_snapshot, execute_sdk_query, execute_sdk_sql, list_backup_snapshots,
-    prune_backup_snapshots, restore_backup_file_verified, select_backup_snapshot_for_time,
+    ReplicationLogEntry, Result, RuntimeConfig, ServerRole, SqlRite, SqlRiteError,
+    build_health_report, create_backup_snapshot, execute_sdk_query, execute_sdk_sql,
+    export_audit_events, list_backup_snapshots, prune_backup_snapshots,
+    restore_backup_file_verified, select_backup_snapshot_for_time,
 };
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::Deserialize;
@@ -535,6 +537,30 @@ struct AlertSimulationRequest {
     restore_active_ms: Option<u64>,
 }
 
+#[derive(Debug, Deserialize, Default)]
+struct SecurityAuditExportRequest {
+    actor_id: Option<String>,
+    tenant_id: Option<String>,
+    operation: Option<AccessOperation>,
+    allowed: Option<bool>,
+    from_unix_ms: Option<u64>,
+    to_unix_ms: Option<u64>,
+    limit: Option<usize>,
+    output_path: Option<String>,
+    format: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct RerankHookRequest {
+    query_text: Option<String>,
+    query_embedding: Option<Vec<f32>>,
+    candidate_count: Option<usize>,
+    alpha: Option<f32>,
+    candidate_limit: Option<usize>,
+    metadata_filters: Option<HashMap<String, String>>,
+    doc_id: Option<String>,
+}
+
 pub fn serve_health_endpoints(
     db_path: impl AsRef<Path>,
     runtime: RuntimeConfig,
@@ -835,6 +861,45 @@ fn build_response(
             "application/json",
             security_summary_json(config).to_string(),
         )),
+        ("POST", "/control/v1/security/audit/export") => {
+            if !authorize_control_request(request, config) {
+                return Ok(unauthorized_response());
+            }
+            let Some(audit_path) = &config.security.audit_log_path else {
+                return Ok((
+                    400,
+                    "application/json",
+                    json!({"error": "audit log path is not configured"}).to_string(),
+                ));
+            };
+            let input = parse_optional_json_body::<SecurityAuditExportRequest>(request)
+                .map_err(std::io::Error::other)?;
+            let format = match input.format.as_deref() {
+                Some("json") => AuditExportFormat::Json,
+                Some("jsonl") | None => AuditExportFormat::Jsonl,
+                Some(other) => return Ok((
+                    400,
+                    "application/json",
+                    json!({"error": format!("invalid format `{other}`; expected json or jsonl")})
+                        .to_string(),
+                )),
+            };
+            let report = export_audit_events(
+                audit_path,
+                &AuditQuery {
+                    actor_id: input.actor_id,
+                    tenant_id: input.tenant_id,
+                    operation: input.operation,
+                    allowed: input.allowed,
+                    from_unix_ms: input.from_unix_ms,
+                    to_unix_ms: input.to_unix_ms,
+                    limit: input.limit,
+                },
+                input.output_path.as_deref().map(Path::new),
+                format,
+            )?;
+            Ok((200, "application/json", serde_json::to_string(&report)?))
+        }
         ("GET", "/control/v1/state") => {
             let control = state
                 .lock()
@@ -1895,6 +1960,36 @@ fn build_response(
                 )),
             }
         }
+        ("POST", "/v1/rerank-hook") if config.enable_sql_endpoint => {
+            let input = match parse_json_body::<RerankHookRequest>(request) {
+                Ok(payload) => payload,
+                Err(error) => {
+                    let payload = json!({"error": error});
+                    return Ok((400, "application/json", payload.to_string()));
+                }
+            };
+            match execute_rerank_hook_api(db, config, request, path, input) {
+                Ok(payload) => Ok((200, "application/json", payload.to_string())),
+                Err(error)
+                    if matches!(
+                        &error,
+                        crate::SqlRiteError::Io(io_error)
+                            if io_error.kind() == std::io::ErrorKind::PermissionDenied
+                    ) =>
+                {
+                    Ok((
+                        403,
+                        "application/json",
+                        json!({"error": error.to_string()}).to_string(),
+                    ))
+                }
+                Err(error) => Ok((
+                    400,
+                    "application/json",
+                    json!({"error": error.to_string()}).to_string(),
+                )),
+            }
+        }
         ("POST", "/grpc/sqlrite.v1.QueryService/Sql") if config.enable_sql_endpoint => {
             let sql_request = match parse_json_body::<SqlApiRequest>(request) {
                 Ok(payload) => payload,
@@ -1954,6 +2049,11 @@ fn build_response(
             405,
             "application/json",
             json!({"error": "method not allowed; use POST /v1/query"}).to_string(),
+        )),
+        (method, "/v1/rerank-hook") if method != "POST" => Ok((
+            405,
+            "application/json",
+            json!({"error": "method not allowed; use POST /v1/rerank-hook"}).to_string(),
         )),
         (method, "/grpc/sqlrite.v1.QueryService/Sql") if method != "POST" => Ok((
             405,
@@ -2057,6 +2157,75 @@ fn execute_query_api(
     Ok(serde_json::to_value(envelope)?)
 }
 
+fn execute_rerank_hook_api(
+    db: &SqlRite,
+    config: &ServerConfig,
+    request: &HttpRequest,
+    path: &str,
+    input: RerankHookRequest,
+) -> Result<Value> {
+    let context = authorize_request(config, request, AccessOperation::Query, path).map_err(
+        |(_, _, body)| {
+            std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                extract_error_message(&body),
+            )
+        },
+    )?;
+
+    let candidate_count = input.candidate_count.unwrap_or(25).max(1);
+    let mut metadata_filters = input.metadata_filters.unwrap_or_default();
+    if let Some(context) = context {
+        if let Some(existing) = metadata_filters.get("tenant")
+            && existing != &context.tenant_id
+        {
+            audit_request(
+                config,
+                request,
+                AccessOperation::Query,
+                false,
+                json!({"path": path, "reason": "tenant filter mismatch"}),
+            )?;
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "tenant filter mismatch",
+            )
+            .into());
+        }
+        metadata_filters.insert("tenant".to_string(), context.tenant_id);
+    }
+
+    let request_model = crate::SearchRequest {
+        query_text: input.query_text,
+        query_embedding: input.query_embedding,
+        top_k: candidate_count,
+        alpha: input.alpha.unwrap_or(sqlrite_sdk_core::DEFAULT_ALPHA),
+        candidate_limit: input
+            .candidate_limit
+            .unwrap_or(sqlrite_sdk_core::DEFAULT_CANDIDATE_LIMIT)
+            .max(candidate_count),
+        metadata_filters,
+        doc_id: input.doc_id,
+        ..crate::SearchRequest::default()
+    };
+    request_model
+        .validate()
+        .map_err(|error| SqlRiteError::InvalidBenchmarkConfig(error.to_string()))?;
+    let rows = db.search(request_model)?;
+    audit_request(
+        config,
+        request,
+        AccessOperation::Query,
+        true,
+        json!({"path": path, "row_count": rows.len(), "kind": "rerank_hook"}),
+    )?;
+    Ok(json!({
+        "kind": "rerank_hook",
+        "row_count": rows.len(),
+        "rows": rows,
+    }))
+}
+
 fn openapi_query_document(sql_enabled: bool) -> Value {
     let mut paths = serde_json::Map::new();
     if sql_enabled {
@@ -2096,6 +2265,26 @@ fn openapi_query_document(sql_enabled: bool) -> Value {
                     "responses": {
                         "200": {"description": "Query results"},
                         "400": {"description": "Invalid query request"}
+                    }
+                }
+            }),
+        );
+        paths.insert(
+            "/v1/rerank-hook".to_string(),
+            json!({
+                "post": {
+                    "summary": "Produce scored candidate features for external rerankers",
+                    "requestBody": {
+                        "required": true,
+                        "content": {
+                            "application/json": {
+                                "schema": {"$ref": "#/components/schemas/RerankHookRequest"}
+                            }
+                        }
+                    },
+                    "responses": {
+                        "200": {"description": "Rerank candidate payload"},
+                        "400": {"description": "Invalid rerank hook request"}
                     }
                 }
             }),
@@ -2179,6 +2368,24 @@ fn openapi_query_document(sql_enabled: bool) -> Value {
                             "items": {"type": "number"}
                         },
                         "top_k": {"type": "integer", "minimum": 1},
+                        "alpha": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+                        "candidate_limit": {"type": "integer", "minimum": 1},
+                        "metadata_filters": {
+                            "type": "object",
+                            "additionalProperties": {"type": "string"}
+                        },
+                        "doc_id": {"type": "string"}
+                    }
+                },
+                "RerankHookRequest": {
+                    "type": "object",
+                    "properties": {
+                        "query_text": {"type": "string"},
+                        "query_embedding": {
+                            "type": "array",
+                            "items": {"type": "number"}
+                        },
+                        "candidate_count": {"type": "integer", "minimum": 1},
                         "alpha": {"type": "number", "minimum": 0.0, "maximum": 1.0},
                         "candidate_limit": {"type": "integer", "minimum": 1},
                         "metadata_filters": {
@@ -2948,6 +3155,7 @@ fn write_response(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::security::AuditLogger;
     use crate::{ChunkInput, RbacPolicy, RuntimeConfig};
     use serde_json::json;
     use tempfile::{NamedTempFile, tempdir};
@@ -3193,6 +3401,61 @@ mod tests {
     }
 
     #[test]
+    fn security_audit_export_endpoint_writes_filtered_jsonl() -> Result<()> {
+        let tmp = tempdir()?;
+        let audit_path = tmp.path().join("audit.jsonl");
+        let export_path = tmp.path().join("export.jsonl");
+        let db = SqlRite::open_in_memory_with_config(RuntimeConfig::default())?;
+        let state = Arc::new(Mutex::new(ControlPlaneState::new(
+            HaRuntimeProfile::default(),
+        )));
+        let mut config = secure_server_config(audit_path.clone());
+        config.control_api_token = Some("secret".to_string());
+
+        let logger = JsonlAuditLogger::new(&audit_path, Vec::<String>::new())?;
+        logger.log(&AuditEvent {
+            unix_ms: 10,
+            actor_id: "reader-1".to_string(),
+            tenant_id: "acme".to_string(),
+            operation: AccessOperation::Query,
+            allowed: true,
+            detail: json!({"path":"/v1/query"}),
+        })?;
+        logger.log(&AuditEvent {
+            unix_ms: 20,
+            actor_id: "admin-1".to_string(),
+            tenant_id: "acme".to_string(),
+            operation: AccessOperation::SqlAdmin,
+            allowed: false,
+            detail: json!({"path":"/v1/sql"}),
+        })?;
+
+        let request = make_request(
+            "POST",
+            "/control/v1/security/audit/export",
+            Some(&format!(
+                "{{\"actor_id\":\"reader-1\",\"output_path\":\"{}\",\"format\":\"jsonl\"}}",
+                export_path.display()
+            )),
+            Some("secret"),
+        );
+        let (status, _, body) = build_response(
+            &db,
+            Path::new(":memory:"),
+            DurabilityProfile::Balanced,
+            &config,
+            &state,
+            &request,
+        )?;
+        assert_eq!(status, 200);
+        assert!(body.contains("\"matched_events\":1"));
+        let export = std::fs::read_to_string(export_path)?;
+        assert!(export.contains("reader-1"));
+        assert!(!export.contains("admin-1"));
+        Ok(())
+    }
+
+    #[test]
     fn secure_query_requires_auth_context_headers() -> Result<()> {
         let tmp = tempdir()?;
         let db = SqlRite::open_in_memory_with_config(RuntimeConfig::default())?;
@@ -3295,6 +3558,54 @@ mod tests {
         let audit = std::fs::read_to_string(audit_path)?;
         assert!(audit.contains("\"allowed\":true"));
         assert!(audit.contains("\"allowed\":false"));
+        Ok(())
+    }
+
+    #[test]
+    fn rerank_hook_endpoint_returns_scored_candidates() -> Result<()> {
+        let tmp = tempdir()?;
+        let db = SqlRite::open_in_memory_with_config(RuntimeConfig::default())?;
+        db.ingest_chunk(&ChunkInput {
+            id: "r1".to_string(),
+            doc_id: "doc-1".to_string(),
+            content: "rerank candidate agent memory".to_string(),
+            embedding: vec![1.0, 0.0],
+            metadata: json!({"tenant": "acme"}),
+            source: None,
+        })?;
+        let state = Arc::new(Mutex::new(ControlPlaneState::new(
+            HaRuntimeProfile::default(),
+        )));
+        let config = secure_server_config(tmp.path().join("audit.jsonl"));
+
+        let mut request = make_request(
+            "POST",
+            "/v1/rerank-hook",
+            Some(r#"{"query_text":"agent","candidate_count":5}"#),
+            None,
+        );
+        request
+            .headers
+            .insert("x-sqlrite-actor-id".to_string(), "reader-1".to_string());
+        request
+            .headers
+            .insert("x-sqlrite-tenant-id".to_string(), "acme".to_string());
+        request
+            .headers
+            .insert("x-sqlrite-roles".to_string(), "reader".to_string());
+
+        let (status, _, body) = build_response(
+            &db,
+            Path::new(":memory:"),
+            DurabilityProfile::Balanced,
+            &config,
+            &state,
+            &request,
+        )?;
+        assert_eq!(status, 200);
+        assert!(body.contains("\"kind\":\"rerank_hook\""));
+        assert!(body.contains("\"vector_score\""));
+        assert!(body.contains("\"text_score\""));
         Ok(())
     }
 

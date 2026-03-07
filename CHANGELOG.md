@@ -326,6 +326,34 @@ The format is based on Keep a Changelog.
   - `project_plan/reports/s27_security_rbac_report.json`
   - `project_plan/reports/s27_security_audit.jsonl`
   - `project_plan/reports/s27_benchmark_security_rbac.json`
+- S28 audit export and key-rotation hardening:
+  - audit export query/report types and key-rotation verification reports in `src/security.rs`
+  - security CLI commands:
+    - `sqlrite-security export-audit`
+    - `sqlrite-security verify-key`
+    - `sqlrite-security rotate-key --json`
+  - control-plane audit export endpoint:
+    - `POST /control/v1/security/audit/export`
+  - authenticated rerank hook endpoint:
+    - `POST /v1/rerank-hook`
+  - seeded security workflow example:
+    - `examples/security_rotation_workflow.rs`
+  - security hardening harness:
+    - `scripts/run-s28-security-audit-hardening.sh`
+  - CI workflow:
+    - `.github/workflows/security-audit-hardening.yml`
+  - compliance and threat-model docs:
+    - `docs/runbooks/audit_export_key_rotation.md`
+    - `docs/security/compliance_posture.md`
+    - `docs/security/threat_model.md`
+- Sprint 28 evidence artifacts:
+  - `project_plan/reports/S28.md`
+  - `project_plan/reports/s28_quality_gates.log`
+  - `project_plan/reports/s28_security_audit_hardening.log`
+  - `project_plan/reports/s28_security_audit_report.json`
+  - `project_plan/reports/s28_audit_export.jsonl`
+  - `project_plan/reports/s28_audit_export_server.jsonl`
+  - `project_plan/reports/s28_benchmark_security_audit.json`
 
 ### Changed
 

@@ -268,3 +268,20 @@ S27 security and RBAC additions:
 - `scripts/run-s27-security-rbac-smoke.sh`
 5. Security operations runbook:
 - `docs/runbooks/security_rbac_defaults.md`
+
+S28 audit export and key-rotation additions:
+
+1. Audit export CLI:
+- `sqlrite-security export-audit`
+2. Key verification CLI:
+- `sqlrite-security verify-key`
+3. Control-plane audit export endpoint:
+- `POST /control/v1/security/audit/export`
+4. Rerank hook endpoint:
+- `POST /v1/rerank-hook`
+5. Documentation:
+- `docs/runbooks/audit_export_key_rotation.md`
+- `docs/security/compliance_posture.md`
+- `docs/security/threat_model.md`
+6. Security hardening harness:
+- `scripts/run-s28-security-audit-hardening.sh`

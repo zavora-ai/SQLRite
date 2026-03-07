@@ -397,6 +397,46 @@ pub trait AuditLogger: Send + Sync {
     fn log(&self, event: &AuditEvent) -> Result<()>;
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AuditQuery {
+    pub actor_id: Option<String>,
+    pub tenant_id: Option<String>,
+    pub operation: Option<AccessOperation>,
+    pub allowed: Option<bool>,
+    pub from_unix_ms: Option<u64>,
+    pub to_unix_ms: Option<u64>,
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuditExportFormat {
+    Json,
+    Jsonl,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuditExportReport {
+    pub source_path: PathBuf,
+    pub output_path: Option<PathBuf>,
+    pub matched_events: usize,
+    pub exported_events: usize,
+    pub format: String,
+    pub filters: AuditQuery,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KeyRotationReport {
+    pub tenant_id: String,
+    pub metadata_field: String,
+    pub target_key_id: String,
+    pub scanned_chunks: usize,
+    pub encrypted_chunks: usize,
+    pub rotated_chunks: usize,
+    pub target_key_matches: usize,
+    pub stale_key_ids: Vec<String>,
+    pub verified_all_target_key: bool,
+}
+
 #[derive(Debug)]
 pub struct JsonlAuditLogger {
     path: PathBuf,
@@ -435,6 +475,42 @@ impl JsonlAuditLogger {
             }
             _ => detail.clone(),
         }
+    }
+}
+
+impl AuditQuery {
+    fn matches(&self, event: &AuditEvent) -> bool {
+        if let Some(actor_id) = &self.actor_id
+            && &event.actor_id != actor_id
+        {
+            return false;
+        }
+        if let Some(tenant_id) = &self.tenant_id
+            && &event.tenant_id != tenant_id
+        {
+            return false;
+        }
+        if let Some(operation) = self.operation
+            && event.operation != operation
+        {
+            return false;
+        }
+        if let Some(allowed) = self.allowed
+            && event.allowed != allowed
+        {
+            return false;
+        }
+        if let Some(from_unix_ms) = self.from_unix_ms
+            && event.unix_ms < from_unix_ms
+        {
+            return false;
+        }
+        if let Some(to_unix_ms) = self.to_unix_ms
+            && event.unix_ms > to_unix_ms
+        {
+            return false;
+        }
+        true
     }
 }
 
@@ -642,6 +718,23 @@ pub fn rotate_tenant_encryption_key<R: TenantKeyRegistry>(
     key_registry: &R,
     new_key_id: &str,
 ) -> Result<usize> {
+    Ok(rotate_tenant_encryption_key_with_report(
+        db,
+        tenant_id,
+        metadata_field,
+        key_registry,
+        new_key_id,
+    )?
+    .rotated_chunks)
+}
+
+pub fn rotate_tenant_encryption_key_with_report<R: TenantKeyRegistry>(
+    db: &SqlRite,
+    tenant_id: &str,
+    metadata_field: &str,
+    key_registry: &R,
+    new_key_id: &str,
+) -> Result<KeyRotationReport> {
     let new_key = key_registry
         .key_by_id(tenant_id, new_key_id)
         .ok_or_else(|| SqlRiteError::UnsupportedOperation("new key not found".to_string()))?;
@@ -649,6 +742,10 @@ pub fn rotate_tenant_encryption_key<R: TenantKeyRegistry>(
     let mut updated = 0usize;
     let mut offset = 0usize;
     const PAGE_SIZE: usize = 256;
+    let mut scanned_chunks = 0usize;
+    let mut encrypted_chunks = 0usize;
+    let mut target_key_matches = 0usize;
+    let mut stale_key_ids = HashSet::new();
 
     loop {
         let page = db.list_chunks_page(offset, PAGE_SIZE, Some(tenant_id))?;
@@ -657,6 +754,7 @@ pub fn rotate_tenant_encryption_key<R: TenantKeyRegistry>(
         }
 
         for chunk in &page {
+            scanned_chunks = scanned_chunks.saturating_add(1);
             let mut metadata = chunk.metadata.clone();
             let Some(encrypted_value) = metadata.get(metadata_field).and_then(Value::as_str) else {
                 continue;
@@ -664,6 +762,12 @@ pub fn rotate_tenant_encryption_key<R: TenantKeyRegistry>(
             let Some((old_key_id, cipher_hex)) = parse_encrypted_value(encrypted_value) else {
                 continue;
             };
+            encrypted_chunks = encrypted_chunks.saturating_add(1);
+            if old_key_id == new_key_id {
+                target_key_matches = target_key_matches.saturating_add(1);
+                continue;
+            }
+            stale_key_ids.insert(old_key_id.to_string());
 
             let old_key = key_registry
                 .key_by_id(tenant_id, old_key_id)
@@ -690,7 +794,144 @@ pub fn rotate_tenant_encryption_key<R: TenantKeyRegistry>(
         offset += page.len();
     }
 
-    Ok(updated)
+    let stale_key_ids = stale_key_ids.into_iter().collect::<Vec<_>>();
+    Ok(KeyRotationReport {
+        tenant_id: tenant_id.to_string(),
+        metadata_field: metadata_field.to_string(),
+        target_key_id: new_key.key_id,
+        scanned_chunks,
+        encrypted_chunks,
+        rotated_chunks: updated,
+        target_key_matches: target_key_matches.saturating_add(updated),
+        stale_key_ids,
+        verified_all_target_key: encrypted_chunks == target_key_matches.saturating_add(updated),
+    })
+}
+
+pub fn inspect_tenant_key_rotation<R: TenantKeyRegistry>(
+    db: &SqlRite,
+    tenant_id: &str,
+    metadata_field: &str,
+    key_registry: &R,
+    target_key_id: &str,
+) -> Result<KeyRotationReport> {
+    let target_key = key_registry
+        .key_by_id(tenant_id, target_key_id)
+        .ok_or_else(|| SqlRiteError::UnsupportedOperation("target key not found".to_string()))?;
+
+    let mut offset = 0usize;
+    const PAGE_SIZE: usize = 256;
+    let mut scanned_chunks = 0usize;
+    let mut encrypted_chunks = 0usize;
+    let mut target_key_matches = 0usize;
+    let mut stale_key_ids = HashSet::new();
+
+    loop {
+        let page = db.list_chunks_page(offset, PAGE_SIZE, Some(tenant_id))?;
+        if page.is_empty() {
+            break;
+        }
+
+        for chunk in &page {
+            scanned_chunks = scanned_chunks.saturating_add(1);
+            let Some(encrypted_value) = chunk.metadata.get(metadata_field).and_then(Value::as_str)
+            else {
+                continue;
+            };
+            let Some((key_id, _)) = parse_encrypted_value(encrypted_value) else {
+                continue;
+            };
+            encrypted_chunks = encrypted_chunks.saturating_add(1);
+            if key_id == target_key.key_id {
+                target_key_matches = target_key_matches.saturating_add(1);
+            } else {
+                stale_key_ids.insert(key_id.to_string());
+            }
+        }
+
+        offset += page.len();
+    }
+
+    Ok(KeyRotationReport {
+        tenant_id: tenant_id.to_string(),
+        metadata_field: metadata_field.to_string(),
+        target_key_id: target_key.key_id,
+        scanned_chunks,
+        encrypted_chunks,
+        rotated_chunks: 0,
+        target_key_matches,
+        stale_key_ids: stale_key_ids.into_iter().collect(),
+        verified_all_target_key: encrypted_chunks == target_key_matches,
+    })
+}
+
+pub fn read_audit_events(path: impl AsRef<Path>) -> Result<Vec<AuditEvent>> {
+    let path = path.as_ref();
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let payload = fs::read_to_string(path)?;
+    payload
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| {
+            serde_json::from_str::<AuditEvent>(line)
+                .map_err(|e| SqlRiteError::UnsupportedOperation(e.to_string()))
+        })
+        .collect()
+}
+
+pub fn export_audit_events(
+    source_path: impl AsRef<Path>,
+    query: &AuditQuery,
+    output_path: Option<&Path>,
+    format: AuditExportFormat,
+) -> Result<AuditExportReport> {
+    let source_path = source_path.as_ref().to_path_buf();
+    let mut events = read_audit_events(&source_path)?
+        .into_iter()
+        .filter(|event| query.matches(event))
+        .collect::<Vec<_>>();
+
+    if let Some(limit) = query.limit {
+        events.truncate(limit);
+    }
+
+    if let Some(path) = output_path {
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            fs::create_dir_all(parent)?;
+        }
+        let payload = match format {
+            AuditExportFormat::Json => serde_json::to_string_pretty(&events)?,
+            AuditExportFormat::Jsonl => events
+                .iter()
+                .map(serde_json::to_string)
+                .collect::<std::result::Result<Vec<_>, _>>()?
+                .join("\n"),
+        };
+        fs::write(
+            path,
+            if payload.is_empty() {
+                payload
+            } else {
+                format!("{payload}\n")
+            },
+        )?;
+    }
+
+    Ok(AuditExportReport {
+        source_path,
+        output_path: output_path.map(Path::to_path_buf),
+        matched_events: events.len(),
+        exported_events: events.len(),
+        format: match format {
+            AuditExportFormat::Json => "json".to_string(),
+            AuditExportFormat::Jsonl => "jsonl".to_string(),
+        },
+        filters: query.clone(),
+    })
 }
 
 fn merge_tenant_metadata(metadata: &Value, tenant_id: &str) -> Value {
@@ -996,5 +1237,84 @@ mod tests {
         let error = TenantKey::new("k-short", b"too-short")
             .expect_err("short key material should be rejected");
         assert!(matches!(error, SqlRiteError::UnsupportedOperation(_)));
+    }
+
+    #[test]
+    fn audit_export_filters_and_writes_jsonl() -> Result<()> {
+        let tmp = tempdir()?;
+        let path = tmp.path().join("audit.jsonl");
+        let logger = JsonlAuditLogger::new(&path, Vec::<String>::new())?;
+        logger.log(&AuditEvent {
+            unix_ms: 10,
+            actor_id: "reader-1".to_string(),
+            tenant_id: "acme".to_string(),
+            operation: AccessOperation::Query,
+            allowed: true,
+            detail: json!({"path":"/v1/query"}),
+        })?;
+        logger.log(&AuditEvent {
+            unix_ms: 20,
+            actor_id: "admin-1".to_string(),
+            tenant_id: "acme".to_string(),
+            operation: AccessOperation::SqlAdmin,
+            allowed: false,
+            detail: json!({"path":"/v1/sql"}),
+        })?;
+
+        let output = tmp.path().join("export.jsonl");
+        let report = export_audit_events(
+            &path,
+            &AuditQuery {
+                actor_id: Some("reader-1".to_string()),
+                ..AuditQuery::default()
+            },
+            Some(&output),
+            AuditExportFormat::Jsonl,
+        )?;
+        assert_eq!(report.matched_events, 1);
+        let exported = fs::read_to_string(output)?;
+        assert!(exported.contains("reader-1"));
+        assert!(!exported.contains("admin-1"));
+        Ok(())
+    }
+
+    #[test]
+    fn inspect_rotation_reports_stale_keys() -> Result<()> {
+        let db = SqlRite::open_in_memory_with_config(RuntimeConfig::default())?;
+        let tmp = tempdir()?;
+        let logger = JsonlAuditLogger::new(tmp.path().join("audit.jsonl"), Vec::<String>::new())?;
+        let secure = SecureSqlRite::from_db(db, AllowAllPolicy, logger);
+
+        let key_registry = InMemoryTenantKeyRegistry::new();
+        key_registry.set_active_key("acme", TenantKey::new("k1", b"secret-key-00001")?)?;
+        key_registry.set_key("acme", TenantKey::new("k2", b"secret-key-00002")?, false)?;
+
+        let ctx = AccessContext::new("user-enc", "acme");
+        secure.ingest_chunks_with_encryption(
+            &ctx,
+            &[ChunkInput {
+                id: "c-sec".to_string(),
+                doc_id: "d-sec".to_string(),
+                content: "sensitive chunk".to_string(),
+                embedding: vec![1.0, 0.0],
+                metadata: json!({"secret_payload": "highly-sensitive"}),
+                source: None,
+            }],
+            &key_registry,
+            &["secret_payload"],
+        )?;
+
+        let report = inspect_tenant_key_rotation(
+            secure.db(),
+            "acme",
+            "secret_payload",
+            &key_registry,
+            "k2",
+        )?;
+        assert_eq!(report.encrypted_chunks, 1);
+        assert_eq!(report.target_key_matches, 0);
+        assert_eq!(report.stale_key_ids, vec!["k1".to_string()]);
+        assert!(!report.verified_all_target_key);
+        Ok(())
     }
 }

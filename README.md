@@ -577,7 +577,30 @@ cargo run --bin sqlrite-security -- rotate-key \
   --registry .sqlrite/tenant_keys.json \
   --tenant acme \
   --field secret_payload \
-  --new-key-id k1
+  --new-key-id k1 \
+  --json
+```
+
+### Verify tenant key coverage after rotation
+
+```bash
+cargo run --bin sqlrite-security -- verify-key \
+  --db sqlrite_demo.db \
+  --registry .sqlrite/tenant_keys.json \
+  --tenant acme \
+  --field secret_payload \
+  --key-id k1
+```
+
+### Export audit logs
+
+```bash
+cargo run --bin sqlrite-security -- export-audit \
+  --input .sqlrite/audit/server_audit.jsonl \
+  --output audit_export.jsonl \
+  --format jsonl \
+  --tenant acme \
+  --operation query
 ```
 
 Tenant keys now require at least 16 bytes of key material.
@@ -615,6 +638,28 @@ Security summary endpoint:
 
 ```bash
 curl -fsS http://127.0.0.1:8099/control/v1/security | jq
+```
+
+Audit export endpoint:
+
+```bash
+curl -fsS -X POST \
+  -H "content-type: application/json" \
+  -H "x-sqlrite-control-token: secret" \
+  -d '{"tenant_id":"demo","output_path":"project_plan/reports/s28_audit_export.jsonl","format":"jsonl"}' \
+  http://127.0.0.1:8099/control/v1/security/audit/export | jq
+```
+
+Rerank hook endpoint:
+
+```bash
+curl -fsS -X POST \
+  -H "content-type: application/json" \
+  -H "x-sqlrite-actor-id: reader-1" \
+  -H "x-sqlrite-tenant-id: demo" \
+  -H "x-sqlrite-roles: reader" \
+  -d '{"query_text":"agent memory","candidate_count":10}' \
+  http://127.0.0.1:8099/v1/rerank-hook | jq
 ```
 
 ## Reindex Workflow
@@ -1319,6 +1364,28 @@ Artifacts produced by S27 harnesses:
 - `project_plan/reports/s27_security_rbac_report.json`
 - `project_plan/reports/s27_security_audit.jsonl`
 - `project_plan/reports/s27_benchmark_security_rbac.json`
+
+## Audit Export and Key Rotation Hardening (Sprint 28)
+
+Security audit hardening harness:
+
+```bash
+bash scripts/run-s28-security-audit-hardening.sh
+```
+
+Runbooks and docs:
+
+- `docs/runbooks/audit_export_key_rotation.md`
+- `docs/security/compliance_posture.md`
+- `docs/security/threat_model.md`
+
+Artifacts produced by S28 harnesses:
+
+- `project_plan/reports/s28_security_audit_hardening.log`
+- `project_plan/reports/s28_security_audit_report.json`
+- `project_plan/reports/s28_audit_export.jsonl`
+- `project_plan/reports/s28_audit_export_server.jsonl`
+- `project_plan/reports/s28_benchmark_security_audit.json`
 
 Reproducible S16 smoke harness:
 

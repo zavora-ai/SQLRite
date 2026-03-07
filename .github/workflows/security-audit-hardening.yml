@@ -1,0 +1,25 @@
+name: Security Audit Hardening
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  security-audit-hardening:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Run S28 security audit hardening suite
+        shell: bash
+        run: bash scripts/run-s28-security-audit-hardening.sh
+      - name: Upload S28 security artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: s28-security-audit-hardening
+          path: |
+            project_plan/reports/s28_security_audit_hardening.log
+            project_plan/reports/s28_security_audit_report.json
+            project_plan/reports/s28_audit_export.jsonl
+            project_plan/reports/s28_audit_export_server.jsonl
+            project_plan/reports/s28_rotation_keys.json
