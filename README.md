@@ -52,13 +52,6 @@ SQLRite targets:
 
 Commands below assume you want `sqlrite` on your `PATH`.
 
-If you are running from a source checkout instead, replace:
-
-- `sqlrite` with `cargo run --`
-- `sqlrite-security` with `cargo run --bin sqlrite-security --`
-- `sqlrite-reindex` with `cargo run --bin sqlrite-reindex --`
-- `sqlrite-grpc-client` with `cargo run --bin sqlrite-grpc-client --`
-
 ### Option 1: Install from source with Cargo
 
 This works on macOS, Linux, and Windows anywhere Rust is available.
@@ -102,6 +95,13 @@ bash scripts/sqlrite-install.sh --version 1.0.0
 Release artifacts and checksums are published on GitHub Releases.
 
 ## 5-Minute Start
+
+If you are running directly from a source checkout instead of installing the binaries first, replace:
+
+- `sqlrite` with `cargo run --`
+- `sqlrite-security` with `cargo run --bin sqlrite-security --`
+- `sqlrite-reindex` with `cargo run --bin sqlrite-reindex --`
+- `sqlrite-grpc-client` with `cargo run --bin sqlrite-grpc-client --`
 
 ### 1. Inspect the CLI
 
