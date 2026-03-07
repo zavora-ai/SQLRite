@@ -375,6 +375,122 @@ Migration guides:
 
 - `docs/migrations/sqlite_to_sqlrite.md`
 - `docs/migrations/pgvector_to_sqlrite.md`
+- `docs/migrations/api_first_vector_db_patterns.md`
+- `docs/runbooks/migration_cli_workflow.md`
+
+## Migration CLI (Sprint 30)
+
+SQLRite now ships a first-class migration command for SQLite/libSQL schemas and pgvector-style JSONL exports.
+
+### Migrate a legacy SQLite corpus
+
+```bash
+cargo run -- migrate sqlite \
+  --source legacy.db \
+  --target sqlrite.db \
+  --doc-table legacy_documents \
+  --doc-id-col doc_id \
+  --doc-source-col source_path \
+  --doc-metadata-col metadata_json \
+  --chunk-table legacy_chunks \
+  --chunk-id-col chunk_id \
+  --chunk-doc-id-col doc_id \
+  --chunk-content-col chunk_text \
+  --chunk-metadata-col metadata_json \
+  --chunk-embedding-col embedding_blob \
+  --chunk-embedding-dim-col embedding_dim \
+  --chunk-source-col source_path \
+  --embedding-format blob_f32le \
+  --batch-size 512 \
+  --create-indexes
+```
+
+Sample output:
+
+```text
+migration complete
+- kind=sqlite
+- source=legacy.db
+- target=sqlrite.db
+- documents_upserted=245
+- chunks_migrated=8124
+- batch_size=512
+- embedding_format=blob_f32le
+- vector_index_mode=brute_force
+- create_indexes=true
+- duration_ms=184.72
+```
+
+### Migrate libSQL/local replicas
+
+`libsql` uses the same mapping surface as `sqlite`:
+
+```bash
+cargo run -- migrate libsql \
+  --source libsql-replica.db \
+  --target sqlrite.db \
+  --create-indexes
+```
+
+### Migrate pgvector exports
+
+Export rows into JSONL with fields:
+
+- `id`
+- `doc_id`
+- `content`
+- `metadata`
+- `embedding`
+- optional: `source`, `doc_metadata`, `doc_source`
+
+Then import:
+
+```bash
+cargo run -- migrate pgvector \
+  --input export.jsonl \
+  --target sqlrite.db \
+  --batch-size 512 \
+  --create-indexes \
+  --json
+```
+
+Sample JSON report:
+
+```json
+{
+  "kind": "pgvector_jsonl",
+  "source_path": "export.jsonl",
+  "target_path": "sqlrite.db",
+  "documents_upserted": 245,
+  "chunks_migrated": 8124,
+  "batch_size": 512,
+  "embedding_format": "json_array",
+  "create_indexes": true,
+  "vector_index_mode": "brute_force",
+  "duration_ms": 173.41
+}
+```
+
+### Validate the migrated database
+
+```bash
+cargo run -- doctor --db sqlrite.db --json
+cargo run -- query --db sqlrite.db --text "agent memory" --top-k 5
+```
+
+### End-to-end validation harness
+
+Run the S30 suite to generate reproducible migration artifacts:
+
+```bash
+bash scripts/run-s30-migration-suite.sh
+```
+
+Artifacts:
+
+- `project_plan/reports/s30_migration_suite.log`
+- `project_plan/reports/s30_migration_report.json`
+- `project_plan/reports/s30_benchmark_migration.json`
 
 Run SQL-only conformance for cookbook patterns:
 

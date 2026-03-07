@@ -1,6 +1,6 @@
 # Migration Guide: pgvector to SQLRite
 
-This guide maps common pgvector retrieval patterns to SQLRite SQL and data model.
+SQLRite supports pgvector migrations through a JSONL import path designed for deterministic export/import workflows.
 
 ## Query syntax mapping
 
@@ -9,53 +9,86 @@ This guide maps common pgvector retrieval patterns to SQLRite SQL and data model
 | `embedding <-> '[...]'` | `embedding <-> vector('...')` |
 | `embedding <=> '[...]'` | `embedding <=> vector('...')` |
 | `embedding <#> '[...]'` | `embedding <#> vector('...')` |
-| `ts_rank`/`BM25` style lexical score | `bm25_score(query, content)` or FTS5 `bm25(chunks_fts)` |
+| `ts_rank` or BM25-style lexical score | `bm25_score(query, content)` |
 | weighted fusion in SQL | `hybrid_score(vector_score, text_score, alpha)` |
 
-## 1. Initialize SQLRite target
+## Export format
 
-```bash
-cargo run -- init --db sqlrite_from_pgvector.db --profile balanced --index-mode brute_force
+Export one JSON object per line with:
+
+- `id`
+- `doc_id`
+- `content`
+- `metadata`
+- `embedding`
+- optional `source`
+- optional `doc_metadata`
+- optional `doc_source`
+
+Example:
+
+```json
+{"id":"chunk-1","doc_id":"doc-1","content":"local-first memory chunk","metadata":{"tenant":"acme"},"embedding":[0.95,0.05,0.0],"source":"docs/doc-1.md","doc_metadata":{"tenant":"acme"}}
 ```
 
-## 2. Export from Postgres
-
-Export chunks with:
-
-- stable chunk id
-- doc id
-- content
-- metadata JSON
-- vector embedding values
-
-Use CSV/NDJSON in your ETL, then insert with `sqlrite ingest` or direct SQL load.
-
-## 3. Ingest into SQLRite
-
-Single-row example:
+## Import into SQLRite
 
 ```bash
-cargo run -- ingest \
-  --db sqlrite_from_pgvector.db \
-  --id chunk-001 \
-  --doc-id doc-001 \
-  --content "local-first memory chunk" \
-  --embedding 0.95,0.05,0.0 \
-  --metadata '{"tenant":"acme","topic":"retrieval"}'
+cargo run -- migrate pgvector \
+  --input export.jsonl \
+  --target sqlrite.db \
+  --batch-size 512 \
+  --create-indexes
 ```
 
-## 4. Register index metadata
+JSON report mode:
 
 ```bash
-cargo run -- sql --db sqlrite_from_pgvector.db --execute \
-  "CREATE VECTOR INDEX IF NOT EXISTS idx_chunks_embedding_hnsw ON chunks(embedding) USING HNSW;"
+cargo run -- migrate pgvector \
+  --input export.jsonl \
+  --target sqlrite.db \
+  --json
 ```
 
-## 5. Port hybrid retrieval SQL
+Example report:
 
-pgvector-style hybrid query in SQLRite:
+```json
+{
+  "kind": "pgvector_jsonl",
+  "source_path": "export.jsonl",
+  "target_path": "sqlrite.db",
+  "documents_upserted": 245,
+  "chunks_migrated": 8124,
+  "batch_size": 512,
+  "embedding_format": "json_array",
+  "create_indexes": true,
+  "vector_index_mode": "brute_force",
+  "duration_ms": 173.41
+}
+```
+
+## Suggested export query from Postgres
+
+Shape the export so every row is self-contained:
 
 ```sql
+SELECT json_build_object(
+  'id', chunk_id,
+  'doc_id', doc_id,
+  'content', content,
+  'metadata', metadata,
+  'embedding', embedding,
+  'source', source_path
+)
+FROM chunk_store;
+```
+
+Then write each JSON object as one line in `export.jsonl`.
+
+## Validate SQL semantics after migration
+
+```bash
+cargo run -- sql --db sqlrite.db --execute "
 SELECT id,
        1.0 - cosine_distance(embedding, vector('0.95,0.05,0.0')) AS vector_score,
        bm25_score('local-first memory', content) AS text_score,
@@ -66,12 +99,13 @@ SELECT id,
        ) AS hybrid
 FROM chunks
 ORDER BY hybrid DESC, id ASC
-LIMIT 10;
+LIMIT 10;"
 ```
 
-## 6. Verify planner path
+Planner inspection:
 
-```sql
+```bash
+cargo run -- sql --db sqlrite.db --execute "
 EXPLAIN RETRIEVAL
 SELECT id,
        1.0 - cosine_distance(embedding, vector('0.95,0.05,0.0')) AS vector_score,
@@ -83,11 +117,19 @@ SELECT id,
        ) AS hybrid
 FROM chunks
 ORDER BY hybrid DESC, id ASC
-LIMIT 10;
+LIMIT 10;"
 ```
 
 Check:
 
-- `execution_path.vector` (`ann_index` or fallback)
-- score attribution block
-- deterministic tie-break presence in `ORDER BY ... id ASC`
+- `execution_path.vector`
+- score attribution fields
+- deterministic `ORDER BY ... id ASC`
+
+## Reproducible validation
+
+Run:
+
+```bash
+bash scripts/run-s30-migration-suite.sh
+```

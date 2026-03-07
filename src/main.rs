@@ -6,11 +6,12 @@ use serde::Serialize;
 use serde_json::{Map, Value, json};
 use sqlrite::{
     BenchmarkConfig, ChunkInput, CompactionOptions, DurabilityProfile, FailoverMode,
-    FusionStrategy, GrpcServerConfig, HaRuntimeProfile, McpServerConfig, QueryProfile, RbacPolicy,
-    RecoveryConfig, ReplicationConfig, RuntimeConfig, SearchRequest, ServerConfig, ServerRole,
-    ServerSecurityConfig, SqlRite, VectorIndexMode, VectorStorageKind, backup_file,
-    build_health_report, create_backup_snapshot, list_backup_snapshots,
-    mcp_tools_manifest_document, prune_backup_snapshots, restore_backup_file,
+    FusionStrategy, GrpcServerConfig, HaRuntimeProfile, McpServerConfig, MigrationEmbeddingFormat,
+    PgvectorJsonlMigrationConfig, QueryProfile, RbacPolicy, RecoveryConfig, ReplicationConfig,
+    RuntimeConfig, SearchRequest, ServerConfig, ServerRole, ServerSecurityConfig, SqlRite,
+    SqliteMigrationConfig, VectorIndexMode, VectorStorageKind, backup_file, build_health_report,
+    create_backup_snapshot, list_backup_snapshots, mcp_tools_manifest_document,
+    migrate_pgvector_jsonl, migrate_sqlite, prune_backup_snapshots, restore_backup_file,
     restore_backup_file_verified, run_benchmark, run_grpc_server, run_stdio_mcp_server,
     select_backup_snapshot_for_time, serve_health_endpoints, verify_backup_file,
 };
@@ -36,6 +37,7 @@ fn dispatch_command(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>>
         "init" => cmd_init(&args[1..]),
         "sql" => cmd_sql(&args[1..]),
         "ingest" => cmd_ingest(&args[1..]),
+        "migrate" => cmd_migrate(&args[1..]),
         "query" => cmd_query(&args[1..]),
         "quickstart" => cmd_quickstart(&args[1..]),
         "serve" => cmd_serve(&args[1..]),
@@ -385,6 +387,288 @@ fn parse_ingest_args(args: &[String]) -> Result<IngestArgs, String> {
         metadata,
         source,
     })
+}
+
+#[derive(Debug)]
+enum MigrateSourceKind {
+    Sqlite,
+    Libsql,
+    PgvectorJsonl,
+}
+
+#[derive(Debug)]
+struct MigrateArgs {
+    kind: MigrateSourceKind,
+    source_path: Option<PathBuf>,
+    input_path: Option<PathBuf>,
+    target_path: PathBuf,
+    profile: DurabilityProfile,
+    index_mode: VectorIndexMode,
+    batch_size: usize,
+    create_indexes: bool,
+    json_output: bool,
+    doc_table: Option<String>,
+    doc_id_col: String,
+    doc_source_col: Option<String>,
+    doc_metadata_col: Option<String>,
+    chunk_table: String,
+    chunk_id_col: String,
+    chunk_doc_id_col: String,
+    chunk_content_col: String,
+    chunk_metadata_col: Option<String>,
+    chunk_embedding_col: String,
+    chunk_embedding_dim_col: Option<String>,
+    chunk_source_col: Option<String>,
+    embedding_format: MigrationEmbeddingFormat,
+}
+
+impl Default for MigrateArgs {
+    fn default() -> Self {
+        Self {
+            kind: MigrateSourceKind::Sqlite,
+            source_path: None,
+            input_path: None,
+            target_path: PathBuf::from("sqlrite_migrated.db"),
+            profile: DurabilityProfile::Balanced,
+            index_mode: VectorIndexMode::BruteForce,
+            batch_size: 256,
+            create_indexes: false,
+            json_output: false,
+            doc_table: Some("legacy_documents".to_string()),
+            doc_id_col: "doc_id".to_string(),
+            doc_source_col: Some("source_path".to_string()),
+            doc_metadata_col: Some("metadata_json".to_string()),
+            chunk_table: "legacy_chunks".to_string(),
+            chunk_id_col: "chunk_id".to_string(),
+            chunk_doc_id_col: "doc_id".to_string(),
+            chunk_content_col: "chunk_text".to_string(),
+            chunk_metadata_col: Some("metadata_json".to_string()),
+            chunk_embedding_col: "embedding_blob".to_string(),
+            chunk_embedding_dim_col: Some("embedding_dim".to_string()),
+            chunk_source_col: Some("source_path".to_string()),
+            embedding_format: MigrationEmbeddingFormat::BlobF32Le,
+        }
+    }
+}
+
+fn cmd_migrate(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    let parsed = parse_migrate_args(args).map_err(std::io::Error::other)?;
+    let runtime = runtime_config(parsed.profile, parsed.index_mode);
+    let report = match parsed.kind {
+        MigrateSourceKind::Sqlite | MigrateSourceKind::Libsql => {
+            migrate_sqlite(&SqliteMigrationConfig {
+                source_path: parsed
+                    .source_path
+                    .clone()
+                    .ok_or_else(|| std::io::Error::other("missing --source"))?,
+                target_path: parsed.target_path.clone(),
+                runtime,
+                doc_table: parsed.doc_table.clone(),
+                doc_id_col: parsed.doc_id_col.clone(),
+                doc_source_col: parsed.doc_source_col.clone(),
+                doc_metadata_col: parsed.doc_metadata_col.clone(),
+                chunk_table: parsed.chunk_table.clone(),
+                chunk_id_col: parsed.chunk_id_col.clone(),
+                chunk_doc_id_col: parsed.chunk_doc_id_col.clone(),
+                chunk_content_col: parsed.chunk_content_col.clone(),
+                chunk_metadata_col: parsed.chunk_metadata_col.clone(),
+                chunk_embedding_col: parsed.chunk_embedding_col.clone(),
+                chunk_embedding_dim_col: parsed.chunk_embedding_dim_col.clone(),
+                chunk_source_col: parsed.chunk_source_col.clone(),
+                embedding_format: parsed.embedding_format,
+                batch_size: parsed.batch_size,
+                create_indexes: parsed.create_indexes,
+            })?
+        }
+        MigrateSourceKind::PgvectorJsonl => {
+            migrate_pgvector_jsonl(&PgvectorJsonlMigrationConfig {
+                input_path: parsed
+                    .input_path
+                    .clone()
+                    .ok_or_else(|| std::io::Error::other("missing --input"))?,
+                target_path: parsed.target_path.clone(),
+                runtime,
+                batch_size: parsed.batch_size,
+                create_indexes: parsed.create_indexes,
+            })?
+        }
+    };
+
+    if parsed.json_output {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        println!("migration complete");
+        println!("- kind={}", report.kind);
+        println!("- source={}", report.source_path.display());
+        println!("- target={}", report.target_path.display());
+        println!("- documents_upserted={}", report.documents_upserted);
+        println!("- chunks_migrated={}", report.chunks_migrated);
+        println!("- batch_size={}", report.batch_size);
+        println!("- embedding_format={}", report.embedding_format);
+        println!("- vector_index_mode={}", report.vector_index_mode);
+        println!("- create_indexes={}", report.create_indexes);
+        println!("- duration_ms={:.2}", report.duration_ms);
+    }
+    Ok(())
+}
+
+fn parse_migrate_args(args: &[String]) -> Result<MigrateArgs, String> {
+    let mut out = MigrateArgs::default();
+    let command = args.first().ok_or_else(|| migrate_usage().to_string())?;
+    out.kind = match command.as_str() {
+        "sqlite" => MigrateSourceKind::Sqlite,
+        "libsql" => MigrateSourceKind::Libsql,
+        "pgvector" | "pgvector-jsonl" => MigrateSourceKind::PgvectorJsonl,
+        "--help" | "-h" => return Err(migrate_usage().to_string()),
+        other => {
+            return Err(format!(
+                "unknown migrate source `{other}`\n{}",
+                migrate_usage()
+            ));
+        }
+    };
+
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--source" => {
+                i += 1;
+                out.source_path = Some(PathBuf::from(parse_string(args, i, "--source")?));
+            }
+            "--input" => {
+                i += 1;
+                out.input_path = Some(PathBuf::from(parse_string(args, i, "--input")?));
+            }
+            "--target" => {
+                i += 1;
+                out.target_path = PathBuf::from(parse_string(args, i, "--target")?);
+            }
+            "--profile" => {
+                i += 1;
+                out.profile = parse_profile(&parse_string(args, i, "--profile")?)?;
+            }
+            "--index-mode" => {
+                i += 1;
+                out.index_mode = parse_index_mode(&parse_string(args, i, "--index-mode")?)?;
+            }
+            "--batch-size" => {
+                i += 1;
+                out.batch_size = parse_usize(args, i, "--batch-size")?;
+            }
+            "--create-indexes" => {
+                out.create_indexes = true;
+            }
+            "--json" => {
+                out.json_output = true;
+            }
+            "--doc-table" => {
+                i += 1;
+                out.doc_table = parse_optional_identifier_arg(args, i, "--doc-table")?;
+            }
+            "--doc-id-col" => {
+                i += 1;
+                out.doc_id_col = parse_string(args, i, "--doc-id-col")?;
+            }
+            "--doc-source-col" => {
+                i += 1;
+                out.doc_source_col = parse_optional_identifier_arg(args, i, "--doc-source-col")?;
+            }
+            "--doc-metadata-col" => {
+                i += 1;
+                out.doc_metadata_col =
+                    parse_optional_identifier_arg(args, i, "--doc-metadata-col")?;
+            }
+            "--chunk-table" => {
+                i += 1;
+                out.chunk_table = parse_string(args, i, "--chunk-table")?;
+            }
+            "--chunk-id-col" => {
+                i += 1;
+                out.chunk_id_col = parse_string(args, i, "--chunk-id-col")?;
+            }
+            "--chunk-doc-id-col" => {
+                i += 1;
+                out.chunk_doc_id_col = parse_string(args, i, "--chunk-doc-id-col")?;
+            }
+            "--chunk-content-col" => {
+                i += 1;
+                out.chunk_content_col = parse_string(args, i, "--chunk-content-col")?;
+            }
+            "--chunk-metadata-col" => {
+                i += 1;
+                out.chunk_metadata_col =
+                    parse_optional_identifier_arg(args, i, "--chunk-metadata-col")?;
+            }
+            "--chunk-embedding-col" => {
+                i += 1;
+                out.chunk_embedding_col = parse_string(args, i, "--chunk-embedding-col")?;
+            }
+            "--chunk-embedding-dim-col" => {
+                i += 1;
+                out.chunk_embedding_dim_col =
+                    parse_optional_identifier_arg(args, i, "--chunk-embedding-dim-col")?;
+            }
+            "--chunk-source-col" => {
+                i += 1;
+                out.chunk_source_col =
+                    parse_optional_identifier_arg(args, i, "--chunk-source-col")?;
+            }
+            "--embedding-format" => {
+                i += 1;
+                out.embedding_format = parse_migration_embedding_format(&parse_string(
+                    args,
+                    i,
+                    "--embedding-format",
+                )?)?;
+            }
+            "--help" | "-h" => return Err(migrate_usage().to_string()),
+            other => return Err(format!("unknown argument `{other}`\n{}", migrate_usage())),
+        }
+        i += 1;
+    }
+
+    match out.kind {
+        MigrateSourceKind::Sqlite | MigrateSourceKind::Libsql => {
+            if out.source_path.is_none() {
+                return Err("missing required --source".to_string());
+            }
+        }
+        MigrateSourceKind::PgvectorJsonl => {
+            if out.input_path.is_none() {
+                return Err("missing required --input".to_string());
+            }
+        }
+    }
+
+    Ok(out)
+}
+
+fn parse_optional_identifier_arg(
+    args: &[String],
+    index: usize,
+    flag: &str,
+) -> Result<Option<String>, String> {
+    let value = parse_string(args, index, flag)?;
+    if value == "none" {
+        Ok(None)
+    } else {
+        Ok(Some(value))
+    }
+}
+
+fn parse_migration_embedding_format(value: &str) -> Result<MigrationEmbeddingFormat, String> {
+    match value {
+        "blob_f32le" => Ok(MigrationEmbeddingFormat::BlobF32Le),
+        "json" | "json_array" => Ok(MigrationEmbeddingFormat::JsonArray),
+        "csv" => Ok(MigrationEmbeddingFormat::Csv),
+        other => Err(format!(
+            "invalid embedding format `{other}`; expected blob_f32le|json_array|csv"
+        )),
+    }
+}
+
+fn migrate_usage() -> &'static str {
+    "usage:\n  sqlrite migrate sqlite --source legacy.db --target sqlrite.db [--profile balanced|durable|fast_unsafe] [--index-mode brute_force|lsh_ann|hnsw_baseline|disabled] [--doc-table legacy_documents|none] [--doc-id-col doc_id] [--doc-source-col source_path|none] [--doc-metadata-col metadata_json|none] [--chunk-table legacy_chunks] [--chunk-id-col chunk_id] [--chunk-doc-id-col doc_id] [--chunk-content-col chunk_text] [--chunk-metadata-col metadata_json|none] [--chunk-embedding-col embedding_blob] [--chunk-embedding-dim-col embedding_dim|none] [--chunk-source-col source_path|none] [--embedding-format blob_f32le|json_array|csv] [--batch-size N] [--create-indexes] [--json]\n  sqlrite migrate libsql --source source.db --target sqlrite.db [same options as sqlite]\n  sqlrite migrate pgvector --input export.jsonl --target sqlrite.db [--profile balanced|durable|fast_unsafe] [--index-mode brute_force|lsh_ann|hnsw_baseline|disabled] [--batch-size N] [--create-indexes] [--json]"
 }
 
 #[derive(Debug)]
@@ -4457,7 +4741,7 @@ fn sql_value_to_json(value: ValueRef<'_>) -> Value {
 }
 
 fn usage() -> &'static str {
-    "sqlrite unified CLI\n\nusage:\n  sqlrite <command> [options]\n\ncommands:\n  init       Create/open a SQLRite database and apply runtime profile\n  sql        Execute SQL or enter interactive SQL shell\n  ingest     Ingest a single chunk directly from CLI flags\n  query      Run text/vector/hybrid retrieval query\n  quickstart Run init->query UX flow with telemetry/gates\n  serve      Start server (health/readiness/metrics + HA control plane + SQL API)\n  grpc       Start native gRPC QueryService endpoint\n  mcp        Start MCP stdio tool server or print MCP manifest\n  backup     Create, verify, snapshot, restore, PITR-restore, or prune backups\n  compact    Run ingestion-compaction maintenance workflow\n  benchmark  Run synthetic retrieval benchmark\n  doctor     Run environment and database health checks\n\nenv overrides:\n  SQLRITE_VECTOR_STORAGE=f32|f16|int8\n  SQLRITE_ANN_MIN_CANDIDATES=<int>\n  SQLRITE_ANN_MAX_HAMMING_RADIUS=<int>\n  SQLRITE_ANN_MAX_CANDIDATE_MULTIPLIER=<int>\n  SQLRITE_ENABLE_ANN_PERSISTENCE=true|false\n  SQLRITE_SQLITE_MMAP_SIZE=<bytes>\n  SQLRITE_SQLITE_CACHE_SIZE_KIB=<kib>\n\nexamples:\n  sqlrite init --db sqlrite_demo.db --seed-demo\n  sqlrite quickstart --db sqlrite_demo.db --runs 5 --max-median-ms 180000 --min-success-rate 0.95\n  sqlrite query --db sqlrite_demo.db --text \"agents local memory\" --query-profile latency --top-k 3\n  sqlrite serve --db sqlrite_demo.db --secure-defaults --authz-policy .sqlrite/rbac-policy.json --audit-log .sqlrite/audit/server_audit.jsonl\n  sqlrite grpc --db sqlrite_demo.db --bind 127.0.0.1:50051\n  sqlrite mcp --db sqlrite_demo.db --print-manifest\n  sqlrite mcp --db sqlrite_demo.db --auth-token dev-token\n  sqlrite backup snapshot --source sqlrite_demo.db --backup-dir ./backups --note pre_release\n  sqlrite backup pitr-restore --backup-dir ./backups --target-unix-ms 1772000000000 --dest restored.db --verify\n  sqlrite compact --db sqlrite_demo.db --json\n  sqlrite benchmark --query-profile recall --index-mode hnsw_baseline\n  sqlrite doctor --db sqlrite_demo.db --json\n  sqlrite sql --db sqlrite_demo.db\n  sqlrite sql --db sqlrite_demo.db --execute \"SELECT id, doc_id FROM chunks LIMIT 3;\""
+    "sqlrite unified CLI\n\nusage:\n  sqlrite <command> [options]\n\ncommands:\n  init       Create/open a SQLRite database and apply runtime profile\n  sql        Execute SQL or enter interactive SQL shell\n  ingest     Ingest a single chunk directly from CLI flags\n  migrate    Import legacy SQLite/libSQL/pgvector-style datasets into SQLRite\n  query      Run text/vector/hybrid retrieval query\n  quickstart Run init->query UX flow with telemetry/gates\n  serve      Start server (health/readiness/metrics + HA control plane + SQL API)\n  grpc       Start native gRPC QueryService endpoint\n  mcp        Start MCP stdio tool server or print MCP manifest\n  backup     Create, verify, snapshot, restore, PITR-restore, or prune backups\n  compact    Run ingestion-compaction maintenance workflow\n  benchmark  Run synthetic retrieval benchmark\n  doctor     Run environment and database health checks\n\nenv overrides:\n  SQLRITE_VECTOR_STORAGE=f32|f16|int8\n  SQLRITE_ANN_MIN_CANDIDATES=<int>\n  SQLRITE_ANN_MAX_HAMMING_RADIUS=<int>\n  SQLRITE_ANN_MAX_CANDIDATE_MULTIPLIER=<int>\n  SQLRITE_ENABLE_ANN_PERSISTENCE=true|false\n  SQLRITE_SQLITE_MMAP_SIZE=<bytes>\n  SQLRITE_SQLITE_CACHE_SIZE_KIB=<kib>\n\nexamples:\n  sqlrite init --db sqlrite_demo.db --seed-demo\n  sqlrite migrate sqlite --source legacy.db --target sqlrite.db --create-indexes\n  sqlrite quickstart --db sqlrite_demo.db --runs 5 --max-median-ms 180000 --min-success-rate 0.95\n  sqlrite query --db sqlrite_demo.db --text \"agents local memory\" --query-profile latency --top-k 3\n  sqlrite serve --db sqlrite_demo.db --secure-defaults --authz-policy .sqlrite/rbac-policy.json --audit-log .sqlrite/audit/server_audit.jsonl\n  sqlrite grpc --db sqlrite_demo.db --bind 127.0.0.1:50051\n  sqlrite mcp --db sqlrite_demo.db --print-manifest\n  sqlrite mcp --db sqlrite_demo.db --auth-token dev-token\n  sqlrite backup snapshot --source sqlrite_demo.db --backup-dir ./backups --note pre_release\n  sqlrite backup pitr-restore --backup-dir ./backups --target-unix-ms 1772000000000 --dest restored.db --verify\n  sqlrite compact --db sqlrite_demo.db --json\n  sqlrite benchmark --query-profile recall --index-mode hnsw_baseline\n  sqlrite doctor --db sqlrite_demo.db --json\n  sqlrite sql --db sqlrite_demo.db\n  sqlrite sql --db sqlrite_demo.db --execute \"SELECT id, doc_id FROM chunks LIMIT 3;\""
 }
 
 #[cfg(test)]
@@ -4551,6 +4835,7 @@ mod tests {
             "init",
             "sql",
             "ingest",
+            "migrate",
             "query",
             "quickstart",
             "serve",
@@ -4566,6 +4851,74 @@ mod tests {
                 "expected command in usage: {command}"
             );
         }
+    }
+
+    #[test]
+    fn migrate_args_parse_sqlite_schema_overrides() -> Result<(), Box<dyn std::error::Error>> {
+        let args = vec![
+            "sqlite".to_string(),
+            "--source".to_string(),
+            "legacy.db".to_string(),
+            "--target".to_string(),
+            "sqlrite.db".to_string(),
+            "--doc-table".to_string(),
+            "legacy_docs".to_string(),
+            "--doc-source-col".to_string(),
+            "none".to_string(),
+            "--chunk-table".to_string(),
+            "legacy_segments".to_string(),
+            "--chunk-embedding-col".to_string(),
+            "embedding_json".to_string(),
+            "--chunk-embedding-dim-col".to_string(),
+            "none".to_string(),
+            "--embedding-format".to_string(),
+            "json_array".to_string(),
+            "--batch-size".to_string(),
+            "128".to_string(),
+            "--create-indexes".to_string(),
+            "--json".to_string(),
+        ];
+        let parsed = parse_migrate_args(&args).map_err(std::io::Error::other)?;
+        assert!(matches!(parsed.kind, MigrateSourceKind::Sqlite));
+        assert_eq!(parsed.source_path, Some(PathBuf::from("legacy.db")));
+        assert_eq!(parsed.target_path, PathBuf::from("sqlrite.db"));
+        assert_eq!(parsed.doc_table.as_deref(), Some("legacy_docs"));
+        assert_eq!(parsed.doc_source_col, None);
+        assert_eq!(parsed.chunk_table, "legacy_segments");
+        assert_eq!(parsed.chunk_embedding_col, "embedding_json");
+        assert_eq!(parsed.chunk_embedding_dim_col, None);
+        assert_eq!(parsed.embedding_format, MigrationEmbeddingFormat::JsonArray);
+        assert_eq!(parsed.batch_size, 128);
+        assert!(parsed.create_indexes);
+        assert!(parsed.json_output);
+        Ok(())
+    }
+
+    #[test]
+    fn migrate_args_parse_pgvector_input() -> Result<(), Box<dyn std::error::Error>> {
+        let args = vec![
+            "pgvector".to_string(),
+            "--input".to_string(),
+            "export.jsonl".to_string(),
+            "--target".to_string(),
+            "sqlrite.db".to_string(),
+            "--profile".to_string(),
+            "durable".to_string(),
+            "--index-mode".to_string(),
+            "hnsw".to_string(),
+        ];
+        let parsed = parse_migrate_args(&args).map_err(std::io::Error::other)?;
+        assert!(matches!(parsed.kind, MigrateSourceKind::PgvectorJsonl));
+        assert_eq!(parsed.input_path, Some(PathBuf::from("export.jsonl")));
+        assert_eq!(parsed.profile, DurabilityProfile::Durable);
+        assert_eq!(parsed.index_mode, VectorIndexMode::HnswBaseline);
+        Ok(())
+    }
+
+    #[test]
+    fn migrate_args_require_source_for_sqlite() {
+        let error = parse_migrate_args(&["sqlite".to_string()]).unwrap_err();
+        assert!(error.contains("missing required --source"));
     }
 
     #[test]

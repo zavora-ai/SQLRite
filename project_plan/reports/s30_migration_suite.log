@@ -1,0 +1,20 @@
+[build]
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on build directory
+   Compiling sqlrite v0.1.0 (/Users/jameskaranja/Developer/projects/SQLRight)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 9.24s
+[quality-gates]
+[create-fixtures] work_dir=project_plan/reports/s30_fixture_workspace
+[migrate-sqlite]
+[migrate-libsql-alias]
+[migrate-pgvector-jsonl]
+[assertions]
+sqlite_ok=True
+libsql_alias_ok=True
+pgvector_ok=True
+hardware_class=darwin-arm64-10cpu
+sqlite_rows_per_sec=302.3203
+libsql_alias_rows_per_sec=472.1714
+pgvector_rows_per_sec=628.7495
+pass=True
+[s30-migration-suite-complete] report=project_plan/reports/s30_migration_report.json benchmark=project_plan/reports/s30_benchmark_migration.json quality_log=project_plan/reports/s30_quality_gates.log

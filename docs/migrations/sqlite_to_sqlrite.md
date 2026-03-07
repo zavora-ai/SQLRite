@@ -1,68 +1,156 @@
-# Migration Guide: SQLite to SQLRite
+# Migration Guide: SQLite or libSQL to SQLRite
 
-This guide assumes an existing SQLite database and a target SQLRite database file.
+This guide assumes a file-backed SQLite or libSQL replica source and a target SQLRite database.
 
-## 1. Initialize SQLRite
+## Source schema contract
 
-```bash
-cargo run -- init --db sqlrite.db --profile balanced --index-mode brute_force
-```
+`sqlrite migrate sqlite` and `sqlrite migrate libsql` expect:
 
-## 2. Map source schema to SQLRite core tables
+- one optional document table
+- one required chunk table
+- one embedding column per chunk row
 
-SQLRite stores retrieval data in:
+Default source mapping:
 
-- `documents(id, source, metadata, created_at)`
-- `chunks(id, doc_id, content, metadata, embedding, embedding_dim, created_at)`
+- document table: `legacy_documents`
+- document id column: `doc_id`
+- document source column: `source_path`
+- document metadata column: `metadata_json`
+- chunk table: `legacy_chunks`
+- chunk id column: `chunk_id`
+- chunk doc-id column: `doc_id`
+- chunk content column: `chunk_text`
+- chunk metadata column: `metadata_json`
+- chunk embedding column: `embedding_blob`
+- chunk embedding-dim column: `embedding_dim`
+- chunk source column: `source_path`
 
-Recommended mapping:
+If your schema differs, override any of those names with CLI flags.
 
-- source document table -> `documents`
-- source text segments/chunks -> `chunks`
-- source JSON metadata -> `chunks.metadata`
+## Embedding formats
 
-## 3. Load document rows
+Supported source encodings:
 
-Example:
+- `blob_f32le`
+  - little-endian `f32` bytes
+  - requires `--chunk-embedding-dim-col`
+- `json_array`
+  - text column containing JSON arrays such as `[0.12, 0.98, ...]`
+- `csv`
+  - text column containing comma-separated floats such as `0.12,0.98,...`
 
-```sql
-INSERT INTO documents (id, source, metadata)
-SELECT doc_id, source_path, COALESCE(metadata_json, '{}')
-FROM legacy_documents;
-```
-
-## 4. Load chunk rows
-
-If legacy embeddings are already available, convert to SQLRite little-endian float blob format in your migration pipeline.
-
-```sql
-INSERT INTO chunks (id, doc_id, content, metadata, embedding, embedding_dim)
-SELECT chunk_id, doc_id, chunk_text, COALESCE(metadata_json, '{}'), embedding_blob, embedding_dim
-FROM legacy_chunks;
-```
-
-## 5. Register retrieval index metadata
+## Fast-path migration command
 
 ```bash
-cargo run -- sql --db sqlrite.db --execute \
-  "CREATE VECTOR INDEX IF NOT EXISTS idx_chunks_embedding_hnsw ON chunks(embedding) USING HNSW WITH (m=16, ef_construction=64);"
-
-cargo run -- sql --db sqlrite.db --execute \
-  "CREATE TEXT INDEX IF NOT EXISTS idx_chunks_content_fts ON chunks(content) USING FTS5 WITH (tokenizer=unicode61);"
+cargo run -- migrate sqlite \
+  --source legacy.db \
+  --target sqlrite.db \
+  --doc-table legacy_documents \
+  --doc-id-col doc_id \
+  --doc-source-col source_path \
+  --doc-metadata-col metadata_json \
+  --chunk-table legacy_chunks \
+  --chunk-id-col chunk_id \
+  --chunk-doc-id-col doc_id \
+  --chunk-content-col chunk_text \
+  --chunk-metadata-col metadata_json \
+  --chunk-embedding-col embedding_blob \
+  --chunk-embedding-dim-col embedding_dim \
+  --chunk-source-col source_path \
+  --embedding-format blob_f32le \
+  --batch-size 512 \
+  --create-indexes
 ```
 
-## 6. Validate retrieval behavior
+Equivalent libSQL/local-replica invocation:
 
 ```bash
-cargo run -- sql --db sqlrite.db --execute \
-  "EXPLAIN RETRIEVAL SELECT id, 1.0 - cosine_distance(embedding, vector('0.95,0.05,0.0')) AS vector_score, bm25_score('agent memory', content) AS text_score, hybrid_score(1.0 - cosine_distance(embedding, vector('0.95,0.05,0.0')), bm25_score('agent memory', content), 0.65) AS hybrid FROM chunks ORDER BY hybrid DESC, id ASC LIMIT 5;"
+cargo run -- migrate libsql \
+  --source local-replica.db \
+  --target sqlrite.db \
+  --batch-size 512 \
+  --create-indexes
 ```
 
-## 7. Regression checks
-
-Run quality and integrity checks after migration:
+Disable optional source fields with `none`:
 
 ```bash
-cargo test
+cargo run -- migrate sqlite \
+  --source legacy.db \
+  --target sqlrite.db \
+  --doc-table none \
+  --chunk-source-col none \
+  --chunk-metadata-col none \
+  --embedding-format csv
+```
+
+## What the migration does
+
+1. Opens the source database read-only through SQLite compatibility.
+2. Applies SQLRite schema/bootstrap to the target database.
+3. Upserts source documents into `documents`.
+4. Reads all chunk rows, parses embeddings, normalizes metadata, and ingests in batches.
+5. Optionally creates:
+   - `CREATE VECTOR INDEX ... USING HNSW`
+   - `CREATE TEXT INDEX ... USING FTS5`
+
+## JSON report mode
+
+```bash
+cargo run -- migrate sqlite \
+  --source legacy.db \
+  --target sqlrite.db \
+  --json
+```
+
+Example report:
+
+```json
+{
+  "kind": "sqlite",
+  "source_path": "legacy.db",
+  "target_path": "sqlrite.db",
+  "documents_upserted": 245,
+  "chunks_migrated": 8124,
+  "batch_size": 256,
+  "embedding_format": "blob_f32le",
+  "create_indexes": false,
+  "vector_index_mode": "brute_force",
+  "duration_ms": 184.72
+}
+```
+
+## Validate after migration
+
+```bash
 cargo run -- doctor --db sqlrite.db --json
+cargo run -- query --db sqlrite.db --text "agent memory" --top-k 5
+cargo run -- sql --db sqlrite.db --execute "SELECT COUNT(*) AS chunks FROM chunks;"
+```
+
+Recommended checks:
+
+- `doctor.db.integrity_ok == true`
+- `doctor.db.chunk_count` matches the expected migrated row count
+- query results return known migrated chunks
+
+## Failure modes
+
+- `invalid identifier`
+  - one of the table/column override names contains unsafe characters
+- `embedding column cannot be null`
+  - a source chunk row has a null embedding
+- `blob_f32le embedding format requires embedding_dim column`
+  - BLOB embeddings were selected without a dimension column
+- `InvalidEmbeddingBytes`
+  - the BLOB byte length does not match `embedding_dim * 4`
+- JSON parse errors
+  - malformed metadata or `json_array` embedding payloads
+
+## Reproducible validation
+
+Run the sprint harness:
+
+```bash
+bash scripts/run-s30-migration-suite.sh
 ```

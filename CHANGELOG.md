@@ -48,6 +48,14 @@ The format is based on Keep a Changelog.
   - `docs/sql_cookbook.md`
   - `docs/migrations/sqlite_to_sqlrite.md`
   - `docs/migrations/pgvector_to_sqlrite.md`
+- Migration CLI and validation workflow:
+  - `sqlrite migrate sqlite`
+  - `sqlrite migrate libsql`
+  - `sqlrite migrate pgvector`
+  - `docs/migrations/api_first_vector_db_patterns.md`
+  - `docs/runbooks/migration_cli_workflow.md`
+  - `scripts/run-s30-migration-suite.sh`
+  - `.github/workflows/migration-toolchain.yml`
 - SQL-only conformance runner:
   - `scripts/run-sql-cookbook-conformance.sh`
 - Sprint 7 evidence artifacts:
@@ -218,6 +226,12 @@ The format is based on Keep a Changelog.
 - Sprint 18 evidence artifacts:
   - `project_plan/reports/S18.md`
   - `project_plan/reports/s18_quality_gates.log`
+- Sprint 30 evidence artifacts:
+  - `project_plan/reports/S30.md`
+  - `project_plan/reports/s30_quality_gates.log`
+  - `project_plan/reports/s30_migration_suite.log`
+  - `project_plan/reports/s30_migration_report.json`
+  - `project_plan/reports/s30_benchmark_migration.json`
   - `project_plan/reports/s18_observability_smoke.log`
   - `project_plan/reports/s18_benchmark_observability.json`
 - S19 disaster-recovery game-day and soak gate harness:

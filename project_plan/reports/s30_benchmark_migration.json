@@ -1,0 +1,17 @@
+{
+  "generated_unix_ms": 1772858621161,
+  "embedding_model": "fixture_f32le_v1",
+  "dataset_id": "s30_migration_fixture_v1",
+  "hardware_class": "darwin-arm64-10cpu",
+  "hardware": {
+    "platform": "darwin",
+    "machine": "arm64",
+    "cpu_count": 10
+  },
+  "sqlite_duration_ms": 6.6155,
+  "sqlite_rows_per_sec": 302.3203,
+  "libsql_alias_duration_ms": 2.117875,
+  "libsql_alias_rows_per_sec": 472.1714,
+  "pgvector_duration_ms": 3.180917,
+  "pgvector_rows_per_sec": 628.7495
+}
