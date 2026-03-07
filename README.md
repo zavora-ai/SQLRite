@@ -1,53 +1,136 @@
 # SQLRite
 
-SQLRite is a Rust-first SQLite adaptation for AI agent retrieval workloads.
+SQLRite is a Rust-first, SQLite-based retrieval engine for AI-agent and RAG workloads.
 
-It is designed for developers who want:
+It is built for developers who want SQL-native retrieval, local-first deployment, predictable ranking, and production-ready operational tooling without standing up a separate vector database.
 
-- local-first deployment (`.db` file, no distributed infra)
-- hybrid retrieval (vector + text)
-- predictable behavior (deterministic ranking/tie-breaks)
-- production-oriented tooling (ingestion, reindex, health, backups, security hooks, benchmarks)
+## Why SQLRite
 
-## What You Get
+- Single-file local database by default.
+- Hybrid retrieval in one place: vector, text, and fused ranking.
+- SQL-first interface with retrieval-aware operators, functions, and `SEARCH(...)` syntax.
+- Multiple runtime modes: embedded CLI, HTTP server, gRPC, and MCP tool server.
+- Migration paths from SQLite, libSQL, pgvector, Qdrant, Weaviate, and Milvus export patterns.
+- Security and operations tooling for real applications: RBAC, audit export, key rotation, backup, restore, compaction, and health checks.
 
-- SQLite-backed chunk/document storage with migrations (`schema_migrations`)
-- hybrid search with:
+## Core Capabilities
+
+- SQLite-backed chunk and document storage with schema migrations.
+- Vector index modes: `brute_force`, `lsh_ann`, `hnsw_baseline`, `disabled`.
+- Vector storage profiles: `f32`, `f16`, `int8`.
+- Retrieval features:
   - vector similarity
-  - FTS5 lexical ranking (or lexical fallback)
-  - weighted and RRF fusion
-- pluggable vector index modes: `brute_force`, `lsh_ann`, `hnsw_baseline`, `disabled`
-- vector storage profiles: `f32`, `f16`, `int8` (ANN snapshot quantization support)
-- ingestion worker with durable checkpoints and idempotent chunk IDs
-- embedding provider abstraction:
-  - deterministic local provider
-  - OpenAI-compatible HTTP provider
-  - custom HTTP provider
-- reindex pipeline for embedding model/version migration
-- tenant-aware secure wrapper with audit logging and key-rotation workflow
-- operations tooling: backup, verify, health checks, compaction, HA control-plane scaffolding
-- benchmark/eval CLIs with CI-gate integration
-- ANN snapshot persistence for faster ANN index warm-start on file-backed databases
-- SQLite mmap/cache tuning controls for performance experiments and profile hardening
+  - FTS5 lexical ranking
+  - weighted fusion
+  - reciprocal-rank fusion (RRF)
+  - deterministic tie-breaking
+- SQL retrieval surface:
+  - distance operators: `<->`, `<=>`, `<#>`
+  - retrieval helpers: `vector(...)`, `embed(...)`, `bm25_score(...)`, `hybrid_score(...)`
+  - retrieval planning insight with `EXPLAIN RETRIEVAL`
+  - concise hybrid retrieval with `SEARCH(...)`
+- Ingestion and maintenance:
+  - direct chunk ingest from CLI
+  - durable ingestion worker with checkpoints
+  - reindex pipeline for embedding model changes
+  - compaction and backup workflows
+- Server and integrations:
+  - HTTP query and SQL endpoints
+  - native gRPC query service
+  - MCP tool server mode
+  - Rust, Python, and TypeScript SDKs
+
+## Supported Platforms
+
+SQLRite targets:
+
+- Linux `x86_64` and `arm64`
+- macOS `x86_64` and `arm64`
+- Windows `x86_64` and `arm64`
+
+## Install
+
+Commands below assume you want `sqlrite` on your `PATH`.
+
+If you are running from a source checkout instead, replace:
+
+- `sqlrite` with `cargo run --`
+- `sqlrite-security` with `cargo run --bin sqlrite-security --`
+- `sqlrite-reindex` with `cargo run --bin sqlrite-reindex --`
+- `sqlrite-grpc-client` with `cargo run --bin sqlrite-grpc-client --`
+
+### Option 1: Install from source with Cargo
+
+This works on macOS, Linux, and Windows anywhere Rust is available.
+
+```bash
+cargo install --path .
+```
+
+### Option 2: Build and install from this repo
+
+macOS and Linux:
+
+```bash
+bash scripts/sqlrite-global-install.sh
+```
+
+If `sqlrite` is not found after install, add the default user bin directory to your shell profile:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+### Option 3: Install from a GitHub release
+
+Unix-friendly installer:
+
+```bash
+bash scripts/sqlrite-install.sh --version 1.0.0
+```
+
+Release artifacts and checksums are published on GitHub Releases.
 
 ## 5-Minute Start
 
-### 0) Inspect the unified CLI
+### 1. Inspect the CLI
 
 ```bash
-cargo run -- --help
+sqlrite --help
 ```
 
-### 1) One-command quickstart (init -> query + timing gates)
+### 2. Create a local database with demo data
 
 ```bash
-cargo run -- quickstart \
+sqlrite init --db sqlrite_demo.db --seed-demo
+```
+
+### 3. Run your first query
+
+```bash
+sqlrite query --db sqlrite_demo.db --text "agents local memory" --top-k 3
+```
+
+Sample output:
+
+```text
+results=3
+1. demo-1 | doc=doc-a | hybrid=1.000 | vector=0.000 | text=1.000
+   Rust and SQLite are ideal for local-first AI agents.
+2. demo-2 | doc=doc-b | hybrid=0.000 | vector=0.000 | text=0.000
+   Hybrid retrieval mixes vector search with keyword signals.
+3. demo-3 | doc=doc-c | hybrid=0.000 | vector=0.000 | text=0.000
+   Batching and metadata filters keep RAG pipelines deterministic.
+```
+
+### 4. Run an end-to-end quickstart
+
+```bash
+sqlrite quickstart \
   --db sqlrite_quickstart.db \
   --runs 5 \
-  --max-median-ms 180000 \
-  --min-success-rate 0.95 \
   --json \
-  --output project_plan/reports/quickstart_local.json
+  --output quickstart.json
 ```
 
 Sample output:
@@ -63,118 +146,82 @@ Sample output:
 }
 ```
 
-### 2) Seed a local DB (explicit init path)
+## Common Query Patterns
+
+### Text-only retrieval
 
 ```bash
-cargo run
+sqlrite query --db sqlrite_demo.db --text "keyword signals retrieval" --top-k 3
 ```
 
-This creates `sqlrite_demo.db` with 3 chunks (`demo-1`, `demo-2`, `demo-3`).
-
-### 3) Run a query from CLI
+### Vector-only retrieval
 
 ```bash
-cargo run -- query --db sqlrite_demo.db --text "agents local memory" --top-k 3
+sqlrite query --db sqlrite_demo.db --vector 0.95,0.05,0.0 --top-k 3
 ```
 
-Sample output:
-
-```text
-results=3
-1. demo-1 | doc=doc-a | hybrid=1.000 | vector=0.000 | text=1.000
-   Rust and SQLite are ideal for local-first AI agents.
-2. demo-2 | doc=doc-b | hybrid=0.000 | vector=0.000 | text=0.000
-   Hybrid retrieval mixes vector search with keyword signals.
-3. demo-3 | doc=doc-c | hybrid=0.000 | vector=0.000 | text=0.000
-   Batching and metadata filters keep RAG pipelines deterministic.
-```
-
-## Global CLI Install (No Cargo Run)
-
-Install globally (default path: `~/.local/bin/sqlrite`):
+### Hybrid retrieval
 
 ```bash
-bash scripts/sqlrite-global-install.sh
+sqlrite query \
+  --db sqlrite_demo.db \
+  --text "local memory" \
+  --vector 0.95,0.05,0.0 \
+  --alpha 0.65 \
+  --top-k 3
 ```
 
-Then run directly:
+### Metadata-filtered retrieval
 
 ```bash
-sqlrite --help
-sqlrite init --db sqlrite_demo.db --seed-demo
-sqlrite quickstart --db sqlrite_quickstart.db --runs 5 --max-median-ms 180000 --min-success-rate 0.95
-sqlrite query --db sqlrite_demo.db --text "local" --query-profile latency --top-k 3
+sqlrite query \
+  --db sqlrite_demo.db \
+  --text "agent memory" \
+  --filter tenant=demo \
+  --filter topic=memory \
+  --top-k 5
 ```
 
-If `sqlrite` is not found, add this to your shell config:
+### Document-scoped retrieval
 
 ```bash
-export PATH="$HOME/.local/bin:$PATH"
+sqlrite query \
+  --db sqlrite_demo.db \
+  --text "local memory" \
+  --doc-id doc-a \
+  --top-k 3
 ```
 
-## Global Update With Tests
+### Query profile hints
 
-Update the global install while validating progress:
+Use `balanced`, `latency`, or `recall` to trade candidate set size for speed or coverage.
 
 ```bash
-bash scripts/sqlrite-global-update.sh
+sqlrite query \
+  --db sqlrite_demo.db \
+  --text "agent memory" \
+  --query-profile latency \
+  --top-k 5
 ```
 
-Default update flow runs:
-
-1. `cargo fmt --all --check`
-2. `cargo clippy --all-targets --all-features -- -D warnings`
-3. `cargo test`
-4. global reinstall + smoke tests
-
-Quick update (skip full gates, still reinstall + smoke test):
+### RRF fusion
 
 ```bash
-bash scripts/sqlrite-global-update.sh --quick
+sqlrite query \
+  --db sqlrite_demo.db \
+  --text "agent memory" \
+  --vector 0.95,0.05,0.0 \
+  --fusion rrf \
+  --rrf-k 60 \
+  --top-k 5
 ```
-
-Install from GitHub Release assets (curl-friendly):
-
-```bash
-bash scripts/sqlrite-install.sh --version 1.0.0
-```
-
-## Quickstart Gate (Sprint 3)
-
-`sqlrite quickstart` runs `init -> query` and reports timing/success telemetry.
-
-Gate command (fails with non-zero exit on threshold miss):
-
-```bash
-cargo run -- quickstart \
-  --db sprint3_quickstart.db \
-  --runs 5 \
-  --max-median-ms 180000 \
-  --min-success-rate 0.95 \
-  --json \
-  --output project_plan/reports/quickstart_local.json
-```
-
-Human-readable mode:
-
-```bash
-cargo run -- quickstart --db sprint3_quickstart.db --runs 3
-```
-
-Key flags:
-
-- `--runs N` repeated init/query runs for stability checks
-- `--max-median-ms F` median total time gate (Phase A target: `< 180000`)
-- `--min-success-rate F` required run success ratio (Phase A target: `>= 0.95`)
-- `--json` machine-readable output for CI/reporting
-- `--output PATH` write report payload to disk
 
 ## Interactive SQL Shell
 
-Start shell mode (no `--execute` needed):
+Start the SQL shell:
 
 ```bash
-cargo run -- sql --db sqlrite_demo.db
+sqlrite sql --db sqlrite_demo.db
 ```
 
 Shell helpers:
@@ -189,25 +236,26 @@ Shell helpers:
 - `.example index_catalog --run`
 - `.exit`
 
-One-shot SQL still works:
+Run a one-shot SQL statement:
 
 ```bash
-cargo run -- sql --db sqlrite_demo.db --execute "SELECT id, doc_id FROM chunks LIMIT 3;"
+sqlrite sql --db sqlrite_demo.db --execute "SELECT id, doc_id FROM chunks LIMIT 3;"
 ```
 
-## SQL-Native Vector Operators
+## Retrieval SQL
 
-`sqlrite sql` now supports pgvector-style distance operators and vector literal helpers:
+### Vector operators
+
+SQLRite supports pgvector-style distance operators:
 
 - `<->` L2 distance
 - `<=>` cosine distance
 - `<#>` negative inner product
-- `vector('0.1,0.2,0.3')` or `vector('[0.1,0.2,0.3]')`
 
 Example:
 
 ```bash
-cargo run -- sql --db sqlrite_demo.db --execute "
+sqlrite sql --db sqlrite_demo.db --execute "
 SELECT id,
        embedding <-> vector('0.95,0.05,0.0') AS l2,
        embedding <=> vector('0.95,0.05,0.0') AS cosine_distance,
@@ -217,307 +265,40 @@ ORDER BY l2 ASC, id ASC
 LIMIT 3;"
 ```
 
-Sample output:
+### Retrieval functions
 
-```text
-[
-  {"id":"demo-1","l2":0.0424,"cosine_distance":0.0006,"neg_inner":-0.8780},
-  {"id":"demo-2","l2":0.4243,"cosine_distance":0.0958,"neg_inner":-0.6350},
-  {"id":"demo-3","l2":0.9192,"cosine_distance":0.5583,"neg_inner":-0.3200}
-]
-```
+Available helpers include:
 
-Helper SQL functions:
-
-- `l2_distance(lhs, rhs)`
-- `cosine_distance(lhs, rhs)`
-- `neg_inner_product(lhs, rhs)`
+- `vector('0.1,0.2,0.3')`
+- `embed(text)`
+- `bm25_score(query, document)`
+- `hybrid_score(vector_score, text_score, alpha)`
 - `vec_dims(vector_expr)`
 - `vec_to_json(vector_expr)`
-
-## SQL Retrieval Functions and Index DDL (Sprint 5)
-
-Additional retrieval SQL functions:
-
-- `embed(text)` deterministic text embedding (16 dimensions)
-- `bm25_score(query, document)` lexical relevance score
-- `hybrid_score(vector_score, text_score, alpha)` weighted fusion (`alpha` between `0.0` and `1.0`)
 
 Example:
 
 ```bash
-cargo run -- sql --db sqlrite_demo.db --execute "
+sqlrite sql --db sqlrite_demo.db --execute "
 SELECT vec_dims(embed('agent local memory')) AS dims,
        bm25_score('agent memory', 'agent systems keep local memory') AS bm25,
        hybrid_score(0.8, 0.2, 0.75) AS hybrid;"
 ```
 
-Sample output:
-
-```text
-[
-  {
-    "bm25": 4.4489545822143555,
-    "dims": 16,
-    "hybrid": 0.6500000000000001
-  }
-]
-```
-
-Retrieval index DDL support:
-
-- `CREATE VECTOR INDEX ... USING HNSW [WITH (...)]`
-- `CREATE TEXT INDEX ... USING FTS5 [WITH (...)]`
-- `DROP VECTOR INDEX [IF EXISTS] ...`
-- `DROP TEXT INDEX [IF EXISTS] ...`
-- Metadata catalog view: `retrieval_index_catalog`
-
-Example:
+### Retrieval index DDL
 
 ```bash
-cargo run -- sql --db sqlrite_demo.db --execute \
-  "CREATE VECTOR INDEX IF NOT EXISTS idx_chunks_embedding_hnsw ON chunks(embedding) USING HNSW WITH (m=16, ef_construction=64);"
-
-cargo run -- sql --db sqlrite_demo.db --execute \
-  "CREATE TEXT INDEX IF NOT EXISTS idx_chunks_content_fts ON chunks(content) USING FTS5 WITH (tokenizer=unicode61);"
-
-cargo run -- sql --db sqlrite_demo.db --execute \
-  "SELECT name, index_kind, table_name, column_name, using_engine, options_json, status FROM retrieval_index_catalog ORDER BY name;"
+sqlrite sql --db sqlrite_demo.db --execute "
+CREATE VECTOR INDEX idx_chunks_embedding ON chunks(embedding) USING HNSW;
+CREATE TEXT INDEX idx_chunks_content ON chunks(content) USING FTS5;"
 ```
 
-Sample output:
+### SEARCH(...)
 
-```text
-created vector retrieval index `idx_chunks_embedding_hnsw` on chunks(embedding) using HNSW
-created text retrieval index `idx_chunks_content_fts` on chunks(content) using FTS5
-[
-  {
-    "column_name": "content",
-    "index_kind": "text",
-    "name": "idx_chunks_content_fts",
-    "options_json": "{\"tokenizer\":\"unicode61\"}",
-    "status": "active",
-    "table_name": "chunks",
-    "using_engine": "fts5"
-  },
-  {
-    "column_name": "embedding",
-    "index_kind": "vector",
-    "name": "idx_chunks_embedding_hnsw",
-    "options_json": "{\"ef_construction\":64,\"m\":16}",
-    "status": "active",
-    "table_name": "chunks",
-    "using_engine": "hnsw"
-  }
-]
-```
-
-Planner fallback behavior (Sprint 6):
-
-- If ANN/index candidates are unavailable or unhealthy, SQLRite falls back to brute-force vector scoring from stored embeddings.
-- Deterministic tie-break order is always by `chunk_id` when scores are equal.
-
-Fallback smoke command:
+Use `SEARCH(...)` when you want a concise SQL-native hybrid retrieval form.
 
 ```bash
-cargo run -- query \
-  --db s06_fallback.db \
-  --profile balanced \
-  --index-mode disabled \
-  --vector 1,0 \
-  --top-k 1 \
-  --candidate-limit 1
-```
-
-Sample output:
-
-```text
-results=1
-1. best | doc=d1 | hybrid=1.000 | vector=1.000 | text=0.000
-   best match
-```
-
-## EXPLAIN RETRIEVAL (Sprint 7)
-
-SQLRite supports retrieval-aware explain output with score attribution and path breakdown:
-
-```bash
-cargo run -- sql --db sqlrite_demo.db --execute "
-EXPLAIN RETRIEVAL
-SELECT id,
-       1.0 - cosine_distance(embedding, vector('0.95,0.05,0.0')) AS vector_score,
-       bm25_score('local agent memory', content) AS text_score,
-       hybrid_score(
-           1.0 - cosine_distance(embedding, vector('0.95,0.05,0.0')),
-           bm25_score('local agent memory', content),
-           0.65
-       ) AS hybrid
-FROM chunks
-ORDER BY hybrid DESC, id ASC
-LIMIT 5;"
-```
-
-Sample fields in output:
-
-- `execution_path.vector`: `ann_index` or `brute_force_fallback`
-- `execution_path.text`: text execution mode
-- `score_attribution`: vector/text/fusion and `hybrid_alpha`
-- `determinism`: order-by tie-break diagnostics
-- `sqlite_query_plan`: raw `EXPLAIN QUERY PLAN` rows
-
-## SQL Cookbook and Conformance (Sprint 7)
-
-SQL-only cookbook:
-
-- `docs/sql_cookbook.md`
-
-Migration guides:
-
-- `docs/migrations/sqlite_to_sqlrite.md`
-- `docs/migrations/pgvector_to_sqlrite.md`
-- `docs/migrations/api_first_vector_db_patterns.md`
-- `docs/runbooks/migration_cli_workflow.md`
-
-## Migration CLI (Sprint 30 / Sprint 31)
-
-SQLRite now ships a first-class migration command for SQLite/libSQL schemas, pgvector-style JSONL exports, and API-first vector database JSONL exports.
-
-### Migrate a legacy SQLite corpus
-
-```bash
-cargo run -- migrate sqlite \
-  --source legacy.db \
-  --target sqlrite.db \
-  --doc-table legacy_documents \
-  --doc-id-col doc_id \
-  --doc-source-col source_path \
-  --doc-metadata-col metadata_json \
-  --chunk-table legacy_chunks \
-  --chunk-id-col chunk_id \
-  --chunk-doc-id-col doc_id \
-  --chunk-content-col chunk_text \
-  --chunk-metadata-col metadata_json \
-  --chunk-embedding-col embedding_blob \
-  --chunk-embedding-dim-col embedding_dim \
-  --chunk-source-col source_path \
-  --embedding-format blob_f32le \
-  --batch-size 512 \
-  --create-indexes
-```
-
-Sample output:
-
-```text
-migration complete
-- kind=sqlite
-- source=legacy.db
-- target=sqlrite.db
-- documents_upserted=245
-- chunks_migrated=8124
-- batch_size=512
-- embedding_format=blob_f32le
-- vector_index_mode=brute_force
-- create_indexes=true
-- duration_ms=184.72
-```
-
-### Migrate libSQL/local replicas
-
-`libsql` uses the same mapping surface as `sqlite`:
-
-```bash
-cargo run -- migrate libsql \
-  --source libsql-replica.db \
-  --target sqlrite.db \
-  --create-indexes
-```
-
-### Migrate pgvector exports
-
-Export rows into JSONL with fields:
-
-- `id`
-- `doc_id`
-- `content`
-- `metadata`
-- `embedding`
-- optional: `source`, `doc_metadata`, `doc_source`
-
-Then import:
-
-```bash
-cargo run -- migrate pgvector \
-  --input export.jsonl \
-  --target sqlrite.db \
-  --batch-size 512 \
-  --create-indexes \
-  --json
-```
-
-Sample JSON report:
-
-```json
-{
-  "kind": "pgvector_jsonl",
-  "source_path": "export.jsonl",
-  "target_path": "sqlrite.db",
-  "documents_upserted": 245,
-  "chunks_migrated": 8124,
-  "batch_size": 512,
-  "embedding_format": "json_array",
-  "create_indexes": true,
-  "vector_index_mode": "brute_force",
-  "duration_ms": 173.41
-}
-```
-
-### Migrate Qdrant, Weaviate, or Milvus exports
-
-Qdrant example:
-
-```bash
-cargo run -- migrate qdrant \
-  --input qdrant_export.jsonl \
-  --target sqlrite.db \
-  --create-indexes \
-  --json
-```
-
-Weaviate example:
-
-```bash
-cargo run -- migrate weaviate \
-  --input weaviate_export.jsonl \
-  --target sqlrite.db \
-  --create-indexes
-```
-
-Milvus example:
-
-```bash
-cargo run -- migrate milvus \
-  --input milvus_export.jsonl \
-  --target sqlrite.db \
-  --create-indexes
-```
-
-Default field mappings are source-specific and can be overridden with:
-
-- `--id-field`
-- `--doc-id-field`
-- `--content-field`
-- `--embedding-field`
-- `--metadata-field`
-- `--source-field`
-- `--doc-metadata-field`
-- `--doc-source-field`
-
-### SQL v2 SEARCH prototype
-
-For concise hybrid retrieval, SQLRite now supports a `SEARCH(...)` SQL rewrite prototype in `sqlrite sql` and `/v1/sql`.
-
-```bash
-cargo run -- sql --db sqlrite.db --execute "
+sqlrite sql --db sqlrite_demo.db --execute "
 SELECT chunk_id, doc_id, hybrid_score
 FROM SEARCH(
        'agent memory',
@@ -544,455 +325,94 @@ Sample output:
 ]
 ```
 
-`SEARCH(...)` arguments:
-
-- `query_text`
-- `query_embedding`
-- `top_k`
-- `alpha`
-- `candidate_limit`
-- `query_profile`
-- `metadata_filters_json`
-- `doc_id`
-
-### Validate the migrated database
+### EXPLAIN RETRIEVAL
 
 ```bash
-cargo run -- doctor --db sqlrite.db --json
-cargo run -- query --db sqlrite.db --text "agent memory" --top-k 5
+sqlrite sql --db sqlrite_demo.db --execute "
+EXPLAIN RETRIEVAL
+SELECT id,
+       hybrid_score(
+         1.0 - (embedding <=> vector('0.95,0.05,0.0')),
+         bm25_score('local memory', content),
+         0.65
+       ) AS score
+FROM chunks
+ORDER BY score DESC, id ASC
+LIMIT 3;"
 ```
 
-### End-to-end validation harness
+What it shows:
 
-Run the S31 suite to generate reproducible migration and SQL v2 artifacts:
+- vector execution path (`ann_index` or `brute_force_fallback`)
+- text execution mode
+- score attribution
+- deterministic ordering hints
+- raw SQLite query-plan rows
+
+## Ingestion
+
+### Ingest a single chunk directly
 
 ```bash
-bash scripts/run-s31-sql-v2-and-api-migrations.sh
-```
-
-Artifacts:
-
-- `project_plan/reports/s31_sql_v2_migration.log`
-- `project_plan/reports/s31_sql_v2_migration_report.json`
-- `project_plan/reports/s31_benchmark_search_v2.json`
-
-## Release Candidate Audit (Sprint 32)
-
-SQLRite now ships a release-candidate hardening workflow for the `v1.0.0` cut. It reruns quality, security, migration, and benchmark gates and derives the blocker audit and operator-facing release documents from the generated artifacts.
-
-### Run the full release-candidate audit
-
-```bash
-bash scripts/run-s32-release-candidate-audit.sh
-```
-
-This runs:
-
-- `cargo fmt --all --check`
-- `cargo test`
-- `bash scripts/run-s26-api-compat-suite.sh`
-- `bash scripts/run-s27-security-rbac-smoke.sh`
-- `bash scripts/run-s28-security-audit-hardening.sh`
-- `bash scripts/run-s30-migration-suite.sh`
-- `bash scripts/run-s31-sql-v2-and-api-migrations.sh`
-- `cargo run --bin sqlrite-bench-suite -- --profiles quick,10k --concurrency-profile quick --concurrency-levels 1,2,4`
-
-### Release policy and defect ledger
-
-- `docs/release_policy.md`
-- `docs/runbooks/release_candidate_hardening.md`
-- `project_plan/release/defect_register.json`
-
-### Generated S32 artifacts
-
-- `project_plan/reports/s32_quality_gates.log`
-- `project_plan/reports/s32_bench_suite.json`
-- `project_plan/reports/s32_blocker_audit.json`
-- `project_plan/reports/s32_release_quality_report.md`
-- `project_plan/reports/s32_release_notes_draft.md`
-- `project_plan/reports/s32_risk_register.md`
-- `project_plan/reports/S32.md`
-
-Sample release-quality highlights from the current S32 audit:
-
-```text
-- overall_release_candidate_pass: true
-- open_p0_count: 0
-- open_p1_count: 0
-- quick_qps: 125.71
-- 10k_p95_ms: 12.3743
-- availability_percent: 100.00
-- observed_rpo_seconds: 0.0050
-```
-
-## GA Release Train (Sprint 33)
-
-Sprint 33 closes the `v1.0.0` train with a host release archive, a publishable benchmark/reliability report, and a machine-readable final sign-off bundle.
-
-### Run the GA release train
-
-```bash
-bash scripts/run-s33-ga-release-train.sh
-```
-
-This runs:
-
-- `bash scripts/run-s32-release-candidate-audit.sh`
-- `bash scripts/create-release-archive.sh --version 1.0.0`
-- GA checklist/sign-off/report synthesis
-- evidence tarball packaging
-
-### Generated S33 artifacts
-
-- `docs/releases/v1.0.0.md`
-- `project_plan/reports/s33_quality_gates.log`
-- `project_plan/reports/s33_ga_checklist.md`
-- `project_plan/reports/s33_benchmark_reliability_report.md`
-- `project_plan/reports/s33_benchmark_repro_manifest.json`
-- `project_plan/reports/s33_release_train_bundle_manifest.json`
-- `project_plan/reports/s33_final_signoff.json`
-- `project_plan/reports/sqlrite-v1.0.0-ga-evidence.tar.gz`
-- `project_plan/reports/S33.md`
-- `dist/sqlrite-v1.0.0-aarch64-apple-darwin.tar.gz`
-- `dist/sqlrite-v1.0.0-aarch64-apple-darwin.sha256`
-
-Sample GA highlights from the current S33 train:
-
-```text
-- signoff_pass: true
-- release_gate_pass: true
-- open_p0_count: 0
-- open_p1_count: 0
-- quick_qps: 166.73
-- 10k_p95_ms: 12.3622
-- availability_percent: 100.00
-```
-
-Run SQL-only conformance for cookbook patterns:
-
-```bash
-bash scripts/run-sql-cookbook-conformance.sh
-```
-
-Artifacts:
-
-- `project_plan/reports/s07_sql_conformance.log`
-- `project_plan/reports/s07_sql_conformance.json`
-
-## Query Cookbook (Real Use Cases)
-
-All commands below assume `sqlrite_demo.db` from `cargo run`.
-
-### Text-only retrieval
-
-```bash
-cargo run -- query --db sqlrite_demo.db --text "keyword signals retrieval" --top-k 3
-```
-
-### Vector-only retrieval
-
-```bash
-cargo run -- query --db sqlrite_demo.db --vector 0.95,0.05,0.0 --top-k 3
-```
-
-### Hybrid retrieval (text + vector)
-
-```bash
-cargo run -- query \
+sqlrite ingest \
   --db sqlrite_demo.db \
-  --text "local" \
-  --vector 0.95,0.05,0.0 \
-  --alpha 0.65 \
-  --top-k 3
+  --id chunk-100 \
+  --doc-id doc-100 \
+  --content "SQLRite keeps retrieval local and easy to reason about." \
+  --vector 0.9,0.1,0.0
 ```
 
-Sample output:
-
-```text
-results=3
-1. demo-1 | doc=doc-a | hybrid=0.806 | vector=0.701 | text=1.000
-2. demo-2 | doc=doc-b | hybrid=0.516 | vector=0.794 | text=0.000
-3. demo-3 | doc=doc-c | hybrid=0.299 | vector=0.459 | text=0.000
-```
-
-### Metadata filter (tenant + topic)
+### Use the ingestion worker
 
 ```bash
-cargo run -- query \
+sqlrite-ingest \
   --db sqlrite_demo.db \
-  --text "retrieval" \
-  --filter tenant=demo \
-  --filter topic=retrieval \
-  --top-k 5
-```
-
-### Doc-scoped retrieval
-
-```bash
-cargo run -- query \
-  --db sqlrite_demo.db \
-  --text "deterministic" \
-  --doc-id doc-c \
-  --top-k 5
-```
-
-### RRF fusion
-
-```bash
-cargo run -- query \
-  --db sqlrite_demo.db \
-  --text "hybrid" \
-  --vector 0.60,0.40,0.0 \
-  --fusion rrf \
-  --rrf-k 60 \
-  --top-k 3
-```
-
-### Candidate-limit tuning
-
-```bash
-cargo run -- query \
-  --db sqlrite_demo.db \
-  --text "agents" \
-  --vector 0.90,0.10,0.0 \
-  --candidate-limit 25 \
-  --top-k 3
-```
-
-## Runnable Examples
-
-Run these directly with `cargo run --example <name>`.
-
-```bash
-cargo run --example basic_search
-cargo run --example ingestion_worker
-cargo run --example secure_tenant
-cargo run --example tool_adapter
-cargo run --example query_use_cases
-```
-
-### `basic_search`
-
-```text
-c3 | doc=doc-sqlite | score=0.997
-c2 | doc=doc-rag | score=0.576
-```
-
-### `ingestion_worker`
-
-```text
-ingested chunks: total=2, processed=2
-search results: 2
-```
-
-### `secure_tenant`
-
-```text
-secure results: 1
-top chunk: chunk-sec-1
-```
-
-### `tool_adapter`
-
-```text
-named tool response: { ... }
-tools exposed: 4
-```
-
-### `query_use_cases`
-
-Demonstrates 7 retrieval patterns end-to-end (text, vector, hybrid, filters, doc-scope, RRF, candidate-limit) with detailed score breakdown.
-
-## Ingestion Workflow
-
-Ingest text from file/URL/direct payload with checkpointing.
-
-```bash
-cargo run --bin sqlrite-ingest -- \
-  --db sqlrite_demo.db \
-  --job-id ingest-001 \
-  --doc-id doc-001 \
-  --source-id docs/readme \
-  --tenant acme \
-  --file README.md \
-  --checkpoint .sqlrite/checkpoints/ingest-001.json \
-  --chunking heading \
-  --max-chars 1200 \
-  --overlap-chars 120 \
+  --job-id docs-import \
+  --doc-id guide-1 \
+  --file ./docs/guide.md \
+  --checkpoint ingest.checkpoint.json \
   --batch-size 64 \
-  --adaptive-batching \
-  --max-batch-size 1024 \
-  --target-batch-ms 80 \
-  --json \
-  --output ingest_report.json
-```
-
-Output shape:
-
-```json
-{
-  "total_chunks": 21286,
-  "processed_chunks": 21286,
-  "duration_ms": 1435.283041,
-  "throughput_chunks_per_minute": 889831.4572923321,
-  "average_batch_size": 788.3703703703703,
-  "peak_batch_size": 1024,
-  "batch_count": 27,
-  "adaptive_batching": true
-}
-```
-
-## Security Workflow
-
-### Generate default RBAC policy
-
-```bash
-cargo run --bin sqlrite-security -- init-policy --path .sqlrite/rbac-policy.json
-```
-
-### Add tenant key
-
-```bash
-cargo run --bin sqlrite-security -- add-key \
-  --registry .sqlrite/tenant_keys.json \
-  --tenant acme \
-  --key-id k1 \
-  --key-material super-secret-k1 \
-  --active
-```
-
-### Rotate encrypted metadata to a key
-
-```bash
-cargo run --bin sqlrite-security -- rotate-key \
-  --db sqlrite_demo.db \
-  --registry .sqlrite/tenant_keys.json \
-  --tenant acme \
-  --field secret_payload \
-  --new-key-id k1 \
   --json
 ```
 
-### Verify tenant key coverage after rotation
+Use the ingestion worker when you need:
+
+- resumable jobs
+- adaptive batching
+- deterministic chunk IDs
+- embedding model/version tracking
+
+## Reindexing
+
+Reindex when you change embedding model, model version, or embedding provider.
+
+### Deterministic local provider
 
 ```bash
-cargo run --bin sqlrite-security -- verify-key \
-  --db sqlrite_demo.db \
-  --registry .sqlrite/tenant_keys.json \
-  --tenant acme \
-  --field secret_payload \
-  --key-id k1
-```
-
-### Export audit logs
-
-```bash
-cargo run --bin sqlrite-security -- export-audit \
-  --input .sqlrite/audit/server_audit.jsonl \
-  --output audit_export.jsonl \
-  --format jsonl \
-  --tenant acme \
-  --operation query
-```
-
-Tenant keys now require at least 16 bytes of key material.
-
-### Run server with secure defaults
-
-```bash
-cargo run -- serve \
-  --db sqlrite_demo.db \
-  --bind 127.0.0.1:8099 \
-  --secure-defaults \
-  --authz-policy .sqlrite/rbac-policy.json \
-  --audit-log .sqlrite/audit/server_audit.jsonl
-```
-
-Authenticated request headers:
-
-- `x-sqlrite-actor-id`
-- `x-sqlrite-tenant-id`
-- `x-sqlrite-roles`
-
-Reader query example:
-
-```bash
-curl -fsS -X POST \
-  -H "content-type: application/json" \
-  -H "x-sqlrite-actor-id: reader-1" \
-  -H "x-sqlrite-tenant-id: demo" \
-  -H "x-sqlrite-roles: reader" \
-  -d '{"query_text":"agent","top_k":2}' \
-  http://127.0.0.1:8099/v1/query | jq
-```
-
-Security summary endpoint:
-
-```bash
-curl -fsS http://127.0.0.1:8099/control/v1/security | jq
-```
-
-Audit export endpoint:
-
-```bash
-curl -fsS -X POST \
-  -H "content-type: application/json" \
-  -H "x-sqlrite-control-token: secret" \
-  -d '{"tenant_id":"demo","output_path":"project_plan/reports/s28_audit_export.jsonl","format":"jsonl"}' \
-  http://127.0.0.1:8099/control/v1/security/audit/export | jq
-```
-
-Rerank hook endpoint:
-
-```bash
-curl -fsS -X POST \
-  -H "content-type: application/json" \
-  -H "x-sqlrite-actor-id: reader-1" \
-  -H "x-sqlrite-tenant-id: demo" \
-  -H "x-sqlrite-roles: reader" \
-  -d '{"query_text":"agent memory","candidate_count":10}' \
-  http://127.0.0.1:8099/v1/rerank-hook | jq
-```
-
-## Reindex Workflow
-
-Use this when you change embedding model/provider and need to re-embed stored chunks.
-
-### Deterministic provider (local)
-
-```bash
-cargo run --bin sqlrite-reindex -- \
+sqlrite-reindex \
   --db sqlrite_demo.db \
   --provider deterministic \
-  --target-model-version det-v2 \
-  --batch-size 256 \
-  --checkpoint .sqlrite/checkpoints/reindex.json
-```
-
-Sample output:
-
-```text
-reindex complete
-scanned=3, updated=3, skipped=0, failed=0, resumed_from=0
-provider=deterministic_local model=det-v2
+  --target-model-version local-v2 \
+  --batch-size 64
 ```
 
 ### OpenAI-compatible provider
 
 ```bash
-cargo run --bin sqlrite-reindex -- \
+sqlrite-reindex \
   --db sqlrite_demo.db \
   --provider openai \
   --endpoint https://api.openai.com/v1/embeddings \
   --model text-embedding-3-small \
   --api-key-env OPENAI_API_KEY \
-  --target-model-version text-embedding-3-small
+  --target-model-version openai-v1 \
+  --batch-size 32
 ```
 
 ### Custom HTTP provider
 
 ```bash
-cargo run --bin sqlrite-reindex -- \
+sqlrite-reindex \
   --db sqlrite_demo.db \
   --provider custom \
   --endpoint http://localhost:8080/embed \
@@ -1001,12 +421,339 @@ cargo run --bin sqlrite-reindex -- \
   --target-model-version internal-v1
 ```
 
-## Ops Workflow
+## Migration
+
+SQLRite includes a first-class migration command for SQL databases and API-first vector database export shapes.
+
+### SQLite
+
+```bash
+sqlrite migrate sqlite \
+  --source legacy.db \
+  --target sqlrite.db \
+  --doc-table legacy_documents \
+  --doc-id-col doc_id \
+  --chunk-table legacy_chunks \
+  --chunk-id-col chunk_id \
+  --chunk-doc-id-col doc_id \
+  --chunk-content-col chunk_text \
+  --chunk-embedding-col embedding_blob \
+  --chunk-embedding-dim-col embedding_dim \
+  --embedding-format blob_f32le \
+  --batch-size 512 \
+  --create-indexes
+```
+
+### libSQL
+
+```bash
+sqlrite migrate libsql \
+  --source libsql-replica.db \
+  --target sqlrite.db \
+  --create-indexes
+```
+
+### pgvector-style JSONL
+
+```bash
+sqlrite migrate pgvector \
+  --input export.jsonl \
+  --target sqlrite.db \
+  --batch-size 512 \
+  --create-indexes \
+  --json
+```
+
+### Qdrant, Weaviate, or Milvus export patterns
+
+```bash
+sqlrite migrate qdrant --input qdrant_export.jsonl --target sqlrite.db --create-indexes
+sqlrite migrate weaviate --input weaviate_export.jsonl --target sqlrite.db --create-indexes
+sqlrite migrate milvus --input milvus_export.jsonl --target sqlrite.db --create-indexes
+```
+
+### Validate a migrated database
+
+```bash
+sqlrite doctor --db sqlrite.db --json
+sqlrite query --db sqlrite.db --text "agent memory" --top-k 5
+```
+
+Detailed migration documentation:
+
+- `docs/migrations/sqlite_to_sqlrite.md`
+- `docs/migrations/pgvector_to_sqlrite.md`
+- `docs/migrations/api_first_vector_db_patterns.md`
+- `docs/runbooks/migration_cli_workflow.md`
+
+## Security and Multi-Tenant Operation
+
+### Generate a default RBAC policy
+
+```bash
+sqlrite-security init-policy --path .sqlrite/rbac-policy.json
+```
+
+### Add a tenant key
+
+```bash
+sqlrite-security add-key \
+  --registry .sqlrite/tenant_keys.json \
+  --tenant demo \
+  --key-id k1 \
+  --key-material demo-secret-material \
+  --active
+```
+
+### Rotate encrypted metadata to a new key
+
+```bash
+sqlrite-security rotate-key \
+  --db sqlrite_demo.db \
+  --registry .sqlrite/tenant_keys.json \
+  --tenant demo \
+  --field secret_payload \
+  --new-key-id k2 \
+  --json
+```
+
+### Verify tenant key coverage
+
+```bash
+sqlrite-security verify-key \
+  --db sqlrite_demo.db \
+  --registry .sqlrite/tenant_keys.json \
+  --tenant demo \
+  --field secret_payload \
+  --key-id k2
+```
+
+### Export audit logs
+
+```bash
+sqlrite-security export-audit \
+  --input .sqlrite/audit/server_audit.jsonl \
+  --output audit_export.jsonl \
+  --format jsonl \
+  --tenant demo
+```
+
+### Run the server with secure defaults
+
+```bash
+sqlrite serve \
+  --db sqlrite_demo.db \
+  --bind 127.0.0.1:8099 \
+  --secure-defaults \
+  --authz-policy .sqlrite/rbac-policy.json \
+  --audit-log .sqlrite/audit/server_audit.jsonl \
+  --control-token dev-token
+```
+
+Security documentation:
+
+- `docs/security/threat_model.md`
+- `docs/security/compliance_posture.md`
+- `docs/runbooks/security_rbac_defaults.md`
+- `docs/runbooks/audit_export_key_rotation.md`
+
+## Server Mode
+
+Start the server:
+
+```bash
+sqlrite serve --db sqlrite_demo.db --bind 127.0.0.1:8099
+```
+
+Core endpoints:
+
+- `GET /healthz`
+- `GET /readyz`
+- `GET /metrics`
+- `POST /v1/query`
+- `POST /v1/sql`
+- `POST /v1/rerank-hook`
+
+Basic query request:
+
+```bash
+curl -fsS -X POST \
+  -H "content-type: application/json" \
+  -d '{"query_text":"agent memory","top_k":3}' \
+  http://127.0.0.1:8099/v1/query | jq
+```
+
+SQL endpoint example:
+
+```bash
+curl -fsS -X POST \
+  -H "content-type: application/json" \
+  -d '{"statement":"SELECT id, doc_id FROM chunks ORDER BY id ASC LIMIT 2;"}' \
+  http://127.0.0.1:8099/v1/sql | jq
+```
+
+Control-plane capabilities include:
+
+- replication status
+- failover state
+- recovery state
+- snapshot management
+- recent traces
+- SLO reporting
+
+HA and control-plane references:
+
+- `docs/architecture/ha_replication_reference.md`
+- `docs/runbooks/ha_control_plane.md`
+
+## MCP Tool Server
+
+Print the MCP manifest:
+
+```bash
+sqlrite mcp --db sqlrite_demo.db --print-manifest
+```
+
+Run MCP over stdio with auth:
+
+```bash
+sqlrite mcp --db sqlrite_demo.db --auth-token dev-token
+```
+
+MCP documentation:
+
+- `docs/runbooks/mcp_tool_server.md`
+- `docs/runbooks/agent_integrations_reference.md`
+
+## Native gRPC Service
+
+Start the gRPC service:
+
+```bash
+sqlrite grpc --db sqlrite_demo.db --bind 127.0.0.1:50051
+```
+
+Use the companion client:
+
+```bash
+sqlrite-grpc-client --addr 127.0.0.1:50051 health
+sqlrite-grpc-client --addr 127.0.0.1:50051 query --text "agent memory" --top-k 2
+sqlrite-grpc-client --addr 127.0.0.1:50051 sql --statement "SELECT id, doc_id FROM chunks ORDER BY id ASC LIMIT 2;"
+```
+
+gRPC documentation:
+
+- `docs/runbooks/grpc_query_service.md`
+
+## SDKs
+
+### Python
+
+Install from the SDK directory:
+
+```bash
+cd sdk/python
+python -m pip install -e .
+```
+
+Example:
+
+```python
+from sqlrite_sdk import SqlRiteClient
+
+client = SqlRiteClient(base_url="http://127.0.0.1:8099")
+rows = client.query(query_text="agent memory", top_k=3)
+print(rows)
+```
+
+### TypeScript
+
+Install from the SDK directory:
+
+```bash
+cd sdk/typescript
+npm install
+npm run build
+```
+
+Example:
+
+```ts
+import { SqlRiteClient } from "@sqlrite/sdk";
+
+const client = new SqlRiteClient({ baseUrl: "http://127.0.0.1:8099" });
+const rows = await client.query({ queryText: "agent memory", topK: 3 });
+console.log(rows);
+```
+
+## Benchmarks and Evaluation
+
+### Single benchmark run
+
+```bash
+sqlrite benchmark \
+  --corpus 8000 \
+  --queries 350 \
+  --warmup 80 \
+  --embedding-dim 64 \
+  --top-k 10 \
+  --candidate-limit 400 \
+  --fusion weighted \
+  --index-mode hnsw_baseline \
+  --query-profile balanced \
+  --output bench_report.json
+```
+
+### Benchmark suite
+
+```bash
+cargo run --bin sqlrite-bench-suite -- \
+  --profiles quick,10k \
+  --concurrency-profile quick \
+  --concurrency-levels 1,2,4 \
+  --dataset examples/eval_dataset.json \
+  --dataset-id readme_suite \
+  --embedding-model deterministic-local-v1 \
+  --hardware-class local-dev \
+  --output bench_suite.json
+```
+
+### Evaluation report
+
+```bash
+cargo run --bin sqlrite-eval -- \
+  --dataset examples/eval_dataset.json \
+  --output eval_report.json \
+  --index-mode hnsw_baseline
+```
+
+### Tuning knobs
+
+Environment variables:
+
+- `SQLRITE_VECTOR_STORAGE=f32|f16|int8`
+- `SQLRITE_ANN_MIN_CANDIDATES=<int>`
+- `SQLRITE_ANN_MAX_HAMMING_RADIUS=<int>`
+- `SQLRITE_ANN_MAX_CANDIDATE_MULTIPLIER=<int>`
+- `SQLRITE_ENABLE_ANN_PERSISTENCE=true|false`
+- `SQLRITE_SQLITE_MMAP_SIZE=<bytes>`
+- `SQLRITE_SQLITE_CACHE_SIZE_KIB=<kib>`
+
+Example:
+
+```bash
+SQLRITE_VECTOR_STORAGE=int8 \
+SQLRITE_SQLITE_MMAP_SIZE=536870912 \
+SQLRITE_SQLITE_CACHE_SIZE_KIB=131072 \
+sqlrite doctor --db sqlrite_demo.db --index-mode hnsw_baseline --json
+```
+
+## Backup, Restore, and Maintenance
 
 ### Health
 
 ```bash
-cargo run -- doctor --db sqlrite_demo.db
+sqlrite doctor --db sqlrite_demo.db
 ```
 
 Sample output:
@@ -1024,1101 +771,140 @@ sqlrite doctor
 - schema_version=3
 - index_mode=brute_force
 - vector_storage=f32
-- index_estimated_memory_bytes=174
-- sqlite_mmap_size_bytes=268435456
-- sqlite_cache_size_kib=65536
 ```
 
-### Backup, snapshot, PITR + verify
+### Backup and verify
 
 ```bash
-cargo run -- backup --source sqlrite_demo.db --dest sqlrite_backup.db
-cargo run -- backup verify --path sqlrite_backup.db
+sqlrite backup --source sqlrite_demo.db --dest sqlrite_backup.db
+sqlrite backup verify --path sqlrite_backup.db
+```
 
-cargo run -- backup snapshot \
+### Snapshot and PITR
+
+```bash
+sqlrite backup snapshot \
   --source sqlrite_demo.db \
-  --backup-dir project_plan/reports/s17_backups \
+  --backup-dir backups \
   --note "manual_snapshot" \
   --json
 
-cargo run -- backup list \
-  --backup-dir project_plan/reports/s17_backups \
-  --json
+sqlrite backup list --backup-dir backups --json
 
-cargo run -- backup pitr-restore \
-  --backup-dir project_plan/reports/s17_backups \
-  --target-unix-ms $(( $(date +%s) * 1000 )) \
-  --dest sqlrite_restored.db \
-  --verify \
-  --json
-
-cargo run -- backup prune \
-  --backup-dir project_plan/reports/s17_backups \
-  --retention-seconds 3600 \
-  --json
+sqlrite backup pitr-restore \
+  --backup-dir backups \
+  --target-unix-ms 1772000000000 \
+  --dest restored.db \
+  --verify
 ```
 
-Sample output (`backup pitr-restore --verify --json`):
-
-```json
-{
-  "destination": "sqlrite_restored.db",
-  "selected_snapshot": {
-    "snapshot_id": "snap-1772391291376",
-    "note": "cli_snapshot"
-  },
-  "target_unix_ms": 1772391291999,
-  "verification": {
-    "integrity_check_ok": true,
-    "chunk_count": 3,
-    "schema_version": 3
-  }
-}
-```
-
-### Compaction maintenance
+### Compaction
 
 ```bash
-cargo run -- compact --db sqlrite_demo.db --index-mode hnsw_baseline --json
+sqlrite compact --db sqlrite_demo.db --json
 ```
 
-Sample output:
+## Examples
 
-```json
-{
-  "before_chunks": 21286,
-  "after_chunks": 21286,
-  "deduplicated_chunks": 0,
-  "wal_checkpoint_applied": true,
-  "analyze_applied": true,
-  "vacuum_applied": true,
-  "reclaimed_bytes": 704512
-}
-```
-
-## Server Mode (Health + Control Plane + SQL API)
-
-Standalone mode:
+Runnable examples live under `examples/`.
 
 ```bash
-cargo run -- serve --db sqlrite_demo.db --bind 127.0.0.1:8099
+cargo run --example basic_search
+cargo run --example ingestion_worker
+cargo run --example secure_tenant
+cargo run --example tool_adapter
+cargo run --example query_use_cases
 ```
 
-HA profile example (primary node):
+## Packaging and Releases
 
-```bash
-cargo run -- serve \
-  --db sqlrite_demo.db \
-  --bind 127.0.0.1:8099 \
-  --ha-role primary \
-  --cluster-id sqlrite-ha \
-  --node-id node-a \
-  --advertise 127.0.0.1:8099 \
-  --peer 127.0.0.1:8199 \
-  --peer 127.0.0.1:8299 \
-  --sync-ack-quorum 2 \
-  --failover automatic \
-  --control-token dev-token
-```
-
-Data-plane endpoints:
-
-- `GET /healthz`
-- `GET /readyz`
-- `GET /metrics`
-- `POST /v1/sql` (retrieval SQL endpoint)
-- `POST /v1/query` (semantic/lexical/hybrid retrieval endpoint)
-- `GET /v1/openapi.json` (OpenAPI contract for query surfaces)
-- `POST /grpc/sqlrite.v1.QueryService/Sql` (gRPC-style SQL bridge over HTTP JSON)
-- `POST /grpc/sqlrite.v1.QueryService/Query` (gRPC-style query bridge over HTTP JSON)
-
-Control-plane endpoints:
-
-- `GET /control/v1/profile`
-- `GET /control/v1/state`
-- `GET /control/v1/peers`
-- `GET /control/v1/failover/status`
-- `GET /control/v1/resilience`
-- `GET /control/v1/chaos/status`
-- `GET /control/v1/replication/log?from=<index>&limit=<n>`
-- `GET /control/v1/recovery/snapshots?limit=<n>`
-- `GET /control/v1/observability/metrics-map`
-- `GET /control/v1/traces/recent?limit=<n>`
-- `GET /control/v1/alerts/templates`
-- `GET /control/v1/slo/report`
-- `POST /control/v1/failover/start`
-- `POST /control/v1/failover/promote`
-- `POST /control/v1/failover/step-down`
-- `POST /control/v1/failover/auto-check`
-- `POST /control/v1/recovery/start`
-- `POST /control/v1/recovery/mark-restored`
-- `POST /control/v1/recovery/snapshot`
-- `POST /control/v1/recovery/verify-restore`
-- `POST /control/v1/recovery/prune-snapshots`
-- `POST /control/v1/observability/reset`
-- `POST /control/v1/alerts/simulate`
-- `POST /control/v1/replication/append`
-- `POST /control/v1/replication/receive`
-- `POST /control/v1/replication/ack`
-- `POST /control/v1/replication/reconcile`
-- `POST /control/v1/election/request-vote`
-- `POST /control/v1/election/heartbeat`
-- `POST /control/v1/chaos/inject`
-- `POST /control/v1/chaos/clear`
-
-Readiness response example:
-
-```bash
-curl -fsS http://127.0.0.1:8099/readyz | jq
-```
-
-```json
-{
-  "ready": true,
-  "schema_version": 3,
-  "ha_enabled": false,
-  "role": "standalone",
-  "leader_id": null
-}
-```
-
-SQL API example:
-
-```bash
-curl -fsS -X POST \
-  -H "content-type: application/json" \
-  -d '{"statement":"SELECT id, embedding <=> vector(\"0.95,0.05,0.0\") AS cosine_distance FROM chunks ORDER BY cosine_distance ASC, id ASC LIMIT 3;"}' \
-  http://127.0.0.1:8099/v1/sql | jq
-```
-
-Sample output:
-
-```json
-{
-  "kind": "query",
-  "row_count": 3,
-  "rows": [
-    {
-      "cosine_distance": 0.000638127326965332,
-      "id": "demo-1"
-    },
-    {
-      "cosine_distance": 0.09577643871307373,
-      "id": "demo-2"
-    },
-    {
-      "cosine_distance": 0.5582578182220459,
-      "id": "demo-3"
-    }
-  ]
-}
-```
-
-Query API example:
-
-```bash
-curl -fsS -X POST \
-  -H "content-type: application/json" \
-  -d '{"query_text":"agent memory","top_k":3}' \
-  http://127.0.0.1:8099/v1/query | jq
-```
-
-Sample output:
-
-```json
-{
-  "kind": "query",
-  "row_count": 3,
-  "rows": [
-    {
-      "chunk_id": "demo-1",
-      "doc_id": "doc-a",
-      "content": "Rust and SQLite are ideal for local-first AI agents.",
-      "vector_score": 0.0,
-      "text_score": 0.0,
-      "hybrid_score": 0.0,
-      "metadata": {
-        "tenant": "demo",
-        "topic": "agent-memory"
-      }
-    },
-    {
-      "chunk_id": "demo-2",
-      "doc_id": "doc-b",
-      "content": "Hybrid retrieval mixes vector search with keyword signals.",
-      "vector_score": 0.0,
-      "text_score": 0.0,
-      "hybrid_score": 0.0,
-      "metadata": {
-        "tenant": "demo",
-        "topic": "retrieval"
-      }
-    },
-    {
-      "chunk_id": "demo-3",
-      "doc_id": "doc-c",
-      "content": "Deterministic scoring keeps retrieval stable across runs.",
-      "vector_score": 0.0,
-      "text_score": 0.0,
-      "hybrid_score": 0.0,
-      "metadata": {
-        "tenant": "demo",
-        "topic": "stability"
-      }
-    }
-  ]
-}
-```
-
-OpenAPI contract fetch:
-
-```bash
-curl -fsS http://127.0.0.1:8099/v1/openapi.json | jq '.paths | keys'
-```
-
-Sample output:
-
-```json
-[
-  "/grpc/sqlrite.v1.QueryService/Query",
-  "/grpc/sqlrite.v1.QueryService/Sql",
-  "/v1/openapi.json",
-  "/v1/query",
-  "/v1/sql"
-]
-```
-
-gRPC-style bridge query example:
-
-```bash
-curl -fsS -X POST \
-  -H "content-type: application/json" \
-  -d '{"query_text":"agent memory","top_k":3}' \
-  http://127.0.0.1:8099/grpc/sqlrite.v1.QueryService/Query | jq
-```
-
-gRPC-style bridge SQL example:
-
-```bash
-curl -fsS -X POST \
-  -H "content-type: application/json" \
-  -d '{"statement":"SELECT id, doc_id FROM chunks ORDER BY id ASC LIMIT 2;"}' \
-  http://127.0.0.1:8099/grpc/sqlrite.v1.QueryService/Sql | jq
-```
-
-Native gRPC QueryService (Sprint 22):
-
-```bash
-cargo run -- grpc --db sqlrite_demo.db --bind 127.0.0.1:50051
-```
-
-Client examples (`sqlrite-grpc-client`):
-
-```bash
-cargo run --bin sqlrite-grpc-client -- --addr 127.0.0.1:50051 health
-
-cargo run --bin sqlrite-grpc-client -- --addr 127.0.0.1:50051 \
-  query --text "agent memory" --top-k 2
-
-cargo run --bin sqlrite-grpc-client -- --addr 127.0.0.1:50051 \
-  sql --statement "SELECT id, doc_id FROM chunks ORDER BY id ASC LIMIT 2;"
-```
-
-Sample output (`health`):
-
-```json
-{
-  "status": "ok",
-  "version": "1.0.0"
-}
-```
-
-Replication + election protocol example:
-
-```bash
-curl -fsS -X POST \
-  -H "content-type: application/json" \
-  -H "x-sqlrite-control-token: dev-token" \
-  -d '{"operation":"ingest_chunk","payload":{"chunk_id":"c1","doc_id":"d1"}}' \
-  http://127.0.0.1:8099/control/v1/replication/append | jq
-
-curl -fsS -X POST \
-  -H "content-type: application/json" \
-  -H "x-sqlrite-control-token: dev-token" \
-  -d '{"node_id":"node-b","index":1}' \
-  http://127.0.0.1:8099/control/v1/replication/ack | jq
-
-curl -fsS -X POST \
-  -H "content-type: application/json" \
-  -H "x-sqlrite-control-token: dev-token" \
-  -d '{"term":2,"candidate_id":"node-b","candidate_last_log_index":1,"candidate_last_log_term":1}' \
-  http://127.0.0.1:8099/control/v1/election/request-vote | jq
-```
-
-Automatic failover + chaos harness example:
-
-```bash
-curl -fsS -X POST \
-  -H "content-type: application/json" \
-  -H "x-sqlrite-control-token: dev-token" \
-  -d '{"simulate_elapsed_ms":5000,"reason":"leader_timeout_test"}' \
-  http://127.0.0.1:8099/control/v1/failover/auto-check | jq
-
-curl -fsS -X POST \
-  -H "content-type: application/json" \
-  -H "x-sqlrite-control-token: dev-token" \
-  -d '{"scenario":"disk_full","note":"write-path-block"}' \
-  http://127.0.0.1:8099/control/v1/chaos/inject | jq
-
-curl -fsS http://127.0.0.1:8099/control/v1/resilience | jq
-curl -fsS http://127.0.0.1:8099/control/v1/failover/status | jq
-
-curl -fsS -X POST \
-  -H "x-sqlrite-control-token: dev-token" \
-  http://127.0.0.1:8099/control/v1/chaos/clear | jq
-```
-
-Sample output:
-
-```json
-{
-  "triggered": true,
-  "event": {
-    "promoted": true,
-    "reason": "leader_timeout_test",
-    "term": 2,
-    "leader_id": "node-b",
-    "failover_duration_ms": 1
-  }
-}
-```
-
-Observability API example:
-
-```bash
-curl -fsS http://127.0.0.1:8099/control/v1/observability/metrics-map | jq
-curl -fsS http://127.0.0.1:8099/control/v1/traces/recent?limit=10 | jq
-curl -fsS -X POST \
-  -H "x-sqlrite-control-token: dev-token" \
-  http://127.0.0.1:8099/control/v1/observability/reset | jq
-curl -fsS http://127.0.0.1:8099/control/v1/slo/report | jq
-```
-
-Sample output (`/control/v1/slo/report`):
-
-```json
-{
-  "availability": {
-    "observed_percent": 100.0,
-    "target_percent": 99.95,
-    "passes_target": true
-  },
-  "rpo": {
-    "observed_seconds": 0.005,
-    "target_seconds": 60.0,
-    "passes_target": true
-  }
-}
-```
-
-## MCP Tool Server Mode (Sprint 20)
-
-Start MCP stdio server from unified CLI:
-
-```bash
-sqlrite mcp --db sqlrite_demo.db --auth-token dev-token
-```
-
-Print MCP manifest document for agent/runtime wiring:
-
-```bash
-sqlrite mcp --db sqlrite_demo.db --auth-token dev-token --print-manifest
-```
-
-Dedicated binary variant:
-
-```bash
-cargo run --bin sqlrite-mcp -- --db sqlrite_demo.db --auth-token dev-token
-```
-
-Supported MCP methods:
-
-- `initialize`
-- `ping`
-- `tools/list`
-- `tools/call`
-
-Tool auth baseline:
-
-- when `--auth-token` is set, every `tools/call` request must include `arguments.auth_token`.
-- unauthorized calls return JSON-RPC error code `-32001`.
-
-Quick framed request example (`tools/list`):
-
-```text
-Content-Length: 58
-
-{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}
-```
-
-Reproducible S20 MCP smoke harness:
-
-```bash
-cargo build --bin sqlrite
-scripts/run-s20-mcp-smoke.sh
-```
-
-Artifacts produced by the harness:
-
-- `project_plan/reports/s20_mcp_smoke.log`
-- `project_plan/reports/s20_benchmark_mcp.json`
-
-## Native gRPC Service (Sprint 22)
-
-Start native gRPC QueryService from unified CLI:
-
-```bash
-sqlrite grpc --db sqlrite_demo.db --bind 127.0.0.1:50051
-```
-
-Dedicated server binary:
-
-```bash
-cargo run --bin sqlrite-grpc -- --db sqlrite_demo.db --bind 127.0.0.1:50051
-```
-
-Client utility examples:
-
-```bash
-cargo run --bin sqlrite-grpc-client -- --addr 127.0.0.1:50051 health
-cargo run --bin sqlrite-grpc-client -- --addr 127.0.0.1:50051 query --text \"agent memory\" --top-k 2
-cargo run --bin sqlrite-grpc-client -- --addr 127.0.0.1:50051 sql --statement \"SELECT id, doc_id FROM chunks ORDER BY id ASC LIMIT 2;\"
-```
-
-Reproducible S22 gRPC + SDK smoke harness:
-
-```bash
-cargo build --bin sqlrite --bin sqlrite-grpc-client
-scripts/run-s22-grpc-sdk-smoke.sh
-```
-
-Artifacts produced by the harness:
-
-- `project_plan/reports/s22_grpc_sdk_smoke.log`
-- `project_plan/reports/s22_benchmark_grpc_sdk.json`
-
-## Python SDK (Sprint 23)
-
-Local editable install:
-
-```bash
-pip install -e sdk/python
-```
-
-SDK usage:
-
-```python
-from sqlrite_sdk import SqlRiteClient
-
-client = SqlRiteClient("http://127.0.0.1:8099")
-print(client.health())
-print(client.query(query_text="agent memory", top_k=2))
-print(client.sql("SELECT id, doc_id FROM chunks ORDER BY id ASC LIMIT 2;"))
-```
-
-Reproducible Python SDK integration + packaging smoke:
-
-```bash
-bash scripts/run-s23-python-sdk-smoke.sh
-```
-
-Artifacts produced by the harness:
-
-- `project_plan/reports/s23_python_sdk_smoke.log`
-- `project_plan/reports/s23_python_dist/`
-
-## TypeScript SDK (Sprint 24)
-
-Install dependencies and build:
-
-```bash
-npm --prefix sdk/typescript install
-npm --prefix sdk/typescript run build
-```
-
-SDK usage:
-
-```ts
-import { SqlRiteClient } from "@sqlrite/sdk";
-
-const client = new SqlRiteClient("http://127.0.0.1:8099");
-const health = await client.health();
-const query = await client.query({ query_text: "agent memory", top_k: 2 });
-const sql = await client.sql("SELECT id, doc_id FROM chunks ORDER BY id ASC LIMIT 2;");
-
-console.log(health, query, sql);
-```
-
-Reproducible TypeScript SDK integration + packaging smoke:
-
-```bash
-bash scripts/run-s24-typescript-sdk-smoke.sh
-```
-
-Artifacts produced by the harness:
-
-- `project_plan/reports/s24_typescript_sdk_smoke.log`
-- `project_plan/reports/s24_typescript_dist/`
-
-## Agent Integrations (Sprint 25)
-
-Reference integration examples:
-
-```bash
-python3 examples/agent_integrations/python_memory_agent.py --base-url http://127.0.0.1:8099 --query "agent memory" --top-k 2
-
-npm --prefix sdk/typescript install
-npm --prefix sdk/typescript run build
-node examples/agent_integrations/typescript_memory_agent.mjs --base-url http://127.0.0.1:8099 --query "agent memory" --top-k 2
-
-examples/agent_integrations/mcp_memory_agent.sh
-```
-
-Deterministic cross-surface contract suite:
-
-```bash
-bash scripts/run-s25-agent-contract-suite.sh
-```
-
-Setup-time gate (<15 minutes):
-
-```bash
-bash scripts/run-s25-agent-memory-setup.sh
-```
-
-Monthly release-gate evidence generation:
-
-```bash
-bash scripts/run-s25-release-gate-review.sh
-```
-
-Artifacts produced by S25 harnesses:
-
-- `project_plan/reports/s25_agent_contract_suite.log`
-- `project_plan/reports/s25_agent_contract_report.json`
-- `project_plan/reports/s25_agent_memory_setup.json`
-- `project_plan/reports/s25_release_gate_review.md`
-
-## API Freeze and Edge Story (Sprint 26)
-
-Frozen v1 API contract manifest:
-
-```bash
-cat docs/contracts/api_freeze_v1.json
-```
-
-Compatibility suite (fails on contract drift):
-
-```bash
-bash scripts/run-s26-api-compat-suite.sh
-```
-
-Edge/WASM read-query design RFC:
-
-- `docs/rfcs/0002-edge-read-query-wasm.md`
-
-API freeze runbook:
-
-- `docs/runbooks/api_compatibility_freeze.md`
-
-Artifacts produced by S26 harnesses:
-
-- `project_plan/reports/s26_api_compatibility.log`
-- `project_plan/reports/s26_api_current_manifest.json`
-- `project_plan/reports/s26_api_compatibility_report.json`
-- `project_plan/reports/s26_benchmark_api_freeze.json`
-
-## Query Profile Hints
-
-Use query profiles when you want deterministic latency/recall tradeoffs without manually tuning candidate fan-out:
-
-```bash
-sqlrite query \
-  --db sqlrite_demo.db \
-  --text "agents local memory" \
-  --top-k 5 \
-  --candidate-limit 1000 \
-  --query-profile latency
-```
-
-Server query API:
-
-```bash
-curl -fsS -X POST \
-  -H "content-type: application/json" \
-  -d '{"query_text":"agents local memory","top_k":5,"candidate_limit":1000,"query_profile":"recall"}' \
-  http://127.0.0.1:8099/v1/query | jq
-```
-
-gRPC client:
-
-```bash
-sqlrite-grpc-client \
-  --addr 127.0.0.1:50051 \
-  query \
-  --text "agents local memory" \
-  --top-k 5 \
-  --candidate-limit 1000 \
-  --query-profile recall
-```
-
-Profile mapping:
-
-- `balanced`: default behavior
-- `latency`: caps resolved candidate fan-out at `max(top_k * 8, 32)`
-- `recall`: raises resolved candidate fan-out to at least `max(top_k * 32, 200)`
-
-## Security RBAC and Secure Defaults (Sprint 27)
-
-RBAC/security smoke harness:
-
-```bash
-bash scripts/run-s27-security-rbac-smoke.sh
-```
-
-Runbook:
-
-- `docs/runbooks/security_rbac_defaults.md`
-
-Artifacts produced by S27 harnesses:
-
-- `project_plan/reports/s27_security_rbac_smoke.log`
-- `project_plan/reports/s27_security_rbac_report.json`
-- `project_plan/reports/s27_security_audit.jsonl`
-- `project_plan/reports/s27_benchmark_security_rbac.json`
-
-## Audit Export and Key Rotation Hardening (Sprint 28)
-
-Security audit hardening harness:
-
-```bash
-bash scripts/run-s28-security-audit-hardening.sh
-```
-
-Runbooks and docs:
-
-- `docs/runbooks/audit_export_key_rotation.md`
-- `docs/security/compliance_posture.md`
-- `docs/security/threat_model.md`
-
-Artifacts produced by S28 harnesses:
-
-- `project_plan/reports/s28_security_audit_hardening.log`
-- `project_plan/reports/s28_security_audit_report.json`
-- `project_plan/reports/s28_audit_export.jsonl`
-- `project_plan/reports/s28_audit_export_server.jsonl`
-- `project_plan/reports/s28_benchmark_security_audit.json`
-
-## Query Profile Hints (Sprint 29)
-
-Query profile hint harness:
-
-```bash
-bash scripts/run-s29-query-profile-hints.sh
-```
-
-Runbooks and docs:
-
-- `docs/runbooks/query_profile_hints.md`
-- `docs/rfcs/0003-query-profile-hints.md`
-- `docs/security/compliance_posture.md`
-- `docs/security/threat_model.md`
-
-Artifacts produced by S29 harnesses:
-
-- `project_plan/reports/s29_query_profile_hints.log`
-- `project_plan/reports/s29_query_profile_report.json`
-- `project_plan/reports/s29_benchmark_latency_profile.json`
-- `project_plan/reports/s29_benchmark_recall_profile.json`
-
-Reproducible S16 smoke harness:
-
-```bash
-cargo build --bin sqlrite
-scripts/run-s16-failover-chaos-smoke.sh
-```
-
-Artifacts produced by the harness:
-
-- `project_plan/reports/s16_failover_chaos_smoke.log`
-
-Reproducible S17 backup/PITR smoke harness:
-
-```bash
-cargo build --bin sqlrite
-scripts/run-s17-backup-pitr-smoke.sh
-```
-
-Artifacts produced by the harness:
-
-- `project_plan/reports/s17_backup_pitr_smoke.log`
-- `project_plan/reports/s17_backups/backup_catalog.jsonl`
-
-Reproducible S18 observability smoke harness:
-
-```bash
-cargo build --bin sqlrite
-scripts/run-s18-observability-smoke.sh
-```
-
-Artifacts produced by the harness:
-
-- `project_plan/reports/s18_observability_smoke.log`
-
-Reproducible S19 DR game-day + soak harness:
-
-```bash
-cargo build --bin sqlrite
-scripts/run-s19-dr-gameday.sh
-```
-
-Artifacts produced by the harness:
-
-- `project_plan/reports/s19_dr_gameday.log`
-- `project_plan/reports/s19_soak_slo_summary.json`
-
-Sample S19 soak summary output:
-
-```json
-{
-  "availability_percent": 100.0,
-  "availability_target_percent": 99.95,
-  "availability_pass": true,
-  "observed_rpo_seconds": 0.005,
-  "rpo_target_seconds": 60.0,
-  "rpo_pass": true
-}
-```
-
-## Benchmarks and Performance
-
-### Single benchmark run
-
-```bash
-cargo run -- benchmark \
-  --corpus 3000 \
-  --queries 200 \
-  --warmup 50 \
-  --concurrency 2 \
-  --embedding-dim 64 \
-  --top-k 10 \
-  --candidate-limit 300 \
-  --fusion weighted \
-  --index-mode lsh_ann \
-  --durability balanced \
-  --output bench_report_readme.json
-```
-
-Sample output:
-
-```text
-SQLRite benchmark: corpus=3000, queries=200, concurrency=2, index=lsh_ann, fusion=weighted
-runtime: storage=f32, mmap_size_bytes=268435456, cache_size_kib=65536
-ingest_ms=297.69, query_ms=830.41, qps=240.85, top1_hit_rate=1.0000
-ingest_chunks_per_sec=10077.46, dataset_payload_bytes=923265, index_estimated_bytes=1245544, approx_working_set_bytes=2168809
-latency_ms: avg=4.1436, p50=4.0659, p95=4.6379, p99=5.1522
-```
-
-Sample JSON fields (from `--output` report):
-
-```json
-{
-  "vector_index_mode": "hnsw_baseline",
-  "vector_storage_kind": "f32",
-  "sqlite_mmap_size_bytes": 268435456,
-  "sqlite_cache_size_kib": 65536
-}
-```
-
-### Matrix run
-
-```bash
-cargo run --bin sqlrite-bench-matrix -- \
-  --profile quick \
-  --concurrency 2 \
-  --durability balanced \
-  --output bench_matrix_quick_readme.json
-```
-
-Sample output:
-
-```text
-SQLRite benchmark matrix profile=quick
-scenario                      conc        qps    p50(ms)    p95(ms)       top1   query_ms   ingest_cps    work_mb
-weighted + brute_force           2      84.57      7.284      9.425     1.0000     1182.4      24780.3       1.77
-rrf(k=60) + brute_force          2      81.93      7.642     10.181     0.0950     1220.3      30122.7       1.77
-weighted + lsh_ann               2     188.12      4.203      6.012     1.0000      531.6       9981.4       2.07
-weighted + hnsw_baseline         2     173.44      4.689      7.435     1.0000      576.6       7520.6       2.18
-weighted + disabled_index        2      55.92     17.114     20.889     1.0000     3576.5      28610.1       0.88
-```
-
-### Reproducible benchmark/eval suite (S12)
-
-Run one command to capture:
-
-- benchmark matrix runs for each profile (`quick|10k|100k|1m|10m`)
-- throughput sweep by concurrency level
-- eval metrics (`recall`, `mrr`, `ndcg`) for selected index modes
-- metadata (`embedding_model`, `dataset_id`, `hardware_class`, OS/arch/CPU threads)
-
-```bash
-cargo run --bin sqlrite-bench-suite -- \
-  --profiles quick,10k \
-  --concurrency-profile 10k \
-  --concurrency-levels 1,2,4 \
-  --dataset examples/eval_dataset.json \
-  --dataset-id examples/eval_dataset.json \
-  --embedding-model deterministic-local-v1 \
-  --hardware-class local-dev \
-  --durability balanced \
-  --output project_plan/reports/s12_bench_suite.json
-```
-
-Sample output:
-
-```text
-SQLRite benchmark suite: version=s12-v1, host=macos aarch64, cpu_threads=10
-metadata: dataset_id=examples/eval_dataset.json, embedding_model=deterministic-local-v1, hardware_class=local-dev
-profile=10k
-  weighted + brute_force       qps=   76.50 p95_ms=  16.511 top1=1.0000 conc=1
-concurrency_sweep profile=10k scenario=weighted + brute_force
-  concurrency=1 qps=87.36 p95_ms=12.849
-  concurrency=2 qps=35.14 p95_ms=15.005
-  concurrency=4 qps=37.26 p95_ms=33.079
-eval mode=brute_force k=1 recall=0.8333 mrr=1.0000 ndcg=1.0000
-```
-
-### Assert thresholds (perf gate)
-
-```bash
-cargo run --bin sqlrite-bench-assert -- \
-  --matrix bench_matrix_quick_readme.json \
-  --scenario "weighted + brute_force" \
-  --scenario "weighted + lsh_ann" \
-  --min-qps 100 \
-  --max-p95-ms 10 \
-  --min-top1 0.99 \
-  --min-ingest-cps 8000
-```
-
-Sample output:
-
-```text
-benchmark assertions passed: profile=quick, checked=2 scenario(s)
-```
-
-### Phase C benchmark bundle (S13)
-
-Generate a reproducible bundle (suite JSON/log + manifest + gate log + tarball):
-
-```bash
-bash scripts/run-benchmark-bundle.sh \
-  --output-dir project_plan/reports/s13_bundle \
-  --profiles 100k,1m \
-  --concurrency-profile quick \
-  --concurrency-levels 1,2 \
-  --strict-phase-c-gate
-```
-
-Default S13 bundle scenarios are:
-
-- `weighted + lsh_ann`
-- `weighted + hnsw_baseline`
-
-Run full scenario matrix instead:
-
-```bash
-bash scripts/run-benchmark-bundle.sh --full-scenarios
-```
-
-Gate assertions against suite output (direct CLI):
-
-```bash
-cargo run --bin sqlrite-bench-suite-assert -- \
-  --suite project_plan/reports/s13_bundle/bench_suite.json \
-  --rule "profile=100k,scenario=weighted + lsh_ann,max_p95_ms=40,min_top1=0.99,min_ingest_cpm=50000" \
-  --rule "profile=1m,scenario=weighted + hnsw_baseline,max_p95_ms=90,min_top1=0.75"
-```
-
-For historical trend context, see:
-
-- `BENCHMARK_STATUS.md`
-- `.github/workflows/ci.yml`
-- `.github/workflows/perf-nightly.yml`
-
-## ANN, Storage, and SQLite Tuning Knobs (Sprint 8-10)
-
-`sqlrite` now supports ANN/runtime tuning through environment variables (applies to `init`, `query`, `benchmark`, `quickstart`, `doctor`, `serve`, `grpc`, and SQL bootstrap).
-
-| Variable | Description | Example |
-| --- | --- | --- |
-| `SQLRITE_VECTOR_STORAGE` | Vector storage kind (`f32`, `f16`, `int8`) | `SQLRITE_VECTOR_STORAGE=int8` |
-| `SQLRITE_ANN_MIN_CANDIDATES` | ANN minimum candidate set | `SQLRITE_ANN_MIN_CANDIDATES=256` |
-| `SQLRITE_ANN_MAX_HAMMING_RADIUS` | ANN bucket expansion radius | `SQLRITE_ANN_MAX_HAMMING_RADIUS=2` |
-| `SQLRITE_ANN_MAX_CANDIDATE_MULTIPLIER` | ANN cap multiplier | `SQLRITE_ANN_MAX_CANDIDATE_MULTIPLIER=8` |
-| `SQLRITE_ENABLE_ANN_PERSISTENCE` | Enable/disable ANN snapshot persistence (`true/false`) | `SQLRITE_ENABLE_ANN_PERSISTENCE=true` |
-| `SQLRITE_SQLITE_MMAP_SIZE` | SQLite mmap size (bytes) | `SQLRITE_SQLITE_MMAP_SIZE=536870912` |
-| `SQLRITE_SQLITE_CACHE_SIZE_KIB` | SQLite page cache target (KiB) | `SQLRITE_SQLITE_CACHE_SIZE_KIB=131072` |
-
-### Example: run HNSW baseline with int8 storage
-
-```bash
-SQLRITE_VECTOR_STORAGE=int8 \
-cargo run -- query \
-  --db sqlrite_demo.db \
-  --index-mode hnsw_baseline \
-  --text "local memory" \
-  --vector 0.95,0.05,0.0 \
-  --top-k 3
-```
-
-### Example: benchmark tuned mmap/cache profile
-
-```bash
-SQLRITE_SQLITE_MMAP_SIZE=536870912 \
-SQLRITE_SQLITE_CACHE_SIZE_KIB=131072 \
-cargo run -- benchmark \
-  --corpus 8000 \
-  --queries 350 \
-  --warmup 80 \
-  --embedding-dim 64 \
-  --top-k 10 \
-  --candidate-limit 400 \
-  --fusion weighted \
-  --index-mode hnsw_baseline \
-  --durability balanced \
-  --output project_plan/reports/s10_benchmark_tuned.json
-```
-
-### Example: verify active storage/tuning in doctor output
-
-```bash
-SQLRITE_VECTOR_STORAGE=int8 \
-SQLRITE_SQLITE_MMAP_SIZE=536870912 \
-SQLRITE_SQLITE_CACHE_SIZE_KIB=131072 \
-cargo run -- doctor --db sqlrite_demo.db --index-mode hnsw_baseline --json
-```
-
-## Evaluation (Quality Metrics)
-
-```bash
-cargo run --bin sqlrite-eval -- \
-  --dataset examples/eval_dataset.json \
-  --output eval_report_readme.json \
-  --index-mode brute_force \
-  --durability balanced
-```
-
-Sample output:
-
-```text
-SQLRite eval summary: corpus=5, queries=3, ks=[1, 3, 5]
-k=1: recall=0.8333, precision=1.0000, mrr=1.0000, ndcg=1.0000, hit_rate=1.0000
-k=3: recall=1.0000, precision=0.4444, mrr=1.0000, ndcg=0.9732, hit_rate=1.0000
-k=5: recall=1.0000, precision=0.2667, mrr=1.0000, ndcg=0.9732, hit_rate=1.0000
-```
-
-## Library API (Minimal)
-
-```rust
-use serde_json::json;
-use sqlrite::{ChunkInput, Result, SearchRequest, SqlRite};
-
-fn demo() -> Result<()> {
-    let db = SqlRite::open_in_memory()?;
-
-    db.ingest_chunk(
-        &ChunkInput::new("c1", "d1", "Chunk text", vec![0.1, 0.2, 0.3])
-            .with_metadata(json!({"tenant": "acme"}))
-    )?;
-
-    let request = SearchRequest::hybrid("chunk", vec![0.12, 0.18, 0.31], 5);
-    let _results = db.search(request)?;
-    Ok(())
-}
-```
-
-## Packaging and Distribution
-
-Build release archives:
+Create a release archive from source:
 
 ```bash
 bash scripts/create-release-archive.sh --version 1.0.0
 ```
 
-Build Linux packages (`.deb`, `.rpm`) when `nfpm` is installed:
+Create Linux packages when `nfpm` is installed:
 
 ```bash
 bash scripts/package-linux.sh --version 1.0.0
 ```
 
-Build Docker image:
+Build and run the Docker image:
 
 ```bash
 docker build -t sqlrite:local .
-docker run --rm sqlrite:local --help
+docker run --rm -p 8099:8099 -v "$PWD:/data" sqlrite:local
 ```
 
-Run HA reference deployment (compose):
+Current release notes:
+
+- `docs/releases/v1.0.0.md`
+- `docs/release_policy.md`
+- `docs/runbooks/ga_release_train.md`
+
+## Documentation Map
+
+Start here depending on what you need:
+
+- SQL usage and patterns:
+  - `docs/sql_cookbook.md`
+- Migration:
+  - `docs/migrations/sqlite_to_sqlrite.md`
+  - `docs/migrations/pgvector_to_sqlrite.md`
+  - `docs/migrations/api_first_vector_db_patterns.md`
+- Operations:
+  - `docs/runbooks/migration_cli_workflow.md`
+  - `docs/runbooks/ha_control_plane.md`
+  - `docs/runtime_config_profiles.md`
+- Security:
+  - `docs/security/threat_model.md`
+  - `docs/security/compliance_posture.md`
+  - `docs/runbooks/security_rbac_defaults.md`
+  - `docs/runbooks/audit_export_key_rotation.md`
+- Integration surfaces:
+  - `docs/runbooks/mcp_tool_server.md`
+  - `docs/runbooks/grpc_query_service.md`
+  - `docs/contracts/api_freeze_v1.json`
+
+## Development
+
+### Build
 
 ```bash
-cd deploy/ha
-docker compose -f docker-compose.reference.yml up -d
+cargo build
 ```
 
-Kubernetes reference manifests:
-
-- `deploy/ha/k8s-service.yaml`
-- `deploy/ha/k8s-statefulset.yaml`
-
-Generate Homebrew formula and winget manifests:
+### Test
 
 ```bash
-bash scripts/generate-homebrew-formula.sh --help
-bash scripts/generate-winget-manifests.sh --help
+cargo test
 ```
 
-Detailed channel documentation:
-
-- `docs/packaging_channels.md`
-- `.github/workflows/installer-smoke.yml`
-- `.github/workflows/packaging-channels.yml`
-
-## Development Workflow
+### Format
 
 ```bash
 cargo fmt --all
-cargo clippy --all-targets --all-features -- -D warnings
-cargo test
-cargo test --examples
 ```
 
-## Repository Map
+### Lint
 
-- `CHANGELOG.md` - release and sprint-level change history
-- `src/lib.rs` - core DB API and retrieval pipeline
-- `src/ingest.rs` - ingestion worker + embedding providers
-- `src/reindex.rs` - reindex orchestration
-- `src/security.rs` - tenant policy/audit/encryption workflow
-- `src/ops.rs` - health/backup/verify
-- `src/server.rs` - health/readiness/metrics server plus HA control-plane and `/v1/sql` endpoint
-- `src/bin/` - operational CLIs
-- `scripts/` - install, update, packaging, and release tooling
-- `packaging/` - Homebrew/winget/nfpm packaging assets
-- `examples/` - runnable workflows
+```bash
+cargo clippy --all-targets --all-features -- -D warnings
+```
+
+## Repository Layout
+
+- `src/` - core engine, CLI, HTTP server, SQL semantics, HA logic, security, migrations, and benchmarking
+- `src/bin/` - companion binaries such as `sqlrite-security`, `sqlrite-reindex`, and `sqlrite-grpc-client`
+- `sdk/python/` - Python SDK
+- `sdk/typescript/` - TypeScript SDK
+- `docs/` - product, operator, and release documentation
+- `examples/` - runnable examples and datasets
+- `scripts/` - install, packaging, and release automation
 
 ## Notes
 
-- Benchmark numbers vary by CPU, memory pressure, and background load.
-- CLI/query examples assume seeded `sqlrite_demo.db` unless specified otherwise.
-- For larger corpora and trend analysis, use matrix runs plus `BENCHMARK_STATUS.md`.
+- SQLRite is designed to be local-first, but it also supports server-mode deployment when you need shared access or integration endpoints.
+- Deterministic ordering matters for agent systems. SQLRite uses explicit tie-breaking and planner fallback behavior to keep repeated runs stable on fixed data.
+- If you need the lowest operational complexity, start with embedded mode and a single `.db` file before moving to server mode.
