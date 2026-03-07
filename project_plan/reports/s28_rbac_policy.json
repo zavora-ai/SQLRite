@@ -3,15 +3,15 @@
     "reader": [
       "query"
     ],
+    "tenant_admin": [
+      "query",
+      "ingest",
+      "delete_tenant"
+    ],
     "admin": [
       "query",
       "ingest",
       "sql_admin",
-      "delete_tenant"
-    ],
-    "tenant_admin": [
-      "query",
-      "ingest",
       "delete_tenant"
     ],
     "writer": [

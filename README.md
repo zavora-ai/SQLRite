@@ -576,6 +576,55 @@ Artifacts:
 - `project_plan/reports/s31_sql_v2_migration_report.json`
 - `project_plan/reports/s31_benchmark_search_v2.json`
 
+## Release Candidate Audit (Sprint 32)
+
+SQLRite now ships a release-candidate hardening workflow for the `v1.0.0` cut. It reruns quality, security, migration, and benchmark gates and derives the blocker audit and operator-facing release documents from the generated artifacts.
+
+### Run the full release-candidate audit
+
+```bash
+bash scripts/run-s32-release-candidate-audit.sh
+```
+
+This runs:
+
+- `cargo fmt --all --check`
+- `cargo test`
+- `bash scripts/run-s26-api-compat-suite.sh`
+- `bash scripts/run-s27-security-rbac-smoke.sh`
+- `bash scripts/run-s28-security-audit-hardening.sh`
+- `bash scripts/run-s30-migration-suite.sh`
+- `bash scripts/run-s31-sql-v2-and-api-migrations.sh`
+- `cargo run --bin sqlrite-bench-suite -- --profiles quick,10k --concurrency-profile quick --concurrency-levels 1,2,4`
+
+### Release policy and defect ledger
+
+- `docs/release_policy.md`
+- `docs/runbooks/release_candidate_hardening.md`
+- `project_plan/release/defect_register.json`
+
+### Generated S32 artifacts
+
+- `project_plan/reports/s32_quality_gates.log`
+- `project_plan/reports/s32_bench_suite.json`
+- `project_plan/reports/s32_blocker_audit.json`
+- `project_plan/reports/s32_release_quality_report.md`
+- `project_plan/reports/s32_release_notes_draft.md`
+- `project_plan/reports/s32_risk_register.md`
+- `project_plan/reports/S32.md`
+
+Sample release-quality highlights from the current S32 audit:
+
+```text
+- overall_release_candidate_pass: true
+- open_p0_count: 0
+- open_p1_count: 0
+- quick_qps: 125.71
+- 10k_p95_ms: 12.3743
+- availability_percent: 100.00
+- observed_rpo_seconds: 0.0050
+```
+
 Run SQL-only conformance for cookbook patterns:
 
 ```bash

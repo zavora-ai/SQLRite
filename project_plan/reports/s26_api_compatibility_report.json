@@ -1,5 +1,5 @@
 {
-  "generated_unix_ms": 1772425247379,
+  "generated_unix_ms": 1772863339905,
   "frozen_manifest": "docs/contracts/api_freeze_v1.json",
   "current_manifest": "project_plan/reports/s26_api_current_manifest.json",
   "pass": true,
@@ -72,9 +72,9 @@
   "failures": [],
   "summary": {
     "frozen_required_command_count": 12,
-    "observed_command_count": 12,
+    "observed_command_count": 13,
     "frozen_required_path_count": 5,
-    "observed_path_count": 5,
+    "observed_path_count": 6,
     "frozen_required_grpc_method_count": 3,
     "observed_grpc_method_count": 3,
     "frozen_required_tool_count": 4,

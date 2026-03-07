@@ -1,0 +1,27 @@
+name: Release Candidate Audit
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  release-candidate-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Run S32 release candidate audit
+        shell: bash
+        run: bash scripts/run-s32-release-candidate-audit.sh
+      - name: Upload S32 artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: s32-release-candidate-audit
+          path: |
+            project_plan/reports/s32_quality_gates.log
+            project_plan/reports/s32_bench_suite.json
+            project_plan/reports/s32_blocker_audit.json
+            project_plan/reports/s32_release_quality_report.md
+            project_plan/reports/s32_release_notes_draft.md
+            project_plan/reports/s32_risk_register.md
+            project_plan/reports/S32.md

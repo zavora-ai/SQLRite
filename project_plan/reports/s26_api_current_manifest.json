@@ -5,6 +5,7 @@
       "init",
       "sql",
       "ingest",
+      "migrate",
       "query",
       "quickstart",
       "serve",
@@ -40,12 +41,16 @@
       "/v1/query": [
         "POST"
       ],
+      "/v1/rerank-hook": [
+        "POST"
+      ],
       "/v1/sql": [
         "POST"
       ]
     },
     "components": [
       "QueryRequest",
+      "RerankHookRequest",
       "SqlRequest"
     ]
   },

@@ -1,6 +1,5 @@
 [build]
-   Compiling sqlrite v0.1.0 (/Users/jameskaranja/Developer/projects/SQLRight)
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.46s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.07s
 [quality-gates]
 [create-fixtures] work_dir=project_plan/reports/s31_fixture_workspace
 [migrate-qdrant]
@@ -18,7 +17,7 @@ milvus_ok=True
 cli_search_ok=True
 http_sql_ok=True
 rerank_hook_ok=True
-qdrant_rows_per_sec=429.1001
-http_sql_elapsed_ms=0.18312499999999998
+qdrant_rows_per_sec=204.3701
+http_sql_elapsed_ms=0.385083
 pass=True
 [s31-complete] report=project_plan/reports/s31_sql_v2_migration_report.json benchmark=project_plan/reports/s31_benchmark_search_v2.json gap=project_plan/reports/s31_competitor_gap_analysis.md

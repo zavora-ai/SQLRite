@@ -5,9 +5,9 @@
 [start-server] bind=127.0.0.1:8346
 [capture-openapi]
 [build-current-manifest]
-current_commands=12
+current_commands=13
 current_env_overrides=7
-current_openapi_paths=5
+current_openapi_paths=6
 current_mcp_tools=4
 current_grpc_methods=3
 [compat-assertions]

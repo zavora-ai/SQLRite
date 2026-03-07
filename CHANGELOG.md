@@ -63,6 +63,17 @@ The format is based on Keep a Changelog.
   - `SEARCH(...)` SQL rewrite prototype in `sqlrite sql` and `/v1/sql`
   - `scripts/run-s31-sql-v2-and-api-migrations.sh`
   - `.github/workflows/sql-v2-api-migrations.yml`
+- Release-candidate hardening workflow and governance artifacts:
+  - `docs/release_policy.md`
+  - `docs/runbooks/release_candidate_hardening.md`
+  - `project_plan/release/defect_register.json`
+  - `scripts/run-s32-release-candidate-audit.sh`
+  - `.github/workflows/release-candidate-audit.yml`
+  - `project_plan/reports/S32.md`
+  - `project_plan/reports/s32_blocker_audit.json`
+  - `project_plan/reports/s32_release_quality_report.md`
+  - `project_plan/reports/s32_release_notes_draft.md`
+  - `project_plan/reports/s32_risk_register.md`
 - SQL-only conformance runner:
   - `scripts/run-sql-cookbook-conformance.sh`
 - Sprint 7 evidence artifacts:
