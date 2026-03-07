@@ -38,6 +38,9 @@ Date: March 7, 2026
 6. External reranker data overexposure
 - mitigated by reusing authenticated query policy for rerank-hook requests and preserving tenant scoping
 
+7. Unbounded agent query fan-out
+- mitigated by deterministic query profiles that provide a bounded `latency` mode and an explicit opt-in `recall` mode
+
 ## Rerank Hook Security Review
 
 The rerank hook returns scored retrieval candidates for external cross-encoders or rerankers.
@@ -54,3 +57,4 @@ Security requirements:
 1. No remote attestation for audit export artifacts.
 2. No hardware-backed key custody.
 3. No content-level field masking inside rerank payloads beyond tenant isolation.
+4. SQL comment hint parsing is not yet enabled for general SQL statements; the mapping is documented in RFC 0003 and transport-level query surfaces.

@@ -6,7 +6,7 @@ use serde::Serialize;
 use serde_json::{Map, Value, json};
 use sqlrite::{
     BenchmarkConfig, ChunkInput, CompactionOptions, DurabilityProfile, FailoverMode,
-    FusionStrategy, GrpcServerConfig, HaRuntimeProfile, McpServerConfig, RbacPolicy,
+    FusionStrategy, GrpcServerConfig, HaRuntimeProfile, McpServerConfig, QueryProfile, RbacPolicy,
     RecoveryConfig, ReplicationConfig, RuntimeConfig, SearchRequest, ServerConfig, ServerRole,
     ServerSecurityConfig, SqlRite, VectorIndexMode, VectorStorageKind, backup_file,
     build_health_report, create_backup_snapshot, list_backup_snapshots,
@@ -397,6 +397,7 @@ struct QueryArgs {
     top_k: usize,
     alpha: f32,
     candidate_limit: usize,
+    query_profile: QueryProfile,
     doc_id: Option<String>,
     fusion_mode: String,
     rrf_rank_constant: f32,
@@ -414,6 +415,7 @@ impl Default for QueryArgs {
             top_k: 5,
             alpha: 0.65,
             candidate_limit: 500,
+            query_profile: QueryProfile::Balanced,
             doc_id: None,
             fusion_mode: "weighted".to_string(),
             rrf_rank_constant: 60.0,
@@ -436,12 +438,19 @@ fn cmd_query(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         top_k: args.top_k,
         alpha: args.alpha,
         candidate_limit: args.candidate_limit,
+        query_profile: args.query_profile,
         metadata_filters: args.metadata_filters,
         doc_id: args.doc_id,
         fusion_strategy,
     };
+    let resolved = request.resolve_query_profile();
 
     let results = db.search(request)?;
+    println!(
+        "query_profile={} resolved_candidate_limit={}",
+        query_profile_name(resolved.query_profile),
+        resolved.candidate_limit
+    );
     println!("results={}", results.len());
     for (idx, item) in results.iter().enumerate() {
         println!(
@@ -496,6 +505,10 @@ fn parse_query_args(args: &[String]) -> Result<QueryArgs, String> {
                 i += 1;
                 cfg.candidate_limit = parse_usize(args, i, "--candidate-limit")?;
             }
+            "--query-profile" => {
+                i += 1;
+                cfg.query_profile = parse_query_profile(&parse_string(args, i, "--query-profile")?)?;
+            }
             "--doc-id" => {
                 i += 1;
                 cfg.doc_id = Some(parse_string(args, i, "--doc-id")?);
@@ -518,11 +531,11 @@ fn parse_query_args(args: &[String]) -> Result<QueryArgs, String> {
                     .insert(key.trim().to_string(), value.trim().to_string());
             }
             "--help" | "-h" => {
-                return Err("usage: sqlrite query [--db PATH] [--profile balanced|durable|fast_unsafe] [--index-mode brute_force|lsh_ann|hnsw_baseline|disabled] [--text QUERY] [--vector v1,v2,...] [--top-k N] [--alpha F] [--candidate-limit N] [--doc-id ID] [--filter key=value]... [--fusion weighted|rrf] [--rrf-k F]".to_string())
+                return Err("usage: sqlrite query [--db PATH] [--profile balanced|durable|fast_unsafe] [--index-mode brute_force|lsh_ann|hnsw_baseline|disabled] [--text QUERY] [--vector v1,v2,...] [--top-k N] [--alpha F] [--candidate-limit N] [--query-profile balanced|latency|recall] [--doc-id ID] [--filter key=value]... [--fusion weighted|rrf] [--rrf-k F]".to_string())
             }
             other => {
                 return Err(format!(
-                    "unknown argument `{other}`\nusage: sqlrite query [--db PATH] [--profile balanced|durable|fast_unsafe] [--index-mode brute_force|lsh_ann|hnsw_baseline|disabled] [--text QUERY] [--vector v1,v2,...] [--top-k N] [--alpha F] [--candidate-limit N] [--doc-id ID] [--filter key=value]... [--fusion weighted|rrf] [--rrf-k F]"
+                    "unknown argument `{other}`\nusage: sqlrite query [--db PATH] [--profile balanced|durable|fast_unsafe] [--index-mode brute_force|lsh_ann|hnsw_baseline|disabled] [--text QUERY] [--vector v1,v2,...] [--top-k N] [--alpha F] [--candidate-limit N] [--query-profile balanced|latency|recall] [--doc-id ID] [--filter key=value]... [--fusion weighted|rrf] [--rrf-k F]"
                 ))
             }
         }
@@ -2033,12 +2046,13 @@ fn cmd_benchmark(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     let report = run_benchmark(args.config, runtime)?;
 
     println!(
-        "SQLRite benchmark: corpus={}, queries={}, concurrency={}, index={}, fusion={}",
+        "SQLRite benchmark: corpus={}, queries={}, concurrency={}, index={}, fusion={}, query_profile={}",
         report.corpus_size,
         report.query_count,
         report.concurrency,
         report.vector_index_mode,
-        report.fusion_strategy
+        report.fusion_strategy,
+        report.query_profile
     );
     println!(
         "runtime: storage={}, mmap_size_bytes={}, cache_size_kib={}",
@@ -2104,6 +2118,11 @@ fn parse_benchmark_args(args: &[String]) -> Result<BenchmarkArgs, String> {
                 i += 1;
                 config.candidate_limit = parse_usize(args, i, "--candidate-limit")?;
             }
+            "--query-profile" => {
+                i += 1;
+                config.query_profile =
+                    parse_query_profile(&parse_string(args, i, "--query-profile")?)?;
+            }
             "--batch-size" => {
                 i += 1;
                 config.batch_size = parse_usize(args, i, "--batch-size")?;
@@ -2137,11 +2156,11 @@ fn parse_benchmark_args(args: &[String]) -> Result<BenchmarkArgs, String> {
                 output_path = Some(PathBuf::from(parse_string(args, i, "--output")?));
             }
             "--help" | "-h" => {
-                return Err("usage: sqlrite benchmark [--corpus N] [--queries N] [--warmup N] [--concurrency N] [--embedding-dim N] [--top-k N] [--candidate-limit N] [--batch-size N] [--alpha F] [--fusion weighted|rrf] [--rrf-k F] [--profile balanced|durable|fast_unsafe] [--durability balanced|durable|fast_unsafe] [--index-mode brute_force|lsh_ann|hnsw_baseline|disabled] [--output PATH]".to_string())
+                return Err("usage: sqlrite benchmark [--corpus N] [--queries N] [--warmup N] [--concurrency N] [--embedding-dim N] [--top-k N] [--candidate-limit N] [--query-profile balanced|latency|recall] [--batch-size N] [--alpha F] [--fusion weighted|rrf] [--rrf-k F] [--profile balanced|durable|fast_unsafe] [--durability balanced|durable|fast_unsafe] [--index-mode brute_force|lsh_ann|hnsw_baseline|disabled] [--output PATH]".to_string())
             }
             other => {
                 return Err(format!(
-                    "unknown argument `{other}`\nusage: sqlrite benchmark [--corpus N] [--queries N] [--warmup N] [--concurrency N] [--embedding-dim N] [--top-k N] [--candidate-limit N] [--batch-size N] [--alpha F] [--fusion weighted|rrf] [--rrf-k F] [--profile balanced|durable|fast_unsafe] [--durability balanced|durable|fast_unsafe] [--index-mode brute_force|lsh_ann|hnsw_baseline|disabled] [--output PATH]"
+                    "unknown argument `{other}`\nusage: sqlrite benchmark [--corpus N] [--queries N] [--warmup N] [--concurrency N] [--embedding-dim N] [--top-k N] [--candidate-limit N] [--query-profile balanced|latency|recall] [--batch-size N] [--alpha F] [--fusion weighted|rrf] [--rrf-k F] [--profile balanced|durable|fast_unsafe] [--durability balanced|durable|fast_unsafe] [--index-mode brute_force|lsh_ann|hnsw_baseline|disabled] [--output PATH]"
                 ))
             }
         }
@@ -2568,6 +2587,25 @@ fn parse_fusion_strategy(mode: &str, rank_constant: f32) -> Result<FusionStrateg
         other => Err(format!(
             "invalid --fusion `{other}`; expected weighted or rrf"
         )),
+    }
+}
+
+fn parse_query_profile(value: &str) -> Result<QueryProfile, String> {
+    match value {
+        "balanced" => Ok(QueryProfile::Balanced),
+        "latency" => Ok(QueryProfile::Latency),
+        "recall" => Ok(QueryProfile::Recall),
+        other => Err(format!(
+            "invalid query profile `{other}`; expected balanced|latency|recall"
+        )),
+    }
+}
+
+fn query_profile_name(value: QueryProfile) -> &'static str {
+    match value {
+        QueryProfile::Balanced => "balanced",
+        QueryProfile::Latency => "latency",
+        QueryProfile::Recall => "recall",
     }
 }
 
@@ -4419,7 +4457,7 @@ fn sql_value_to_json(value: ValueRef<'_>) -> Value {
 }
 
 fn usage() -> &'static str {
-    "sqlrite unified CLI\n\nusage:\n  sqlrite <command> [options]\n\ncommands:\n  init       Create/open a SQLRite database and apply runtime profile\n  sql        Execute SQL or enter interactive SQL shell\n  ingest     Ingest a single chunk directly from CLI flags\n  query      Run text/vector/hybrid retrieval query\n  quickstart Run init->query UX flow with telemetry/gates\n  serve      Start server (health/readiness/metrics + HA control plane + SQL API)\n  grpc       Start native gRPC QueryService endpoint\n  mcp        Start MCP stdio tool server or print MCP manifest\n  backup     Create, verify, snapshot, restore, PITR-restore, or prune backups\n  compact    Run ingestion-compaction maintenance workflow\n  benchmark  Run synthetic retrieval benchmark\n  doctor     Run environment and database health checks\n\nenv overrides:\n  SQLRITE_VECTOR_STORAGE=f32|f16|int8\n  SQLRITE_ANN_MIN_CANDIDATES=<int>\n  SQLRITE_ANN_MAX_HAMMING_RADIUS=<int>\n  SQLRITE_ANN_MAX_CANDIDATE_MULTIPLIER=<int>\n  SQLRITE_ENABLE_ANN_PERSISTENCE=true|false\n  SQLRITE_SQLITE_MMAP_SIZE=<bytes>\n  SQLRITE_SQLITE_CACHE_SIZE_KIB=<kib>\n\nexamples:\n  sqlrite init --db sqlrite_demo.db --seed-demo\n  sqlrite quickstart --db sqlrite_demo.db --runs 5 --max-median-ms 180000 --min-success-rate 0.95\n  sqlrite query --db sqlrite_demo.db --text \"agents local memory\" --top-k 3\n  sqlrite serve --db sqlrite_demo.db --secure-defaults --authz-policy .sqlrite/rbac-policy.json --audit-log .sqlrite/audit/server_audit.jsonl\n  sqlrite grpc --db sqlrite_demo.db --bind 127.0.0.1:50051\n  sqlrite mcp --db sqlrite_demo.db --print-manifest\n  sqlrite mcp --db sqlrite_demo.db --auth-token dev-token\n  sqlrite backup snapshot --source sqlrite_demo.db --backup-dir ./backups --note pre_release\n  sqlrite backup pitr-restore --backup-dir ./backups --target-unix-ms 1772000000000 --dest restored.db --verify\n  sqlrite compact --db sqlrite_demo.db --json\n  sqlrite doctor --db sqlrite_demo.db --json\n  sqlrite sql --db sqlrite_demo.db\n  sqlrite sql --db sqlrite_demo.db --execute \"SELECT id, doc_id FROM chunks LIMIT 3;\""
+    "sqlrite unified CLI\n\nusage:\n  sqlrite <command> [options]\n\ncommands:\n  init       Create/open a SQLRite database and apply runtime profile\n  sql        Execute SQL or enter interactive SQL shell\n  ingest     Ingest a single chunk directly from CLI flags\n  query      Run text/vector/hybrid retrieval query\n  quickstart Run init->query UX flow with telemetry/gates\n  serve      Start server (health/readiness/metrics + HA control plane + SQL API)\n  grpc       Start native gRPC QueryService endpoint\n  mcp        Start MCP stdio tool server or print MCP manifest\n  backup     Create, verify, snapshot, restore, PITR-restore, or prune backups\n  compact    Run ingestion-compaction maintenance workflow\n  benchmark  Run synthetic retrieval benchmark\n  doctor     Run environment and database health checks\n\nenv overrides:\n  SQLRITE_VECTOR_STORAGE=f32|f16|int8\n  SQLRITE_ANN_MIN_CANDIDATES=<int>\n  SQLRITE_ANN_MAX_HAMMING_RADIUS=<int>\n  SQLRITE_ANN_MAX_CANDIDATE_MULTIPLIER=<int>\n  SQLRITE_ENABLE_ANN_PERSISTENCE=true|false\n  SQLRITE_SQLITE_MMAP_SIZE=<bytes>\n  SQLRITE_SQLITE_CACHE_SIZE_KIB=<kib>\n\nexamples:\n  sqlrite init --db sqlrite_demo.db --seed-demo\n  sqlrite quickstart --db sqlrite_demo.db --runs 5 --max-median-ms 180000 --min-success-rate 0.95\n  sqlrite query --db sqlrite_demo.db --text \"agents local memory\" --query-profile latency --top-k 3\n  sqlrite serve --db sqlrite_demo.db --secure-defaults --authz-policy .sqlrite/rbac-policy.json --audit-log .sqlrite/audit/server_audit.jsonl\n  sqlrite grpc --db sqlrite_demo.db --bind 127.0.0.1:50051\n  sqlrite mcp --db sqlrite_demo.db --print-manifest\n  sqlrite mcp --db sqlrite_demo.db --auth-token dev-token\n  sqlrite backup snapshot --source sqlrite_demo.db --backup-dir ./backups --note pre_release\n  sqlrite backup pitr-restore --backup-dir ./backups --target-unix-ms 1772000000000 --dest restored.db --verify\n  sqlrite compact --db sqlrite_demo.db --json\n  sqlrite benchmark --query-profile recall --index-mode hnsw_baseline\n  sqlrite doctor --db sqlrite_demo.db --json\n  sqlrite sql --db sqlrite_demo.db\n  sqlrite sql --db sqlrite_demo.db --execute \"SELECT id, doc_id FROM chunks LIMIT 3;\""
 }
 
 #[cfg(test)]
@@ -4457,6 +4495,19 @@ mod tests {
         assert_eq!(parsed.max_median_ms, Some(180000.0));
         assert_eq!(parsed.fusion_mode, "rrf");
         assert_eq!(parsed.rrf_rank_constant, 42.0);
+        Ok(())
+    }
+
+    #[test]
+    fn query_args_parse_query_profile() -> Result<(), Box<dyn std::error::Error>> {
+        let args = vec![
+            "--text".to_string(),
+            "agent".to_string(),
+            "--query-profile".to_string(),
+            "latency".to_string(),
+        ];
+        let parsed = parse_query_args(&args).map_err(std::io::Error::other)?;
+        assert_eq!(parsed.query_profile, QueryProfile::Latency);
         Ok(())
     }
 
@@ -4589,6 +4640,14 @@ mod tests {
         assert_eq!(parsed.config.concurrency, 4);
         assert_eq!(parsed.config.corpus_size, 3000);
         assert_eq!(parsed.config.query_count, 200);
+        Ok(())
+    }
+
+    #[test]
+    fn benchmark_args_parse_query_profile() -> Result<(), Box<dyn std::error::Error>> {
+        let args = vec!["--query-profile".to_string(), "recall".to_string()];
+        let parsed = parse_benchmark_args(&args).map_err(std::io::Error::other)?;
+        assert_eq!(parsed.config.query_profile, QueryProfile::Recall);
         Ok(())
     }
 

@@ -1,5 +1,6 @@
 use crate::{
-    ChunkInput, FusionStrategy, Result, RuntimeConfig, SearchRequest, SqlRite, SqlRiteError,
+    ChunkInput, FusionStrategy, QueryProfile, Result, RuntimeConfig, SearchRequest, SqlRite,
+    SqlRiteError,
 };
 use serde::{Deserialize, Serialize};
 use std::cmp::min;
@@ -94,6 +95,7 @@ pub fn evaluate_dataset(dataset: EvalDataset, runtime_config: RuntimeConfig) -> 
             top_k,
             alpha: query.alpha,
             candidate_limit: query.candidate_limit.max(top_k),
+            query_profile: QueryProfile::Balanced,
             metadata_filters: query.metadata_filters.clone(),
             doc_id: query.doc_id.clone(),
             fusion_strategy: FusionStrategy::Weighted,

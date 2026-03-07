@@ -1,6 +1,6 @@
 use sqlrite::{
-    BenchmarkConfig, DurabilityProfile, FusionStrategy, RuntimeConfig, VectorIndexMode,
-    run_benchmark,
+    BenchmarkConfig, DurabilityProfile, FusionStrategy, QueryProfile, RuntimeConfig,
+    VectorIndexMode, run_benchmark,
 };
 use std::fs;
 use std::path::PathBuf;
@@ -30,6 +30,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         embedding_dim: args.embedding_dim,
         top_k: args.top_k,
         candidate_limit: args.candidate_limit,
+        query_profile: args.query_profile,
         alpha: args.alpha,
         fusion_strategy,
         batch_size: args.batch_size,
@@ -60,6 +61,7 @@ struct BenchCliArgs {
     embedding_dim: usize,
     top_k: usize,
     candidate_limit: usize,
+    query_profile: QueryProfile,
     alpha: f32,
     batch_size: usize,
     fusion_mode: String,
@@ -79,6 +81,7 @@ impl Default for BenchCliArgs {
             embedding_dim: 128,
             top_k: 10,
             candidate_limit: 500,
+            query_profile: QueryProfile::Balanced,
             alpha: 0.65,
             batch_size: 500,
             fusion_mode: "weighted".to_string(),
@@ -122,6 +125,11 @@ fn parse_args(args: Vec<String>) -> Result<BenchCliArgs, String> {
             "--candidate-limit" => {
                 i += 1;
                 cfg.candidate_limit = parse_usize(&args, i, "--candidate-limit")?;
+            }
+            "--query-profile" => {
+                i += 1;
+                cfg.query_profile =
+                    parse_query_profile(&parse_string(&args, i, "--query-profile")?)?;
             }
             "--batch-size" => {
                 i += 1;
@@ -199,18 +207,31 @@ fn parse_f32(args: &[String], index: usize, flag: &str) -> Result<f32, String> {
         .map_err(|_| format!("invalid number for {flag}: `{raw}`\n{}", usage()))
 }
 
+fn parse_query_profile(raw: &str) -> Result<QueryProfile, String> {
+    match raw {
+        "balanced" => Ok(QueryProfile::Balanced),
+        "latency" => Ok(QueryProfile::Latency),
+        "recall" => Ok(QueryProfile::Recall),
+        other => Err(format!(
+            "invalid --query-profile `{other}`; expected balanced|latency|recall\n{}",
+            usage()
+        )),
+    }
+}
+
 fn usage() -> String {
-    "usage: cargo run --bin sqlrite-bench -- [--corpus N] [--queries N] [--warmup N] [--concurrency N] [--embedding-dim N] [--top-k N] [--candidate-limit N] [--batch-size N] [--alpha F] [--fusion weighted|rrf] [--rrf-k F] [--index-mode brute_force|lsh_ann|hnsw_baseline|disabled] [--durability balanced|durable|fast_unsafe] [--output PATH]".to_string()
+    "usage: cargo run --bin sqlrite-bench -- [--corpus N] [--queries N] [--warmup N] [--concurrency N] [--embedding-dim N] [--top-k N] [--candidate-limit N] [--query-profile balanced|latency|recall] [--batch-size N] [--alpha F] [--fusion weighted|rrf] [--rrf-k F] [--index-mode brute_force|lsh_ann|hnsw_baseline|disabled] [--durability balanced|durable|fast_unsafe] [--output PATH]".to_string()
 }
 
 fn print_summary(report: &sqlrite::BenchmarkReport) {
     println!(
-        "SQLRite benchmark: corpus={}, queries={}, concurrency={}, index={}, fusion={}",
+        "SQLRite benchmark: corpus={}, queries={}, concurrency={}, index={}, fusion={}, query_profile={}",
         report.corpus_size,
         report.query_count,
         report.concurrency,
         report.vector_index_mode,
-        report.fusion_strategy
+        report.fusion_strategy,
+        report.query_profile
     );
     println!(
         "ingest_ms={:.2}, query_ms={:.2}, qps={:.2}, top1_hit_rate={:.4}",

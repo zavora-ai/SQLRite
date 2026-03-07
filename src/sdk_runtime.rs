@@ -1,10 +1,12 @@
 use crate::{
-    DurabilityProfile, SearchRequest, SearchResult, SqlRite, execute_sql_statement_json,
-    prepare_sql_connection,
+    DurabilityProfile, QueryProfile as SearchQueryProfile, SearchRequest, SearchResult, SqlRite,
+    execute_sql_statement_json, prepare_sql_connection,
 };
 use rusqlite::Connection;
 use serde_json::Value;
-use sqlrite_sdk_core::{QueryEnvelope, QueryRequest, SqlRequest};
+use sqlrite_sdk_core::{
+    QueryEnvelope, QueryProfile as RequestQueryProfile, QueryRequest, SqlRequest,
+};
 use std::path::Path;
 use thiserror::Error;
 
@@ -36,6 +38,14 @@ pub fn execute_query(
         top_k: input.top_k_or_default(),
         alpha: input.alpha_or_default(),
         candidate_limit: input.candidate_limit_or_default(),
+        query_profile: match input
+            .query_profile_or_default()
+            .map_err(|error| SdkRuntimeError::Validation(error.to_string()))?
+        {
+            RequestQueryProfile::Latency => SearchQueryProfile::Latency,
+            RequestQueryProfile::Balanced => SearchQueryProfile::Balanced,
+            RequestQueryProfile::Recall => SearchQueryProfile::Recall,
+        },
         metadata_filters: input.normalized_metadata_filters(),
         doc_id: input.normalized_doc_id(),
         ..SearchRequest::default()
@@ -114,6 +124,22 @@ mod tests {
             DurabilityProfile::Balanced,
             SqlRequest {
                 statement: " ".to_string(),
+            },
+        )
+        .expect_err("expected validation error");
+
+        assert!(error.is_validation());
+    }
+
+    #[test]
+    fn execute_query_rejects_unknown_query_profile() {
+        let db = SqlRite::open_in_memory_with_config(RuntimeConfig::default()).expect("open db");
+        let error = execute_query(
+            &db,
+            QueryRequest {
+                query_text: Some("agent".to_string()),
+                query_profile: Some("fastest".to_string()),
+                ..QueryRequest::default()
             },
         )
         .expect_err("expected validation error");

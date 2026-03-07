@@ -29,6 +29,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             top_k,
             alpha,
             candidate_limit,
+            query_profile,
             doc_id,
         } => {
             let response = client
@@ -38,6 +39,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     top_k,
                     alpha,
                     candidate_limit,
+                    query_profile,
                     metadata_filters: Default::default(),
                     doc_id,
                 }))
@@ -73,6 +75,7 @@ enum Command {
         top_k: Option<u32>,
         alpha: Option<f32>,
         candidate_limit: Option<u32>,
+        query_profile: Option<String>,
         doc_id: Option<String>,
     },
     Sql {
@@ -107,6 +110,7 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
             let mut top_k = None;
             let mut alpha = None;
             let mut candidate_limit = None;
+            let mut query_profile = None;
             let mut doc_id = None;
 
             while i < args.len() {
@@ -127,6 +131,10 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
                         i += 1;
                         candidate_limit = Some(parse_u32(args, i, "--candidate-limit")?);
                     }
+                    "--query-profile" => {
+                        i += 1;
+                        query_profile = Some(parse_string(args, i, "--query-profile")?);
+                    }
                     "--doc-id" => {
                         i += 1;
                         doc_id = Some(parse_string(args, i, "--doc-id")?);
@@ -142,6 +150,7 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
                 top_k,
                 alpha,
                 candidate_limit,
+                query_profile,
                 doc_id,
             }
         }
@@ -188,7 +197,7 @@ fn parse_f32(args: &[String], i: usize, flag: &str) -> Result<f32, String> {
 }
 
 fn usage() -> &'static str {
-    "usage: sqlrite-grpc-client [--addr HOST:PORT] <health|query|sql> [options]\n\ncommands:\n  health\n  query [--text QUERY] [--top-k N] [--alpha F] [--candidate-limit N] [--doc-id ID]\n  sql --statement SQL"
+    "usage: sqlrite-grpc-client [--addr HOST:PORT] <health|query|sql> [options]\n\ncommands:\n  health\n  query [--text QUERY] [--top-k N] [--alpha F] [--candidate-limit N] [--query-profile balanced|latency|recall] [--doc-id ID]\n  sql --statement SQL"
 }
 
 #[cfg(test)]
@@ -217,9 +226,15 @@ mod tests {
 
         assert_eq!(parsed.addr, "127.0.0.1:50071");
         match parsed.command {
-            Command::Query { text, top_k, .. } => {
+            Command::Query {
+                text,
+                top_k,
+                query_profile,
+                ..
+            } => {
                 assert_eq!(text.as_deref(), Some("agent"));
                 assert_eq!(top_k, Some(3));
+                assert_eq!(query_profile, None);
             }
             _ => panic!("expected query command"),
         }

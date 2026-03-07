@@ -354,6 +354,32 @@ The format is based on Keep a Changelog.
   - `project_plan/reports/s28_audit_export.jsonl`
   - `project_plan/reports/s28_audit_export_server.jsonl`
   - `project_plan/reports/s28_benchmark_security_audit.json`
+- S29 query profile hints baseline:
+  - core query profile model and deterministic candidate-limit resolution in `src/lib.rs`
+  - transport support for `query_profile` across:
+    - `sqlrite query`
+    - `sqlrite benchmark`
+    - `/v1/query`
+    - `/v1/rerank-hook`
+    - gRPC `QueryRequest`
+    - Rust/Python/TypeScript SDK request types
+  - benchmark reporting now includes:
+    - `query_profile`
+    - `effective_candidate_limit`
+  - query profile runbook and RFC:
+    - `docs/runbooks/query_profile_hints.md`
+    - `docs/rfcs/0003-query-profile-hints.md`
+  - CI workflow:
+    - `.github/workflows/query-profile-hints.yml`
+  - validation harness:
+    - `scripts/run-s29-query-profile-hints.sh`
+- Sprint 29 evidence artifacts:
+  - `project_plan/reports/S29.md`
+  - `project_plan/reports/s29_quality_gates.log`
+  - `project_plan/reports/s29_query_profile_hints.log`
+  - `project_plan/reports/s29_query_profile_report.json`
+  - `project_plan/reports/s29_benchmark_latency_profile.json`
+  - `project_plan/reports/s29_benchmark_recall_profile.json`
 
 ### Changed
 

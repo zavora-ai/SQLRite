@@ -26,17 +26,23 @@ This document records the v1 compliance posture that is directly supported by sh
 - security summary endpoint advertises active secure defaults and RBAC role catalog
 - exported audit artifacts can be retained independently from online server state
 
+5. Deterministic query governance
+- query callers can select `balanced`, `latency`, or `recall` profiles instead of ad hoc fan-out tuning
+- the profile mapping is documented and testable across CLI, HTTP, gRPC, and SDK surfaces
+
 ## Evidence Artifacts
 
 1. `/Users/jameskaranja/Developer/projects/SQLRight/project_plan/reports/s27_security_audit.jsonl`
 2. `/Users/jameskaranja/Developer/projects/SQLRight/project_plan/reports/s28_audit_export.jsonl`
 3. `/Users/jameskaranja/Developer/projects/SQLRight/project_plan/reports/s28_security_audit_report.json`
+4. `/Users/jameskaranja/Developer/projects/SQLRight/project_plan/reports/s29_query_profile_report.json`
 
 ## Current Gaps
 
 1. No formal external KMS integration yet.
 2. No signed audit artifact chain yet.
 3. No automated retention/immutability policy enforcement yet.
+4. Query profiles do not yet map from general SQL comments outside the published RFC/design target.
 
 ## Release Guidance
 

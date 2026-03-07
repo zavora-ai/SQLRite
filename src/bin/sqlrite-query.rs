@@ -1,4 +1,4 @@
-use sqlrite::{FusionStrategy, SearchRequest, SqlRite};
+use sqlrite::{FusionStrategy, QueryProfile, SearchRequest, SqlRite};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -27,6 +27,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         top_k: args.top_k,
         alpha: args.alpha,
         candidate_limit: args.candidate_limit,
+        query_profile: args.query_profile,
         metadata_filters: args.metadata_filters,
         doc_id: args.doc_id,
         fusion_strategy,
@@ -58,6 +59,7 @@ struct QueryCliArgs {
     top_k: usize,
     alpha: f32,
     candidate_limit: usize,
+    query_profile: QueryProfile,
     doc_id: Option<String>,
     fusion_mode: String,
     rrf_rank_constant: f32,
@@ -73,6 +75,7 @@ impl Default for QueryCliArgs {
             top_k: 5,
             alpha: 0.65,
             candidate_limit: 500,
+            query_profile: QueryProfile::Balanced,
             doc_id: None,
             fusion_mode: "weighted".to_string(),
             rrf_rank_constant: 60.0,
@@ -110,6 +113,11 @@ fn parse_args(args: Vec<String>) -> Result<QueryCliArgs, String> {
             "--candidate-limit" => {
                 i += 1;
                 cfg.candidate_limit = parse_usize(&args, i, "--candidate-limit")?;
+            }
+            "--query-profile" => {
+                i += 1;
+                cfg.query_profile =
+                    parse_query_profile(&parse_string(&args, i, "--query-profile")?)?;
             }
             "--doc-id" => {
                 i += 1;
@@ -186,6 +194,18 @@ fn parse_embedding_csv(raw: &str) -> Result<Vec<f32>, String> {
     Ok(values)
 }
 
+fn parse_query_profile(raw: &str) -> Result<QueryProfile, String> {
+    match raw {
+        "balanced" => Ok(QueryProfile::Balanced),
+        "latency" => Ok(QueryProfile::Latency),
+        "recall" => Ok(QueryProfile::Recall),
+        other => Err(format!(
+            "invalid --query-profile `{other}`; expected balanced|latency|recall\n{}",
+            usage()
+        )),
+    }
+}
+
 fn usage() -> String {
-    "usage: cargo run --bin sqlrite-query -- [--db PATH] [--text QUERY] [--vector v1,v2,...] [--top-k N] [--alpha F] [--candidate-limit N] [--doc-id ID] [--filter key=value]... [--fusion weighted|rrf] [--rrf-k F]".to_string()
+    "usage: cargo run --bin sqlrite-query -- [--db PATH] [--text QUERY] [--vector v1,v2,...] [--top-k N] [--alpha F] [--candidate-limit N] [--query-profile balanced|latency|recall] [--doc-id ID] [--filter key=value]... [--fusion weighted|rrf] [--rrf-k F]".to_string()
 }

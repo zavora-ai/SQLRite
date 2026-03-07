@@ -70,6 +70,10 @@ use std::time::{Duration, Instant};
 
 const LATEST_SCHEMA_VERSION: i64 = 3;
 const HYBRID_FTS_SCORE_LOOKUP_SKIP_CANDIDATE_LIMIT: usize = 512;
+const QUERY_PROFILE_LATENCY_MIN_CANDIDATE_LIMIT: usize = 32;
+const QUERY_PROFILE_LATENCY_TOP_K_MULTIPLIER: usize = 8;
+const QUERY_PROFILE_RECALL_MIN_CANDIDATE_LIMIT: usize = 200;
+const QUERY_PROFILE_RECALL_TOP_K_MULTIPLIER: usize = 32;
 const DOC_UPSERT_SQL: &str = "
     INSERT INTO documents (id, source, metadata) VALUES (?1, ?2, '{}')
     ON CONFLICT(id) DO UPDATE SET source = COALESCE(excluded.source, documents.source)
@@ -215,6 +219,7 @@ pub struct SearchRequest {
     pub metadata_filters: HashMap<String, String>,
     pub doc_id: Option<String>,
     pub fusion_strategy: FusionStrategy,
+    pub query_profile: QueryProfile,
 }
 
 impl Default for SearchRequest {
@@ -228,6 +233,7 @@ impl Default for SearchRequest {
             metadata_filters: HashMap::new(),
             doc_id: None,
             fusion_strategy: FusionStrategy::default(),
+            query_profile: QueryProfile::default(),
         }
     }
 }
@@ -239,6 +245,15 @@ pub enum FusionStrategy {
     ReciprocalRankFusion {
         rank_constant: f32,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum QueryProfile {
+    Latency,
+    #[default]
+    Balanced,
+    Recall,
 }
 
 impl SearchRequest {
@@ -269,6 +284,28 @@ impl SearchRequest {
 
     pub fn builder() -> SearchRequestBuilder {
         SearchRequestBuilder::default()
+    }
+
+    pub fn resolve_query_profile(&self) -> Self {
+        let mut resolved = self.clone();
+        match resolved.query_profile {
+            QueryProfile::Latency => {
+                let cap = resolved
+                    .top_k
+                    .saturating_mul(QUERY_PROFILE_LATENCY_TOP_K_MULTIPLIER)
+                    .max(QUERY_PROFILE_LATENCY_MIN_CANDIDATE_LIMIT);
+                resolved.candidate_limit = resolved.candidate_limit.min(cap).max(resolved.top_k);
+            }
+            QueryProfile::Balanced => {}
+            QueryProfile::Recall => {
+                let floor = resolved
+                    .top_k
+                    .saturating_mul(QUERY_PROFILE_RECALL_TOP_K_MULTIPLIER)
+                    .max(QUERY_PROFILE_RECALL_MIN_CANDIDATE_LIMIT);
+                resolved.candidate_limit = resolved.candidate_limit.max(floor);
+            }
+        }
+        resolved
     }
 
     pub fn validate(&self) -> Result<()> {
@@ -343,6 +380,11 @@ impl SearchRequestBuilder {
 
     pub fn fusion_strategy(mut self, value: FusionStrategy) -> Self {
         self.inner.fusion_strategy = value;
+        self
+    }
+
+    pub fn query_profile(mut self, value: QueryProfile) -> Self {
+        self.inner.query_profile = value;
         self
     }
 
@@ -808,6 +850,7 @@ impl SqlRite {
     }
 
     pub fn search(&self, request: SearchRequest) -> Result<Vec<SearchResult>> {
+        let request = request.resolve_query_profile();
         request.validate()?;
 
         let query_embedding = request.query_embedding.as_ref();
@@ -842,7 +885,11 @@ impl SqlRite {
                 !use_vector || vector_candidate_ids.len() < request.candidate_limit;
             if need_text_candidates {
                 let text_limit = if use_vector {
-                    request.candidate_limit.saturating_mul(2)
+                    match request.query_profile {
+                        QueryProfile::Latency => request.candidate_limit,
+                        QueryProfile::Balanced => request.candidate_limit.saturating_mul(2),
+                        QueryProfile::Recall => request.candidate_limit.saturating_mul(4),
+                    }
                 } else {
                     request.candidate_limit
                 };
@@ -2242,6 +2289,34 @@ mod tests {
         assert_eq!(req.top_k, 3);
         assert_eq!(req.query_text.as_deref(), Some("hello"));
         assert!(req.query_embedding.is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn query_profile_latency_clamps_candidate_limit() -> Result<()> {
+        let request = SearchRequest::builder()
+            .query_text("agents")
+            .top_k(4)
+            .candidate_limit(500)
+            .query_profile(QueryProfile::Latency)
+            .build()?;
+
+        let resolved = request.resolve_query_profile();
+        assert_eq!(resolved.candidate_limit, 32);
+        Ok(())
+    }
+
+    #[test]
+    fn query_profile_recall_expands_candidate_limit() -> Result<()> {
+        let request = SearchRequest::builder()
+            .query_text("agents")
+            .top_k(5)
+            .candidate_limit(20)
+            .query_profile(QueryProfile::Recall)
+            .build()?;
+
+        let resolved = request.resolve_query_profile();
+        assert_eq!(resolved.candidate_limit, 200);
         Ok(())
     }
 

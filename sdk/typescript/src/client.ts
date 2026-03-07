@@ -4,6 +4,7 @@ export interface QueryRequest {
   top_k?: number;
   alpha?: number;
   candidate_limit?: number;
+  query_profile?: "balanced" | "latency" | "recall";
   metadata_filters?: Record<string, string>;
   doc_id?: string;
 }

@@ -131,6 +131,7 @@ fn query_request_from_grpc(input: QueryRequest) -> CoreQueryRequest {
         top_k: input.top_k.map(|value| value as usize),
         alpha: input.alpha,
         candidate_limit: input.candidate_limit.map(|value| value as usize),
+        query_profile: input.query_profile,
         metadata_filters: if input.metadata_filters.is_empty() {
             None
         } else {
@@ -240,6 +241,7 @@ mod tests {
                 top_k: Some(1),
                 alpha: None,
                 candidate_limit: Some(10),
+                query_profile: None,
                 metadata_filters: Default::default(),
                 doc_id: None,
             }))
@@ -282,6 +284,7 @@ mod tests {
                 top_k: Some(1),
                 alpha: None,
                 candidate_limit: Some(1),
+                query_profile: None,
                 metadata_filters: Default::default(),
                 doc_id: None,
             }))

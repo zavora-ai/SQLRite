@@ -1,6 +1,6 @@
 use sqlrite::{
-    BenchmarkConfig, BenchmarkReport, DurabilityProfile, FusionStrategy, RuntimeConfig,
-    VectorIndexMode, run_benchmark,
+    BenchmarkConfig, BenchmarkReport, DurabilityProfile, FusionStrategy, QueryProfile,
+    RuntimeConfig, VectorIndexMode, run_benchmark,
 };
 use std::fs;
 use std::path::PathBuf;
@@ -198,6 +198,7 @@ fn profile_to_config(profile: &str) -> Result<BenchmarkConfig, String> {
             embedding_dim: 64,
             top_k: 10,
             candidate_limit: 300,
+            query_profile: QueryProfile::Balanced,
             alpha: 0.65,
             fusion_strategy: FusionStrategy::Weighted,
             batch_size: 256,
@@ -210,6 +211,7 @@ fn profile_to_config(profile: &str) -> Result<BenchmarkConfig, String> {
             embedding_dim: 128,
             top_k: 10,
             candidate_limit: 500,
+            query_profile: QueryProfile::Balanced,
             alpha: 0.65,
             fusion_strategy: FusionStrategy::Weighted,
             batch_size: 500,
@@ -222,6 +224,7 @@ fn profile_to_config(profile: &str) -> Result<BenchmarkConfig, String> {
             embedding_dim: 256,
             top_k: 10,
             candidate_limit: 1000,
+            query_profile: QueryProfile::Balanced,
             alpha: 0.65,
             fusion_strategy: FusionStrategy::Weighted,
             batch_size: 1000,
@@ -234,6 +237,7 @@ fn profile_to_config(profile: &str) -> Result<BenchmarkConfig, String> {
             embedding_dim: 384,
             top_k: 10,
             candidate_limit: 1800,
+            query_profile: QueryProfile::Balanced,
             alpha: 0.65,
             fusion_strategy: FusionStrategy::Weighted,
             batch_size: 2000,
@@ -246,6 +250,7 @@ fn profile_to_config(profile: &str) -> Result<BenchmarkConfig, String> {
             embedding_dim: 384,
             top_k: 10,
             candidate_limit: 2400,
+            query_profile: QueryProfile::Balanced,
             alpha: 0.65,
             fusion_strategy: FusionStrategy::Weighted,
             batch_size: 4000,

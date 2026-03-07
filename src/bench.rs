@@ -1,5 +1,6 @@
 use crate::{
-    ChunkInput, FusionStrategy, Result, RuntimeConfig, SearchRequest, SqlRite, SqlRiteError,
+    ChunkInput, FusionStrategy, QueryProfile, Result, RuntimeConfig, SearchRequest, SqlRite,
+    SqlRiteError,
 };
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -29,6 +30,7 @@ pub struct BenchmarkConfig {
     pub embedding_dim: usize,
     pub top_k: usize,
     pub candidate_limit: usize,
+    pub query_profile: QueryProfile,
     pub alpha: f32,
     pub fusion_strategy: FusionStrategy,
     pub batch_size: usize,
@@ -44,6 +46,7 @@ impl Default for BenchmarkConfig {
             embedding_dim: 128,
             top_k: 10,
             candidate_limit: 500,
+            query_profile: QueryProfile::Balanced,
             alpha: 0.65,
             fusion_strategy: FusionStrategy::Weighted,
             batch_size: 500,
@@ -70,6 +73,8 @@ pub struct BenchmarkReport {
     pub embedding_dim: usize,
     pub top_k: usize,
     pub candidate_limit: usize,
+    pub effective_candidate_limit: usize,
+    pub query_profile: String,
     pub alpha: f32,
     pub fusion_strategy: String,
     pub vector_index_mode: String,
@@ -142,6 +147,16 @@ pub fn run_benchmark(
         let total_duration = total_start.elapsed();
 
         let latency = summarize_latencies(&latencies_ms);
+        let effective_candidate_limit = synthetic_query(
+            &config,
+            config
+                .query_count
+                .saturating_add(config.warmup_queries)
+                .saturating_add(1),
+        )
+        .0
+        .resolve_query_profile()
+        .candidate_limit;
         let qps = if query_duration.as_secs_f64() > 0.0 {
             config.query_count as f64 / query_duration.as_secs_f64()
         } else {
@@ -177,6 +192,12 @@ pub fn run_benchmark(
             embedding_dim: config.embedding_dim,
             top_k: config.top_k,
             candidate_limit: config.candidate_limit,
+            effective_candidate_limit,
+            query_profile: match config.query_profile {
+                QueryProfile::Balanced => "balanced".to_string(),
+                QueryProfile::Latency => "latency".to_string(),
+                QueryProfile::Recall => "recall".to_string(),
+            },
             alpha: config.alpha,
             fusion_strategy: fusion_label(config.fusion_strategy),
             vector_index_mode: vector_index_mode_label(runtime_config.vector_index_mode),
@@ -410,6 +431,7 @@ fn synthetic_query(config: &BenchmarkConfig, query_index: usize) -> (SearchReque
             top_k: config.top_k,
             alpha: config.alpha,
             candidate_limit: config.candidate_limit.min(config.corpus_size),
+            query_profile: config.query_profile,
             metadata_filters: HashMap::new(),
             doc_id: None,
             fusion_strategy: config.fusion_strategy,
@@ -530,6 +552,7 @@ mod tests {
                 embedding_dim: 32,
                 top_k: 5,
                 candidate_limit: 50,
+                query_profile: QueryProfile::Balanced,
                 alpha: 0.6,
                 fusion_strategy: FusionStrategy::Weighted,
                 batch_size: 64,

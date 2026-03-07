@@ -48,6 +48,7 @@ class SqlRiteClient:
         top_k: int | None = None,
         alpha: float | None = None,
         candidate_limit: int | None = None,
+        query_profile: str | None = None,
         metadata_filters: dict[str, str] | None = None,
         doc_id: str | None = None,
     ) -> dict[str, Any]:
@@ -62,6 +63,8 @@ class SqlRiteClient:
             payload["alpha"] = alpha
         if candidate_limit is not None:
             payload["candidate_limit"] = candidate_limit
+        if query_profile is not None:
+            payload["query_profile"] = query_profile
         if metadata_filters is not None:
             payload["metadata_filters"] = metadata_filters
         if doc_id is not None:

@@ -1,0 +1,47 @@
+[build]
+[init-db]
+[cli-latency]
+query_profile=latency resolved_candidate_limit=40
+results=3
+1. demo-1 | doc=doc-a | hybrid=1.000 | vector=0.000 | text=1.000
+   Rust and SQLite are ideal for local-first AI agents.
+2. demo-2 | doc=doc-b | hybrid=0.000 | vector=0.000 | text=0.000
+   Hybrid retrieval mixes vector search with keyword signals.
+3. demo-3 | doc=doc-c | hybrid=0.000 | vector=0.000 | text=0.000
+   Batching and metadata filters keep RAG pipelines deterministic.
+[cli-recall]
+query_profile=recall resolved_candidate_limit=1000
+results=3
+1. demo-1 | doc=doc-a | hybrid=1.000 | vector=0.000 | text=1.000
+   Rust and SQLite are ideal for local-first AI agents.
+2. demo-2 | doc=doc-b | hybrid=0.000 | vector=0.000 | text=0.000
+   Hybrid retrieval mixes vector search with keyword signals.
+3. demo-3 | doc=doc-c | hybrid=0.000 | vector=0.000 | text=0.000
+   Batching and metadata filters keep RAG pipelines deterministic.
+[start-http-server] bind=127.0.0.1:8349
+[start-grpc-server] bind=127.0.0.1:50083
+[http-query-latency]
+[http-query-recall]
+[grpc-query-recall]
+[benchmark-latency]
+SQLRite benchmark: corpus=5000, queries=200, concurrency=1, index=hnsw_baseline, fusion=weighted, query_profile=latency
+runtime: storage=f32, mmap_size_bytes=268435456, cache_size_kib=65536
+ingest_ms=314.91, query_ms=347.33, qps=575.82, top1_hit_rate=1.0000
+ingest_chunks_per_sec=15877.54, dataset_payload_bytes=579515, index_estimated_bytes=1244024, approx_working_set_bytes=1823539
+latency_ms: avg=1.7338, p50=1.7402, p95=1.8608, p99=1.8839
+[benchmark-recall]
+SQLRite benchmark: corpus=5000, queries=200, concurrency=1, index=hnsw_baseline, fusion=weighted, query_profile=recall
+runtime: storage=f32, mmap_size_bytes=268435456, cache_size_kib=65536
+ingest_ms=305.92, query_ms=2740.39, qps=72.98, top1_hit_rate=1.0000
+ingest_chunks_per_sec=16343.97, dataset_payload_bytes=579515, index_estimated_bytes=1244024, approx_working_set_bytes=1823539
+latency_ms: avg=13.6964, p50=13.7337, p95=15.1563, p99=19.3790
+[assertions]
+cli_latency_ok=True
+cli_recall_ok=True
+http_latency_ok=True
+http_recall_ok=True
+grpc_recall_ok=True
+latency_effective_candidate_limit=40
+recall_effective_candidate_limit=1000
+pass=True
+[s29-query-profile-hints-complete] report=project_plan/reports/s29_query_profile_report.json log=project_plan/reports/s29_query_profile_hints.log

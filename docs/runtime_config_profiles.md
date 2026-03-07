@@ -285,3 +285,19 @@ S28 audit export and key-rotation additions:
 - `docs/security/threat_model.md`
 6. Security hardening harness:
 - `scripts/run-s28-security-audit-hardening.sh`
+
+S29 query profile hint additions:
+
+1. Query CLI hint:
+- `sqlrite query --query-profile balanced|latency|recall`
+2. Benchmark CLI hint:
+- `sqlrite benchmark --query-profile balanced|latency|recall`
+3. HTTP and gRPC request field:
+- `query_profile`
+4. Rerank hook request field:
+- `query_profile`
+5. Documentation:
+- `docs/runbooks/query_profile_hints.md`
+- `docs/rfcs/0003-query-profile-hints.md`
+6. Validation harness:
+- `scripts/run-s29-query-profile-hints.sh`

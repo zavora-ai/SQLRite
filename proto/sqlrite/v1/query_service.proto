@@ -31,6 +31,7 @@ message QueryRequest {
   optional uint32 candidate_limit = 5;
   map<string, string> metadata_filters = 6;
   optional string doc_id = 7;
+  optional string query_profile = 8;
 }
 
 message QueryResponse {

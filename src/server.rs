@@ -1,8 +1,8 @@
 use crate::security::{AccessPolicy, AuditLogger};
 use crate::{
     AccessContext, AccessOperation, AuditEvent, AuditExportFormat, AuditQuery, DurabilityProfile,
-    FailoverMode, HaRuntimeProfile, HaRuntimeState, JsonlAuditLogger, RbacPolicy, ReplicationLog,
-    ReplicationLogEntry, Result, RuntimeConfig, ServerRole, SqlRite, SqlRiteError,
+    FailoverMode, HaRuntimeProfile, HaRuntimeState, JsonlAuditLogger, QueryProfile, RbacPolicy,
+    ReplicationLog, ReplicationLogEntry, Result, RuntimeConfig, ServerRole, SqlRite, SqlRiteError,
     build_health_report, create_backup_snapshot, execute_sdk_query, execute_sdk_sql,
     export_audit_events, list_backup_snapshots, prune_backup_snapshots,
     restore_backup_file_verified, select_backup_snapshot_for_time,
@@ -557,6 +557,7 @@ struct RerankHookRequest {
     candidate_count: Option<usize>,
     alpha: Option<f32>,
     candidate_limit: Option<usize>,
+    query_profile: Option<String>,
     metadata_filters: Option<HashMap<String, String>>,
     doc_id: Option<String>,
 }
@@ -2204,6 +2205,8 @@ fn execute_rerank_hook_api(
             .candidate_limit
             .unwrap_or(sqlrite_sdk_core::DEFAULT_CANDIDATE_LIMIT)
             .max(candidate_count),
+        query_profile: parse_query_profile_api(input.query_profile.as_deref())
+            .map_err(SqlRiteError::InvalidBenchmarkConfig)?,
         metadata_filters,
         doc_id: input.doc_id,
         ..crate::SearchRequest::default()
@@ -2224,6 +2227,18 @@ fn execute_rerank_hook_api(
         "row_count": rows.len(),
         "rows": rows,
     }))
+}
+
+fn parse_query_profile_api(value: Option<&str>) -> std::result::Result<QueryProfile, String> {
+    match value.map(str::trim).filter(|value| !value.is_empty()) {
+        None => Ok(QueryProfile::Balanced),
+        Some("balanced") => Ok(QueryProfile::Balanced),
+        Some("latency") => Ok(QueryProfile::Latency),
+        Some("recall") => Ok(QueryProfile::Recall),
+        Some(other) => Err(format!(
+            "invalid query_profile `{other}`; expected balanced|latency|recall"
+        )),
+    }
 }
 
 fn openapi_query_document(sql_enabled: bool) -> Value {
@@ -2370,6 +2385,10 @@ fn openapi_query_document(sql_enabled: bool) -> Value {
                         "top_k": {"type": "integer", "minimum": 1},
                         "alpha": {"type": "number", "minimum": 0.0, "maximum": 1.0},
                         "candidate_limit": {"type": "integer", "minimum": 1},
+                        "query_profile": {
+                            "type": "string",
+                            "enum": ["balanced", "latency", "recall"]
+                        },
                         "metadata_filters": {
                             "type": "object",
                             "additionalProperties": {"type": "string"}
@@ -2388,6 +2407,10 @@ fn openapi_query_document(sql_enabled: bool) -> Value {
                         "candidate_count": {"type": "integer", "minimum": 1},
                         "alpha": {"type": "number", "minimum": 0.0, "maximum": 1.0},
                         "candidate_limit": {"type": "integer", "minimum": 1},
+                        "query_profile": {
+                            "type": "string",
+                            "enum": ["balanced", "latency", "recall"]
+                        },
                         "metadata_filters": {
                             "type": "object",
                             "additionalProperties": {"type": "string"}

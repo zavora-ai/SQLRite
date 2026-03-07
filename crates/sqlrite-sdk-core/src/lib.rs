@@ -6,6 +6,15 @@ pub const DEFAULT_TOP_K: usize = 5;
 pub const DEFAULT_ALPHA: f32 = 0.65;
 pub const DEFAULT_CANDIDATE_LIMIT: usize = 1000;
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum QueryProfile {
+    Latency,
+    #[default]
+    Balanced,
+    Recall,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct SqlRequest {
     pub statement: String,
@@ -27,6 +36,7 @@ pub struct QueryRequest {
     pub top_k: Option<usize>,
     pub alpha: Option<f32>,
     pub candidate_limit: Option<usize>,
+    pub query_profile: Option<String>,
     pub metadata_filters: Option<HashMap<String, String>>,
     pub doc_id: Option<String>,
 }
@@ -42,6 +52,21 @@ impl QueryRequest {
 
     pub fn candidate_limit_or_default(&self) -> usize {
         self.candidate_limit.unwrap_or(DEFAULT_CANDIDATE_LIMIT)
+    }
+
+    pub fn query_profile_or_default(&self) -> Result<QueryProfile, ValidationError> {
+        match self
+            .query_profile
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            None => Ok(QueryProfile::Balanced),
+            Some("balanced") => Ok(QueryProfile::Balanced),
+            Some("latency") => Ok(QueryProfile::Latency),
+            Some("recall") => Ok(QueryProfile::Recall),
+            Some(other) => Err(ValidationError::InvalidQueryProfile(other.to_string())),
+        }
     }
 
     pub fn normalized_query_text(&self) -> Option<String> {
@@ -108,6 +133,8 @@ impl QueryRequest {
             return Err(ValidationError::InvalidAlpha(alpha));
         }
 
+        self.query_profile_or_default()?;
+
         Ok(())
     }
 }
@@ -146,6 +173,8 @@ pub enum ValidationError {
     },
     #[error("alpha must be between 0.0 and 1.0 (received {0})")]
     InvalidAlpha(f32),
+    #[error("query_profile must be one of balanced|latency|recall (received {0})")]
+    InvalidQueryProfile(String),
 }
 
 #[cfg(test)]
@@ -188,6 +217,19 @@ mod tests {
         );
         assert!((request.alpha_or_default() - DEFAULT_ALPHA).abs() < f32::EPSILON);
         assert!(request.validate().is_ok());
+    }
+
+    #[test]
+    fn query_request_rejects_unknown_query_profile() {
+        let request = QueryRequest {
+            query_text: Some("agent".to_string()),
+            query_profile: Some("speed".to_string()),
+            ..QueryRequest::default()
+        };
+        assert_eq!(
+            request.validate(),
+            Err(ValidationError::InvalidQueryProfile("speed".to_string()))
+        );
     }
 
     #[test]

@@ -103,7 +103,7 @@ Then run directly:
 sqlrite --help
 sqlrite init --db sqlrite_demo.db --seed-demo
 sqlrite quickstart --db sqlrite_quickstart.db --runs 5 --max-median-ms 180000 --min-success-rate 0.95
-sqlrite query --db sqlrite_demo.db --text "local" --top-k 3
+sqlrite query --db sqlrite_demo.db --text "local" --query-profile latency --top-k 3
 ```
 
 If `sqlrite` is not found, add this to your shell config:
@@ -1346,6 +1346,46 @@ Artifacts produced by S26 harnesses:
 - `project_plan/reports/s26_api_compatibility_report.json`
 - `project_plan/reports/s26_benchmark_api_freeze.json`
 
+## Query Profile Hints
+
+Use query profiles when you want deterministic latency/recall tradeoffs without manually tuning candidate fan-out:
+
+```bash
+sqlrite query \
+  --db sqlrite_demo.db \
+  --text "agents local memory" \
+  --top-k 5 \
+  --candidate-limit 1000 \
+  --query-profile latency
+```
+
+Server query API:
+
+```bash
+curl -fsS -X POST \
+  -H "content-type: application/json" \
+  -d '{"query_text":"agents local memory","top_k":5,"candidate_limit":1000,"query_profile":"recall"}' \
+  http://127.0.0.1:8099/v1/query | jq
+```
+
+gRPC client:
+
+```bash
+sqlrite-grpc-client \
+  --addr 127.0.0.1:50051 \
+  query \
+  --text "agents local memory" \
+  --top-k 5 \
+  --candidate-limit 1000 \
+  --query-profile recall
+```
+
+Profile mapping:
+
+- `balanced`: default behavior
+- `latency`: caps resolved candidate fan-out at `max(top_k * 8, 32)`
+- `recall`: raises resolved candidate fan-out to at least `max(top_k * 32, 200)`
+
 ## Security RBAC and Secure Defaults (Sprint 27)
 
 RBAC/security smoke harness:
@@ -1386,6 +1426,28 @@ Artifacts produced by S28 harnesses:
 - `project_plan/reports/s28_audit_export.jsonl`
 - `project_plan/reports/s28_audit_export_server.jsonl`
 - `project_plan/reports/s28_benchmark_security_audit.json`
+
+## Query Profile Hints (Sprint 29)
+
+Query profile hint harness:
+
+```bash
+bash scripts/run-s29-query-profile-hints.sh
+```
+
+Runbooks and docs:
+
+- `docs/runbooks/query_profile_hints.md`
+- `docs/rfcs/0003-query-profile-hints.md`
+- `docs/security/compliance_posture.md`
+- `docs/security/threat_model.md`
+
+Artifacts produced by S29 harnesses:
+
+- `project_plan/reports/s29_query_profile_hints.log`
+- `project_plan/reports/s29_query_profile_report.json`
+- `project_plan/reports/s29_benchmark_latency_profile.json`
+- `project_plan/reports/s29_benchmark_recall_profile.json`
 
 Reproducible S16 smoke harness:
 
