@@ -63,6 +63,16 @@ If you are running from a source checkout instead, replace:
 
 This works on macOS, Linux, and Windows anywhere Rust is available.
 
+From scratch:
+
+```bash
+git clone https://github.com/zavora-ai/SQLRite.git
+cd SQLRite
+cargo install --path .
+```
+
+If you already have the repository locally:
+
 ```bash
 cargo install --path .
 ```
