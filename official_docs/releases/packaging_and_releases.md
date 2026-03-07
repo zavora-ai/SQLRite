@@ -42,6 +42,48 @@ docker run --rm -p 8099:8099 -v "$PWD:/data" sqlrite:local
 
 Use this when you want a containerized local smoke test or deployment baseline.
 
+What the default container does:
+
+| Behavior | Result |
+|---|---|
+| mounts `/data` | persisted database files live outside the container |
+| starts `sqlrite serve --db /data/sqlrite.db --bind 0.0.0.0:8099` | SQLRite serves on port `8099` |
+| finds no existing database | SQLRite creates an empty database with schema applied |
+
+If you want query results immediately, seed the mounted database first:
+
+```bash
+mkdir -p docker-data
+sqlrite init --db ./docker-data/sqlrite.db --seed-demo
+docker run --rm -p 8099:8099 -v "$PWD/docker-data:/data" sqlrite:local
+```
+
+## 4. Start a Seeded Demo Server with Docker Compose
+
+Use the compose example when you want a one-command local server with demo data already loaded.
+
+```bash
+docker compose -f deploy/docker-compose.seeded-demo.yml up --build
+```
+
+What this compose file does:
+
+| Step | Result |
+|---|---|
+| runs `sqlrite-init` once | creates `/data/sqlrite.db` and seeds demo content if the volume is empty |
+| starts `sqlrite` | serves the seeded database on port `8099` |
+| reuses a named volume | keeps data across restarts |
+
+Verify it:
+
+```bash
+curl -fsS http://127.0.0.1:8099/readyz
+curl -fsS -X POST \
+  -H "content-type: application/json" \
+  -d '{"query_text":"agent memory","top_k":3}' \
+  http://127.0.0.1:8099/v1/query
+```
+
 ## Release Checklist
 
 | Step | Why it matters |

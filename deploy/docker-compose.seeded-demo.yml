@@ -1,0 +1,35 @@
+services:
+  sqlrite-init:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    user: "0:0"
+    entrypoint:
+      - /bin/sh
+      - -lc
+    command:
+      - "if [ -f /data/sqlrite.db ]; then echo 'sqlrite.db already exists, skipping demo seed'; else chown -R sqlrite:sqlrite /data 2>/dev/null || true; sqlrite init --db /data/sqlrite.db --seed-demo; chown -R sqlrite:sqlrite /data; fi"
+    volumes:
+      - sqlrite_demo_data:/data
+    restart: "no"
+
+  sqlrite:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    depends_on:
+      sqlrite-init:
+        condition: service_completed_successfully
+    command:
+      - serve
+      - --db
+      - /data/sqlrite.db
+      - --bind
+      - 0.0.0.0:8099
+    ports:
+      - "8099:8099"
+    volumes:
+      - sqlrite_demo_data:/data
+
+volumes:
+  sqlrite_demo_data:

@@ -1303,6 +1303,37 @@ docker build -t sqlrite:local .
 docker run --rm -p 8099:8099 -v "$PWD:/data" sqlrite:local
 ```
 
+The default container serves `/data/sqlrite.db`. If the mounted directory is empty, SQLRite creates an empty database with the schema applied.
+
+If you want immediate demo results, seed the mounted database first:
+
+```bash
+mkdir -p docker-data
+sqlrite init --db ./docker-data/sqlrite.db --seed-demo
+docker run --rm -p 8099:8099 -v "$PWD/docker-data:/data" sqlrite:local
+```
+
+Bring up a seeded demo server with Docker Compose:
+
+```bash
+docker compose -f deploy/docker-compose.seeded-demo.yml up --build
+```
+
+What this does:
+
+- builds the local SQLRite image
+- seeds `/data/sqlrite.db` with demo content on first run
+- starts SQLRite on `http://127.0.0.1:8099`
+
+Verify it:
+
+```bash
+curl -fsS http://127.0.0.1:8099/readyz
+curl -fsS -X POST -H "content-type: application/json" \
+  -d '{"query_text":"agent memory","top_k":3}' \
+  http://127.0.0.1:8099/v1/query
+```
+
 Current release notes:
 
 - `docs/releases/v1.0.0.md`
