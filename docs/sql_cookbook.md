@@ -61,7 +61,37 @@ ORDER BY hybrid DESC, id ASC
 LIMIT 5;
 ```
 
-## 4. Tenant-Scoped Retrieval
+## 4. SEARCH SQL v2 Prototype
+
+Use `SEARCH(...)` when you want concise hybrid retrieval without repeating the scoring expression:
+
+```sql
+SELECT chunk_id, doc_id, hybrid_score
+FROM SEARCH(
+       'local agent memory',
+       vector('0.95,0.05,0.0'),
+       5,
+       0.65,
+       500,
+       'balanced',
+       '{"tenant":"demo"}',
+       NULL
+     )
+ORDER BY hybrid_score DESC, chunk_id ASC;
+```
+
+Argument order:
+
+1. `query_text`
+2. `query_embedding`
+3. `top_k`
+4. `alpha`
+5. `candidate_limit`
+6. `query_profile`
+7. `metadata_filters_json`
+8. `doc_id`
+
+## 5. Tenant-Scoped Retrieval
 
 ```sql
 SELECT id, doc_id, content
@@ -71,7 +101,7 @@ ORDER BY id ASC
 LIMIT 10;
 ```
 
-## 5. Metadata Filter Retrieval
+## 6. Metadata Filter Retrieval
 
 ```sql
 SELECT id, doc_id, content
@@ -81,7 +111,7 @@ ORDER BY id ASC
 LIMIT 10;
 ```
 
-## 6. Doc-Scoped Retrieval
+## 7. Doc-Scoped Retrieval
 
 ```sql
 SELECT id, doc_id, content
@@ -91,7 +121,7 @@ ORDER BY id ASC
 LIMIT 10;
 ```
 
-## 7. Rerank-Ready Candidate Export
+## 8. Rerank-Ready Candidate Export
 
 Use SQLRite to produce candidate features (`vector_score`, `text_score`) for an external reranker:
 
@@ -105,7 +135,7 @@ ORDER BY vector_score DESC, text_score DESC, id ASC
 LIMIT 20;
 ```
 
-## 8. Explain Retrieval Path and Scoring
+## 9. Explain Retrieval Path and Scoring
 
 ```sql
 EXPLAIN RETRIEVAL
@@ -130,7 +160,7 @@ LIMIT 5;
 - deterministic ordering indicators
 - underlying `EXPLAIN QUERY PLAN` rows
 
-## 9. Inspect Retrieval Index Catalog
+## 10. Inspect Retrieval Index Catalog
 
 ```sql
 SELECT name, index_kind, table_name, column_name, using_engine, options_json, status

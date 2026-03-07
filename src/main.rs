@@ -5,15 +5,16 @@ use rusqlite::types::ValueRef;
 use serde::Serialize;
 use serde_json::{Map, Value, json};
 use sqlrite::{
-    BenchmarkConfig, ChunkInput, CompactionOptions, DurabilityProfile, FailoverMode,
-    FusionStrategy, GrpcServerConfig, HaRuntimeProfile, McpServerConfig, MigrationEmbeddingFormat,
-    PgvectorJsonlMigrationConfig, QueryProfile, RbacPolicy, RecoveryConfig, ReplicationConfig,
-    RuntimeConfig, SearchRequest, ServerConfig, ServerRole, ServerSecurityConfig, SqlRite,
-    SqliteMigrationConfig, VectorIndexMode, VectorStorageKind, backup_file, build_health_report,
-    create_backup_snapshot, list_backup_snapshots, mcp_tools_manifest_document,
-    migrate_pgvector_jsonl, migrate_sqlite, prune_backup_snapshots, restore_backup_file,
-    restore_backup_file_verified, run_benchmark, run_grpc_server, run_stdio_mcp_server,
-    select_backup_snapshot_for_time, serve_health_endpoints, verify_backup_file,
+    ApiFirstSourceKind, ApiJsonlMigrationConfig, BenchmarkConfig, ChunkInput, CompactionOptions,
+    DurabilityProfile, FailoverMode, FusionStrategy, GrpcServerConfig, HaRuntimeProfile,
+    McpServerConfig, MigrationEmbeddingFormat, PgvectorJsonlMigrationConfig, QueryProfile,
+    RbacPolicy, RecoveryConfig, ReplicationConfig, RuntimeConfig, SearchRequest, ServerConfig,
+    ServerRole, ServerSecurityConfig, SqlRite, SqliteMigrationConfig, VectorIndexMode,
+    VectorStorageKind, backup_file, build_health_report, create_backup_snapshot,
+    list_backup_snapshots, mcp_tools_manifest_document, migrate_api_jsonl, migrate_pgvector_jsonl,
+    migrate_sqlite, prune_backup_snapshots, restore_backup_file, restore_backup_file_verified,
+    run_benchmark, run_grpc_server, run_stdio_mcp_server, select_backup_snapshot_for_time,
+    serve_health_endpoints, verify_backup_file,
 };
 use std::collections::{HashMap, HashSet};
 use std::env;
@@ -394,6 +395,9 @@ enum MigrateSourceKind {
     Sqlite,
     Libsql,
     PgvectorJsonl,
+    QdrantJsonl,
+    WeaviateJsonl,
+    MilvusJsonl,
 }
 
 #[derive(Debug)]
@@ -420,6 +424,14 @@ struct MigrateArgs {
     chunk_embedding_dim_col: Option<String>,
     chunk_source_col: Option<String>,
     embedding_format: MigrationEmbeddingFormat,
+    id_field: String,
+    doc_id_field: String,
+    content_field: String,
+    embedding_field: String,
+    metadata_field: Option<String>,
+    source_field: Option<String>,
+    doc_metadata_field: Option<String>,
+    doc_source_field: Option<String>,
 }
 
 impl Default for MigrateArgs {
@@ -447,6 +459,14 @@ impl Default for MigrateArgs {
             chunk_embedding_dim_col: Some("embedding_dim".to_string()),
             chunk_source_col: Some("source_path".to_string()),
             embedding_format: MigrationEmbeddingFormat::BlobF32Le,
+            id_field: "id".to_string(),
+            doc_id_field: "doc_id".to_string(),
+            content_field: "content".to_string(),
+            embedding_field: "embedding".to_string(),
+            metadata_field: Some("metadata".to_string()),
+            source_field: Some("source".to_string()),
+            doc_metadata_field: Some("doc_metadata".to_string()),
+            doc_source_field: Some("doc_source".to_string()),
         }
     }
 }
@@ -492,6 +512,32 @@ fn cmd_migrate(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
                 create_indexes: parsed.create_indexes,
             })?
         }
+        MigrateSourceKind::QdrantJsonl
+        | MigrateSourceKind::WeaviateJsonl
+        | MigrateSourceKind::MilvusJsonl => migrate_api_jsonl(&ApiJsonlMigrationConfig {
+            source_kind: match parsed.kind {
+                MigrateSourceKind::QdrantJsonl => ApiFirstSourceKind::Qdrant,
+                MigrateSourceKind::WeaviateJsonl => ApiFirstSourceKind::Weaviate,
+                MigrateSourceKind::MilvusJsonl => ApiFirstSourceKind::Milvus,
+                _ => unreachable!("matched api-first source kind"),
+            },
+            input_path: parsed
+                .input_path
+                .clone()
+                .ok_or_else(|| std::io::Error::other("missing --input"))?,
+            target_path: parsed.target_path.clone(),
+            runtime,
+            batch_size: parsed.batch_size,
+            create_indexes: parsed.create_indexes,
+            id_field: parsed.id_field.clone(),
+            doc_id_field: parsed.doc_id_field.clone(),
+            content_field: parsed.content_field.clone(),
+            embedding_field: parsed.embedding_field.clone(),
+            metadata_field: parsed.metadata_field.clone(),
+            source_field: parsed.source_field.clone(),
+            doc_metadata_field: parsed.doc_metadata_field.clone(),
+            doc_source_field: parsed.doc_source_field.clone(),
+        })?,
     };
 
     if parsed.json_output {
@@ -519,6 +565,9 @@ fn parse_migrate_args(args: &[String]) -> Result<MigrateArgs, String> {
         "sqlite" => MigrateSourceKind::Sqlite,
         "libsql" => MigrateSourceKind::Libsql,
         "pgvector" | "pgvector-jsonl" => MigrateSourceKind::PgvectorJsonl,
+        "qdrant" => MigrateSourceKind::QdrantJsonl,
+        "weaviate" => MigrateSourceKind::WeaviateJsonl,
+        "milvus" => MigrateSourceKind::MilvusJsonl,
         "--help" | "-h" => return Err(migrate_usage().to_string()),
         other => {
             return Err(format!(
@@ -527,6 +576,7 @@ fn parse_migrate_args(args: &[String]) -> Result<MigrateArgs, String> {
             ));
         }
     };
+    apply_migrate_source_defaults(&mut out);
 
     let mut i = 1;
     while i < args.len() {
@@ -621,6 +671,40 @@ fn parse_migrate_args(args: &[String]) -> Result<MigrateArgs, String> {
                     "--embedding-format",
                 )?)?;
             }
+            "--id-field" => {
+                i += 1;
+                out.id_field = parse_string(args, i, "--id-field")?;
+            }
+            "--doc-id-field" => {
+                i += 1;
+                out.doc_id_field = parse_string(args, i, "--doc-id-field")?;
+            }
+            "--content-field" => {
+                i += 1;
+                out.content_field = parse_string(args, i, "--content-field")?;
+            }
+            "--embedding-field" => {
+                i += 1;
+                out.embedding_field = parse_string(args, i, "--embedding-field")?;
+            }
+            "--metadata-field" => {
+                i += 1;
+                out.metadata_field = parse_optional_identifier_arg(args, i, "--metadata-field")?;
+            }
+            "--source-field" => {
+                i += 1;
+                out.source_field = parse_optional_identifier_arg(args, i, "--source-field")?;
+            }
+            "--doc-metadata-field" => {
+                i += 1;
+                out.doc_metadata_field =
+                    parse_optional_identifier_arg(args, i, "--doc-metadata-field")?;
+            }
+            "--doc-source-field" => {
+                i += 1;
+                out.doc_source_field =
+                    parse_optional_identifier_arg(args, i, "--doc-source-field")?;
+            }
             "--help" | "-h" => return Err(migrate_usage().to_string()),
             other => return Err(format!("unknown argument `{other}`\n{}", migrate_usage())),
         }
@@ -633,7 +717,10 @@ fn parse_migrate_args(args: &[String]) -> Result<MigrateArgs, String> {
                 return Err("missing required --source".to_string());
             }
         }
-        MigrateSourceKind::PgvectorJsonl => {
+        MigrateSourceKind::PgvectorJsonl
+        | MigrateSourceKind::QdrantJsonl
+        | MigrateSourceKind::WeaviateJsonl
+        | MigrateSourceKind::MilvusJsonl => {
             if out.input_path.is_none() {
                 return Err("missing required --input".to_string());
             }
@@ -641,6 +728,44 @@ fn parse_migrate_args(args: &[String]) -> Result<MigrateArgs, String> {
     }
 
     Ok(out)
+}
+
+fn apply_migrate_source_defaults(out: &mut MigrateArgs) {
+    match out.kind {
+        MigrateSourceKind::Sqlite
+        | MigrateSourceKind::Libsql
+        | MigrateSourceKind::PgvectorJsonl => {}
+        MigrateSourceKind::QdrantJsonl => {
+            out.id_field = "id".to_string();
+            out.doc_id_field = "payload.doc_id".to_string();
+            out.content_field = "payload.content".to_string();
+            out.embedding_field = "vector".to_string();
+            out.metadata_field = Some("payload".to_string());
+            out.source_field = Some("payload.source".to_string());
+            out.doc_metadata_field = Some("payload".to_string());
+            out.doc_source_field = Some("payload.source".to_string());
+        }
+        MigrateSourceKind::WeaviateJsonl => {
+            out.id_field = "id".to_string();
+            out.doc_id_field = "properties.doc_id".to_string();
+            out.content_field = "properties.content".to_string();
+            out.embedding_field = "vector".to_string();
+            out.metadata_field = Some("properties".to_string());
+            out.source_field = Some("properties.source".to_string());
+            out.doc_metadata_field = Some("properties".to_string());
+            out.doc_source_field = Some("properties.source".to_string());
+        }
+        MigrateSourceKind::MilvusJsonl => {
+            out.id_field = "id".to_string();
+            out.doc_id_field = "doc_id".to_string();
+            out.content_field = "content".to_string();
+            out.embedding_field = "embedding".to_string();
+            out.metadata_field = Some("metadata".to_string());
+            out.source_field = Some("source".to_string());
+            out.doc_metadata_field = Some("metadata".to_string());
+            out.doc_source_field = Some("source".to_string());
+        }
+    }
 }
 
 fn parse_optional_identifier_arg(
@@ -668,7 +793,7 @@ fn parse_migration_embedding_format(value: &str) -> Result<MigrationEmbeddingFor
 }
 
 fn migrate_usage() -> &'static str {
-    "usage:\n  sqlrite migrate sqlite --source legacy.db --target sqlrite.db [--profile balanced|durable|fast_unsafe] [--index-mode brute_force|lsh_ann|hnsw_baseline|disabled] [--doc-table legacy_documents|none] [--doc-id-col doc_id] [--doc-source-col source_path|none] [--doc-metadata-col metadata_json|none] [--chunk-table legacy_chunks] [--chunk-id-col chunk_id] [--chunk-doc-id-col doc_id] [--chunk-content-col chunk_text] [--chunk-metadata-col metadata_json|none] [--chunk-embedding-col embedding_blob] [--chunk-embedding-dim-col embedding_dim|none] [--chunk-source-col source_path|none] [--embedding-format blob_f32le|json_array|csv] [--batch-size N] [--create-indexes] [--json]\n  sqlrite migrate libsql --source source.db --target sqlrite.db [same options as sqlite]\n  sqlrite migrate pgvector --input export.jsonl --target sqlrite.db [--profile balanced|durable|fast_unsafe] [--index-mode brute_force|lsh_ann|hnsw_baseline|disabled] [--batch-size N] [--create-indexes] [--json]"
+    "usage:\n  sqlrite migrate sqlite --source legacy.db --target sqlrite.db [--profile balanced|durable|fast_unsafe] [--index-mode brute_force|lsh_ann|hnsw_baseline|disabled] [--doc-table legacy_documents|none] [--doc-id-col doc_id] [--doc-source-col source_path|none] [--doc-metadata-col metadata_json|none] [--chunk-table legacy_chunks] [--chunk-id-col chunk_id] [--chunk-doc-id-col doc_id] [--chunk-content-col chunk_text] [--chunk-metadata-col metadata_json|none] [--chunk-embedding-col embedding_blob] [--chunk-embedding-dim-col embedding_dim|none] [--chunk-source-col source_path|none] [--embedding-format blob_f32le|json_array|csv] [--batch-size N] [--create-indexes] [--json]\n  sqlrite migrate libsql --source source.db --target sqlrite.db [same options as sqlite]\n  sqlrite migrate pgvector --input export.jsonl --target sqlrite.db [--profile balanced|durable|fast_unsafe] [--index-mode brute_force|lsh_ann|hnsw_baseline|disabled] [--batch-size N] [--create-indexes] [--json]\n  sqlrite migrate qdrant|weaviate|milvus --input export.jsonl --target sqlrite.db [--profile balanced|durable|fast_unsafe] [--index-mode brute_force|lsh_ann|hnsw_baseline|disabled] [--id-field id] [--doc-id-field payload.doc_id|properties.doc_id|doc_id] [--content-field payload.content|properties.content|content] [--embedding-field vector|embedding] [--metadata-field payload|properties|metadata|none] [--source-field payload.source|properties.source|source|none] [--doc-metadata-field payload|properties|metadata|none] [--doc-source-field payload.source|properties.source|source|none] [--batch-size N] [--create-indexes] [--json]"
 }
 
 #[derive(Debug)]
@@ -3299,6 +3424,466 @@ fn rewrite_sql_vector_operators(statement: &str) -> String {
     rewritten
 }
 
+const SEARCH_QUERY_PROFILE_LATENCY_MIN_CANDIDATE_LIMIT: usize = 32;
+const SEARCH_QUERY_PROFILE_LATENCY_TOP_K_MULTIPLIER: usize = 8;
+const SEARCH_QUERY_PROFILE_RECALL_MIN_CANDIDATE_LIMIT: usize = 200;
+const SEARCH_QUERY_PROFILE_RECALL_TOP_K_MULTIPLIER: usize = 32;
+
+fn rewrite_sql_search_table_function(statement: &str) -> Result<String, std::io::Error> {
+    let Some((from_start, _search_start, search_end)) = find_search_from_clause(statement) else {
+        return Ok(statement.to_string());
+    };
+    let Some(close_index) = seek_balanced_forward(statement.as_bytes(), search_end - 1, b'(', b')')
+    else {
+        return Err(std::io::Error::other(
+            "SEARCH(...) is missing a closing `)`",
+        ));
+    };
+    let args = &statement[search_end..close_index];
+    let (alias, replace_end) = parse_search_alias(statement, close_index + 1);
+    let spec = parse_search_spec(args)?;
+    let alias = alias.unwrap_or_else(|| "search_results".to_string());
+    let subquery = build_search_subquery(&spec);
+    Ok(format!(
+        "{}FROM ({}) AS {} {}",
+        &statement[..from_start],
+        subquery,
+        alias,
+        &statement[replace_end..]
+    ))
+}
+
+#[derive(Debug, Clone)]
+struct SearchTableSpec {
+    query_text_sql: Option<String>,
+    query_embedding_sql: Option<String>,
+    top_k: usize,
+    alpha: f32,
+    candidate_limit: usize,
+    metadata_filters: Map<String, Value>,
+    doc_id: Option<String>,
+}
+
+fn build_search_subquery(spec: &SearchTableSpec) -> String {
+    let mut predicates = Vec::new();
+    if let Some(doc_id) = &spec.doc_id {
+        predicates.push(format!("doc_id = {}", sql_string_literal(doc_id)));
+    }
+    for (key, value) in &spec.metadata_filters {
+        predicates.push(format!(
+            "json_extract(metadata, '$.{}') = {}",
+            key.replace('\'', "''"),
+            sql_json_scalar(value)
+        ));
+    }
+    let where_clause = if predicates.is_empty() {
+        "1 = 1".to_string()
+    } else {
+        predicates.join(" AND ")
+    };
+
+    let vector_score_sql = if let Some(query_embedding) = &spec.query_embedding_sql {
+        format!("1.0 - cosine_distance(embedding, {query_embedding})")
+    } else {
+        "0.0".to_string()
+    };
+    let text_score_sql = if let Some(query_text) = &spec.query_text_sql {
+        format!("bm25_score({query_text}, content)")
+    } else {
+        "0.0".to_string()
+    };
+    let hybrid_score_sql = match (
+        spec.query_embedding_sql.is_some(),
+        spec.query_text_sql.is_some(),
+    ) {
+        (true, true) => format!("hybrid_score(vector_score, text_score, {})", spec.alpha),
+        (true, false) => vector_score_sql.clone(),
+        (false, true) => text_score_sql.clone(),
+        (false, false) => "0.0".to_string(),
+    };
+
+    format!(
+        "WITH search_base AS (
+    SELECT
+        id AS chunk_id,
+        doc_id,
+        content,
+        metadata,
+        {vector_score_sql} AS vector_score,
+        {text_score_sql} AS text_score
+    FROM chunks
+    WHERE {where_clause}
+),
+search_ranked AS (
+    SELECT
+        chunk_id,
+        doc_id,
+        content,
+        metadata,
+        vector_score,
+        text_score,
+        {hybrid_score_sql} AS hybrid_score
+    FROM search_base
+    ORDER BY hybrid_score DESC, chunk_id ASC
+    LIMIT {candidate_limit}
+)
+SELECT
+    chunk_id,
+    doc_id,
+    content,
+    metadata,
+    vector_score,
+    text_score,
+    hybrid_score
+FROM search_ranked
+ORDER BY hybrid_score DESC, chunk_id ASC
+LIMIT {top_k}",
+        candidate_limit = spec.candidate_limit,
+        top_k = spec.top_k,
+    )
+}
+
+fn parse_search_spec(args: &str) -> Result<SearchTableSpec, std::io::Error> {
+    let parts = split_search_args(args)?;
+    if parts.len() < 2 || parts.len() > 8 {
+        return Err(std::io::Error::other(
+            "SEARCH(...) expects 2 to 8 arguments: query_text, query_embedding, top_k, alpha, candidate_limit, query_profile, metadata_filters_json, doc_id",
+        ));
+    }
+    let query_text_sql = parse_nullable_sql_expr(parts.first().expect("arg 0 exists"));
+    let query_embedding_sql = parse_nullable_sql_expr(parts.get(1).expect("arg 1 exists"));
+    if query_text_sql.is_none() && query_embedding_sql.is_none() {
+        return Err(std::io::Error::other(
+            "SEARCH(...) requires query_text, query_embedding, or both",
+        ));
+    }
+    let top_k = parts
+        .get(2)
+        .map(|value| parse_search_usize(value, "top_k"))
+        .transpose()?
+        .unwrap_or(5);
+    let alpha = parts
+        .get(3)
+        .map(|value| parse_search_f32(value, "alpha"))
+        .transpose()?
+        .unwrap_or(0.65);
+    let requested_candidate_limit = parts
+        .get(4)
+        .map(|value| parse_search_usize(value, "candidate_limit"))
+        .transpose()?
+        .unwrap_or(500);
+    let query_profile = parts
+        .get(5)
+        .map(|value| parse_search_query_profile(value))
+        .transpose()?
+        .unwrap_or(QueryProfile::Balanced);
+    let metadata_filters = parts
+        .get(6)
+        .map(|value| parse_search_metadata_filters(value))
+        .transpose()?
+        .unwrap_or_else(Map::new);
+    let doc_id = parts
+        .get(7)
+        .map(|value| parse_nullable_string_literal(value, "doc_id"))
+        .transpose()?
+        .flatten();
+    let candidate_limit =
+        resolve_search_candidate_limit(top_k, requested_candidate_limit, query_profile);
+
+    Ok(SearchTableSpec {
+        query_text_sql,
+        query_embedding_sql,
+        top_k,
+        alpha,
+        candidate_limit,
+        metadata_filters,
+        doc_id,
+    })
+}
+
+fn split_search_args(args: &str) -> Result<Vec<String>, std::io::Error> {
+    let mut out = Vec::new();
+    let bytes = args.as_bytes();
+    let mut state = ScanState::Normal;
+    let mut depth = 0usize;
+    let mut start = 0usize;
+    let mut idx = 0usize;
+    while idx < bytes.len() {
+        match state {
+            ScanState::Normal => {
+                if bytes[idx] == b'\'' {
+                    state = ScanState::SingleQuoted;
+                } else if bytes[idx] == b'"' {
+                    state = ScanState::DoubleQuoted;
+                } else if bytes[idx] == b'(' {
+                    depth += 1;
+                } else if bytes[idx] == b')' {
+                    depth = depth.saturating_sub(1);
+                } else if bytes[idx] == b',' && depth == 0 {
+                    out.push(args[start..idx].trim().to_string());
+                    start = idx + 1;
+                }
+                idx += 1;
+            }
+            ScanState::SingleQuoted => {
+                if bytes[idx] == b'\'' {
+                    if idx + 1 < bytes.len() && bytes[idx + 1] == b'\'' {
+                        idx += 2;
+                        continue;
+                    }
+                    state = ScanState::Normal;
+                }
+                idx += 1;
+            }
+            ScanState::DoubleQuoted => {
+                if bytes[idx] == b'"' {
+                    if idx + 1 < bytes.len() && bytes[idx + 1] == b'"' {
+                        idx += 2;
+                        continue;
+                    }
+                    state = ScanState::Normal;
+                }
+                idx += 1;
+            }
+            ScanState::LineComment | ScanState::BlockComment => idx += 1,
+        }
+    }
+    let tail = args[start..].trim();
+    if !tail.is_empty() {
+        out.push(tail.to_string());
+    }
+    Ok(out)
+}
+
+fn parse_search_usize(value: &str, name: &str) -> Result<usize, std::io::Error> {
+    value.trim().parse::<usize>().map_err(|_| {
+        std::io::Error::other(format!(
+            "SEARCH(...) {name} must be an unsigned integer literal"
+        ))
+    })
+}
+
+fn parse_search_f32(value: &str, name: &str) -> Result<f32, std::io::Error> {
+    value
+        .trim()
+        .parse::<f32>()
+        .map_err(|_| std::io::Error::other(format!("SEARCH(...) {name} must be a numeric literal")))
+}
+
+fn parse_search_query_profile(value: &str) -> Result<QueryProfile, std::io::Error> {
+    let raw = parse_nullable_string_literal(value, "query_profile")?
+        .ok_or_else(|| std::io::Error::other("SEARCH(...) query_profile cannot be NULL"))?;
+    match raw.as_str() {
+        "balanced" => Ok(QueryProfile::Balanced),
+        "latency" => Ok(QueryProfile::Latency),
+        "recall" => Ok(QueryProfile::Recall),
+        other => Err(std::io::Error::other(format!(
+            "SEARCH(...) query_profile must be balanced|latency|recall, found `{other}`"
+        ))),
+    }
+}
+
+fn parse_search_metadata_filters(value: &str) -> Result<Map<String, Value>, std::io::Error> {
+    let Some(raw) = parse_nullable_string_literal(value, "metadata_filters_json")? else {
+        return Ok(Map::new());
+    };
+    let parsed = serde_json::from_str::<Value>(&raw).map_err(|error| {
+        std::io::Error::other(format!("invalid SEARCH metadata_filters_json: {error}"))
+    })?;
+    match parsed {
+        Value::Object(map) => Ok(map),
+        _ => Err(std::io::Error::other(
+            "SEARCH(...) metadata_filters_json must decode to a JSON object",
+        )),
+    }
+}
+
+fn parse_nullable_string_literal(
+    value: &str,
+    name: &str,
+) -> Result<Option<String>, std::io::Error> {
+    let trimmed = value.trim();
+    if trimmed.eq_ignore_ascii_case("null") {
+        return Ok(None);
+    }
+    decode_sql_string_literal(trimmed).map(Some).ok_or_else(|| {
+        std::io::Error::other(format!(
+            "SEARCH(...) {name} must be a single-quoted string or NULL"
+        ))
+    })
+}
+
+fn parse_nullable_sql_expr(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.eq_ignore_ascii_case("null") {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+fn decode_sql_string_literal(value: &str) -> Option<String> {
+    if value.len() < 2 || !value.starts_with('\'') || !value.ends_with('\'') {
+        return None;
+    }
+    Some(value[1..value.len() - 1].replace("''", "'"))
+}
+
+fn resolve_search_candidate_limit(
+    top_k: usize,
+    candidate_limit: usize,
+    profile: QueryProfile,
+) -> usize {
+    match profile {
+        QueryProfile::Latency => candidate_limit
+            .min(
+                top_k
+                    .saturating_mul(SEARCH_QUERY_PROFILE_LATENCY_TOP_K_MULTIPLIER)
+                    .max(SEARCH_QUERY_PROFILE_LATENCY_MIN_CANDIDATE_LIMIT),
+            )
+            .max(top_k),
+        QueryProfile::Balanced => candidate_limit,
+        QueryProfile::Recall => candidate_limit.max(
+            top_k
+                .saturating_mul(SEARCH_QUERY_PROFILE_RECALL_TOP_K_MULTIPLIER)
+                .max(SEARCH_QUERY_PROFILE_RECALL_MIN_CANDIDATE_LIMIT),
+        ),
+    }
+}
+
+fn sql_string_literal(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
+}
+
+fn sql_json_scalar(value: &Value) -> String {
+    match value {
+        Value::String(text) => sql_string_literal(text),
+        Value::Number(number) => number.to_string(),
+        Value::Bool(flag) => {
+            if *flag {
+                "1".to_string()
+            } else {
+                "0".to_string()
+            }
+        }
+        Value::Null => "NULL".to_string(),
+        _ => sql_string_literal(&value.to_string()),
+    }
+}
+
+fn find_search_from_clause(statement: &str) -> Option<(usize, usize, usize)> {
+    let lower = statement.to_ascii_lowercase();
+    let bytes = lower.as_bytes();
+    let mut idx = 0usize;
+    let mut state = ScanState::Normal;
+    while idx < bytes.len() {
+        match state {
+            ScanState::Normal => {
+                if bytes[idx] == b'\'' {
+                    state = ScanState::SingleQuoted;
+                    idx += 1;
+                    continue;
+                }
+                if bytes[idx] == b'"' {
+                    state = ScanState::DoubleQuoted;
+                    idx += 1;
+                    continue;
+                }
+                if lower[idx..].starts_with("from") && (idx == 0 || !is_token_char(bytes[idx - 1]))
+                {
+                    let mut search_idx = idx + 4;
+                    while search_idx < bytes.len() && bytes[search_idx].is_ascii_whitespace() {
+                        search_idx += 1;
+                    }
+                    if lower[search_idx..].starts_with("search(") {
+                        return Some((idx, search_idx, search_idx + "search(".len()));
+                    }
+                }
+                idx += 1;
+            }
+            ScanState::SingleQuoted => {
+                if bytes[idx] == b'\'' {
+                    if idx + 1 < bytes.len() && bytes[idx + 1] == b'\'' {
+                        idx += 2;
+                    } else {
+                        state = ScanState::Normal;
+                        idx += 1;
+                    }
+                } else {
+                    idx += 1;
+                }
+            }
+            ScanState::DoubleQuoted => {
+                if bytes[idx] == b'"' {
+                    if idx + 1 < bytes.len() && bytes[idx + 1] == b'"' {
+                        idx += 2;
+                    } else {
+                        state = ScanState::Normal;
+                        idx += 1;
+                    }
+                } else {
+                    idx += 1;
+                }
+            }
+            ScanState::LineComment | ScanState::BlockComment => idx += 1,
+        }
+    }
+    None
+}
+
+fn parse_search_alias(statement: &str, start: usize) -> (Option<String>, usize) {
+    let bytes = statement.as_bytes();
+    let mut idx = start;
+    while idx < bytes.len() && bytes[idx].is_ascii_whitespace() {
+        idx += 1;
+    }
+    let alias_start = idx;
+    if idx + 2 <= bytes.len()
+        && statement[idx..].to_ascii_lowercase().starts_with("as")
+        && (idx + 2 == bytes.len() || bytes[idx + 2].is_ascii_whitespace())
+    {
+        idx += 2;
+        while idx < bytes.len() && bytes[idx].is_ascii_whitespace() {
+            idx += 1;
+        }
+    }
+    let name_start = idx;
+    while idx < bytes.len() && is_token_char(bytes[idx]) {
+        idx += 1;
+    }
+    if idx > name_start {
+        let candidate = &statement[name_start..idx];
+        if is_reserved_search_clause_keyword(candidate) {
+            (None, alias_start)
+        } else {
+            (Some(candidate.to_string()), idx)
+        }
+    } else {
+        (None, alias_start)
+    }
+}
+
+fn is_reserved_search_clause_keyword(value: &str) -> bool {
+    matches!(
+        value.to_ascii_lowercase().as_str(),
+        "where"
+            | "order"
+            | "group"
+            | "limit"
+            | "join"
+            | "inner"
+            | "left"
+            | "right"
+            | "cross"
+            | "union"
+            | "intersect"
+            | "except"
+            | "window"
+            | "having"
+            | "offset"
+    )
+}
+
 fn vector_operator_function(operator: VectorOperator) -> &'static str {
     match operator {
         VectorOperator::L2 => "l2_distance",
@@ -4487,7 +5072,8 @@ fn execute_sql_statement(
         return Ok(());
     }
 
-    let rewritten = rewrite_sql_vector_operators(statement);
+    let rewritten = rewrite_sql_search_table_function(statement)?;
+    let rewritten = rewrite_sql_vector_operators(&rewritten);
 
     if is_query_statement(&rewritten) {
         let mut stmt = conn.prepare(&rewritten)?;
@@ -4615,6 +5201,7 @@ fn sql_repl_example_catalog() -> &'static str {
   lexical   FTS/BM25 lexical retrieval
   vector    SQL-native vector operator retrieval
   hybrid    embed + bm25_score + hybrid_score ranking
+  search_v2 concise SEARCH(...) SQL v2 prototype
   filter    metadata-filtered retrieval
   doc_scope doc-scoped retrieval
   rerank_ready produce vector/text signals for external rerankers
@@ -4653,16 +5240,30 @@ LIMIT 5;",
         ),
         "hybrid" => Some(
             "SELECT id,
-       1.0 - cosine_distance(embedding, embed('local-first agent memory')) AS vector_score,
+       1.0 - cosine_distance(embedding, vector('0.95,0.05,0.0')) AS vector_score,
        bm25_score('local-first agent memory', content) AS text_score,
        hybrid_score(
-           1.0 - cosine_distance(embedding, embed('local-first agent memory')),
+           1.0 - cosine_distance(embedding, vector('0.95,0.05,0.0')),
            bm25_score('local-first agent memory', content),
            0.65
        ) AS hybrid
 FROM chunks
 ORDER BY hybrid DESC, id ASC
 LIMIT 5;",
+        ),
+        "search_v2" => Some(
+            "SELECT chunk_id, doc_id, hybrid_score
+FROM SEARCH(
+       'local-first agent memory',
+       vector('0.95,0.05,0.0'),
+       5,
+       0.65,
+       500,
+       'balanced',
+       '{\"tenant\":\"demo\"}',
+       NULL
+     )
+ORDER BY hybrid_score DESC, chunk_id ASC;",
         ),
         "filter" => Some(
             "SELECT id, doc_id, content
@@ -4741,7 +5342,7 @@ fn sql_value_to_json(value: ValueRef<'_>) -> Value {
 }
 
 fn usage() -> &'static str {
-    "sqlrite unified CLI\n\nusage:\n  sqlrite <command> [options]\n\ncommands:\n  init       Create/open a SQLRite database and apply runtime profile\n  sql        Execute SQL or enter interactive SQL shell\n  ingest     Ingest a single chunk directly from CLI flags\n  migrate    Import legacy SQLite/libSQL/pgvector-style datasets into SQLRite\n  query      Run text/vector/hybrid retrieval query\n  quickstart Run init->query UX flow with telemetry/gates\n  serve      Start server (health/readiness/metrics + HA control plane + SQL API)\n  grpc       Start native gRPC QueryService endpoint\n  mcp        Start MCP stdio tool server or print MCP manifest\n  backup     Create, verify, snapshot, restore, PITR-restore, or prune backups\n  compact    Run ingestion-compaction maintenance workflow\n  benchmark  Run synthetic retrieval benchmark\n  doctor     Run environment and database health checks\n\nenv overrides:\n  SQLRITE_VECTOR_STORAGE=f32|f16|int8\n  SQLRITE_ANN_MIN_CANDIDATES=<int>\n  SQLRITE_ANN_MAX_HAMMING_RADIUS=<int>\n  SQLRITE_ANN_MAX_CANDIDATE_MULTIPLIER=<int>\n  SQLRITE_ENABLE_ANN_PERSISTENCE=true|false\n  SQLRITE_SQLITE_MMAP_SIZE=<bytes>\n  SQLRITE_SQLITE_CACHE_SIZE_KIB=<kib>\n\nexamples:\n  sqlrite init --db sqlrite_demo.db --seed-demo\n  sqlrite migrate sqlite --source legacy.db --target sqlrite.db --create-indexes\n  sqlrite quickstart --db sqlrite_demo.db --runs 5 --max-median-ms 180000 --min-success-rate 0.95\n  sqlrite query --db sqlrite_demo.db --text \"agents local memory\" --query-profile latency --top-k 3\n  sqlrite serve --db sqlrite_demo.db --secure-defaults --authz-policy .sqlrite/rbac-policy.json --audit-log .sqlrite/audit/server_audit.jsonl\n  sqlrite grpc --db sqlrite_demo.db --bind 127.0.0.1:50051\n  sqlrite mcp --db sqlrite_demo.db --print-manifest\n  sqlrite mcp --db sqlrite_demo.db --auth-token dev-token\n  sqlrite backup snapshot --source sqlrite_demo.db --backup-dir ./backups --note pre_release\n  sqlrite backup pitr-restore --backup-dir ./backups --target-unix-ms 1772000000000 --dest restored.db --verify\n  sqlrite compact --db sqlrite_demo.db --json\n  sqlrite benchmark --query-profile recall --index-mode hnsw_baseline\n  sqlrite doctor --db sqlrite_demo.db --json\n  sqlrite sql --db sqlrite_demo.db\n  sqlrite sql --db sqlrite_demo.db --execute \"SELECT id, doc_id FROM chunks LIMIT 3;\""
+    "sqlrite unified CLI\n\nusage:\n  sqlrite <command> [options]\n\ncommands:\n  init       Create/open a SQLRite database and apply runtime profile\n  sql        Execute SQL or enter interactive SQL shell\n  ingest     Ingest a single chunk directly from CLI flags\n  migrate    Import legacy SQLite/libSQL/pgvector/API-first datasets into SQLRite\n  query      Run text/vector/hybrid retrieval query\n  quickstart Run init->query UX flow with telemetry/gates\n  serve      Start server (health/readiness/metrics + HA control plane + SQL API)\n  grpc       Start native gRPC QueryService endpoint\n  mcp        Start MCP stdio tool server or print MCP manifest\n  backup     Create, verify, snapshot, restore, PITR-restore, or prune backups\n  compact    Run ingestion-compaction maintenance workflow\n  benchmark  Run synthetic retrieval benchmark\n  doctor     Run environment and database health checks\n\nenv overrides:\n  SQLRITE_VECTOR_STORAGE=f32|f16|int8\n  SQLRITE_ANN_MIN_CANDIDATES=<int>\n  SQLRITE_ANN_MAX_HAMMING_RADIUS=<int>\n  SQLRITE_ANN_MAX_CANDIDATE_MULTIPLIER=<int>\n  SQLRITE_ENABLE_ANN_PERSISTENCE=true|false\n  SQLRITE_SQLITE_MMAP_SIZE=<bytes>\n  SQLRITE_SQLITE_CACHE_SIZE_KIB=<kib>\n\nexamples:\n  sqlrite init --db sqlrite_demo.db --seed-demo\n  sqlrite migrate sqlite --source legacy.db --target sqlrite.db --create-indexes\n  sqlrite migrate qdrant --input qdrant_export.jsonl --target sqlrite.db --create-indexes\n  sqlrite quickstart --db sqlrite_demo.db --runs 5 --max-median-ms 180000 --min-success-rate 0.95\n  sqlrite query --db sqlrite_demo.db --text \"agents local memory\" --query-profile latency --top-k 3\n  sqlrite serve --db sqlrite_demo.db --secure-defaults --authz-policy .sqlrite/rbac-policy.json --audit-log .sqlrite/audit/server_audit.jsonl\n  sqlrite grpc --db sqlrite_demo.db --bind 127.0.0.1:50051\n  sqlrite mcp --db sqlrite_demo.db --print-manifest\n  sqlrite mcp --db sqlrite_demo.db --auth-token dev-token\n  sqlrite backup snapshot --source sqlrite_demo.db --backup-dir ./backups --note pre_release\n  sqlrite backup pitr-restore --backup-dir ./backups --target-unix-ms 1772000000000 --dest restored.db --verify\n  sqlrite compact --db sqlrite_demo.db --json\n  sqlrite benchmark --query-profile recall --index-mode hnsw_baseline\n  sqlrite doctor --db sqlrite_demo.db --json\n  sqlrite sql --db sqlrite_demo.db\n  sqlrite sql --db sqlrite_demo.db --execute \"SELECT chunk_id, doc_id, hybrid_score FROM SEARCH('agents local memory', vector('0.95,0.05,0.0'), 5, 0.65, 500, 'balanced', '{\\\"tenant\\\":\\\"demo\\\"}', NULL) ORDER BY hybrid_score DESC, chunk_id ASC;\""
 }
 
 #[cfg(test)]
@@ -4916,9 +5517,63 @@ mod tests {
     }
 
     #[test]
+    fn migrate_args_parse_qdrant_defaults() -> Result<(), Box<dyn std::error::Error>> {
+        let args = vec![
+            "qdrant".to_string(),
+            "--input".to_string(),
+            "qdrant.jsonl".to_string(),
+            "--target".to_string(),
+            "sqlrite.db".to_string(),
+            "--create-indexes".to_string(),
+        ];
+        let parsed = parse_migrate_args(&args).map_err(std::io::Error::other)?;
+        assert!(matches!(parsed.kind, MigrateSourceKind::QdrantJsonl));
+        assert_eq!(parsed.doc_id_field, "payload.doc_id");
+        assert_eq!(parsed.content_field, "payload.content");
+        assert_eq!(parsed.embedding_field, "vector");
+        assert_eq!(parsed.metadata_field.as_deref(), Some("payload"));
+        assert!(parsed.create_indexes);
+        Ok(())
+    }
+
+    #[test]
     fn migrate_args_require_source_for_sqlite() {
         let error = parse_migrate_args(&["sqlite".to_string()]).unwrap_err();
         assert!(error.contains("missing required --source"));
+    }
+
+    #[test]
+    fn search_table_function_rewrite_executes_in_cli_sql_path()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let conn = Connection::open_in_memory()?;
+        apply_sql_runtime_profile(&conn, DurabilityProfile::Balanced)?;
+        register_retrieval_sql_functions(&conn)?;
+        conn.execute_batch(
+            "
+            CREATE TABLE chunks (
+                id TEXT PRIMARY KEY,
+                doc_id TEXT NOT NULL,
+                embedding BLOB NOT NULL,
+                content TEXT NOT NULL,
+                source TEXT,
+                metadata TEXT NOT NULL DEFAULT '{}'
+            );
+            INSERT INTO chunks (id, doc_id, embedding, content, source, metadata)
+            VALUES
+                ('c1', 'doc-a', vector('1,0'), 'agent memory cli search', 'docs/c1.md', '{\"tenant\":\"demo\"}'),
+                ('c2', 'doc-b', vector('0,1'), 'different text', 'docs/c2.md', '{\"tenant\":\"other\"}');
+            ",
+        )?;
+
+        let rewritten = rewrite_sql_search_table_function(
+            "SELECT chunk_id, hybrid_score
+FROM SEARCH('agent memory', vector('1,0'), 5, 0.65, 500, 'balanced', '{\"tenant\":\"demo\"}', NULL)
+ORDER BY hybrid_score DESC, chunk_id ASC;",
+        )?;
+        let mut stmt = conn.prepare(&rewrite_sql_vector_operators(&rewritten))?;
+        let chunk_id: String = stmt.query_row([], |row| row.get(0))?;
+        assert_eq!(chunk_id, "c1");
+        Ok(())
     }
 
     #[test]

@@ -4,11 +4,14 @@
 
 Move a retrieval corpus into SQLRite with deterministic verification and rollback-safe validation.
 
-## Supported source paths in S30
+## Supported source paths in S30 and S31
 
 - `sqlrite migrate sqlite`
 - `sqlrite migrate libsql`
 - `sqlrite migrate pgvector`
+- `sqlrite migrate qdrant`
+- `sqlrite migrate weaviate`
+- `sqlrite migrate milvus`
 
 ## Preconditions
 
@@ -37,11 +40,22 @@ cargo run -- migrate sqlite \
   --json
 ```
 
-## pgvector or normalized API-first export example
+## pgvector export example
 
 ```bash
 cargo run -- migrate pgvector \
   --input export.jsonl \
+  --target sqlrite.db \
+  --batch-size 512 \
+  --create-indexes \
+  --json
+```
+
+## API-first export example
+
+```bash
+cargo run -- migrate qdrant \
+  --input qdrant_export.jsonl \
   --target sqlrite.db \
   --batch-size 512 \
   --create-indexes \
@@ -54,6 +68,7 @@ cargo run -- migrate pgvector \
 - doctor report shows `integrity_ok=true`
 - doctor report chunk count matches the migration report
 - query path returns known migrated content
+- `SEARCH(...)` query returns known migrated rows for cutover validation
 - optional vector/text indexes were created if requested
 
 ## Rollback

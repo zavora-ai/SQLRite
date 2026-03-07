@@ -378,9 +378,9 @@ Migration guides:
 - `docs/migrations/api_first_vector_db_patterns.md`
 - `docs/runbooks/migration_cli_workflow.md`
 
-## Migration CLI (Sprint 30)
+## Migration CLI (Sprint 30 / Sprint 31)
 
-SQLRite now ships a first-class migration command for SQLite/libSQL schemas and pgvector-style JSONL exports.
+SQLRite now ships a first-class migration command for SQLite/libSQL schemas, pgvector-style JSONL exports, and API-first vector database JSONL exports.
 
 ### Migrate a legacy SQLite corpus
 
@@ -471,6 +471,90 @@ Sample JSON report:
 }
 ```
 
+### Migrate Qdrant, Weaviate, or Milvus exports
+
+Qdrant example:
+
+```bash
+cargo run -- migrate qdrant \
+  --input qdrant_export.jsonl \
+  --target sqlrite.db \
+  --create-indexes \
+  --json
+```
+
+Weaviate example:
+
+```bash
+cargo run -- migrate weaviate \
+  --input weaviate_export.jsonl \
+  --target sqlrite.db \
+  --create-indexes
+```
+
+Milvus example:
+
+```bash
+cargo run -- migrate milvus \
+  --input milvus_export.jsonl \
+  --target sqlrite.db \
+  --create-indexes
+```
+
+Default field mappings are source-specific and can be overridden with:
+
+- `--id-field`
+- `--doc-id-field`
+- `--content-field`
+- `--embedding-field`
+- `--metadata-field`
+- `--source-field`
+- `--doc-metadata-field`
+- `--doc-source-field`
+
+### SQL v2 SEARCH prototype
+
+For concise hybrid retrieval, SQLRite now supports a `SEARCH(...)` SQL rewrite prototype in `sqlrite sql` and `/v1/sql`.
+
+```bash
+cargo run -- sql --db sqlrite.db --execute "
+SELECT chunk_id, doc_id, hybrid_score
+FROM SEARCH(
+       'agent memory',
+       vector('0.95,0.05,0.0'),
+       5,
+       0.65,
+       500,
+       'balanced',
+       '{\"tenant\":\"demo\"}',
+       NULL
+     )
+ORDER BY hybrid_score DESC, chunk_id ASC;"
+```
+
+Sample output:
+
+```json
+[
+  {
+    "chunk_id": "chunk-1",
+    "doc_id": "doc-1",
+    "hybrid_score": 0.8124017715454102
+  }
+]
+```
+
+`SEARCH(...)` arguments:
+
+- `query_text`
+- `query_embedding`
+- `top_k`
+- `alpha`
+- `candidate_limit`
+- `query_profile`
+- `metadata_filters_json`
+- `doc_id`
+
 ### Validate the migrated database
 
 ```bash
@@ -480,17 +564,17 @@ cargo run -- query --db sqlrite.db --text "agent memory" --top-k 5
 
 ### End-to-end validation harness
 
-Run the S30 suite to generate reproducible migration artifacts:
+Run the S31 suite to generate reproducible migration and SQL v2 artifacts:
 
 ```bash
-bash scripts/run-s30-migration-suite.sh
+bash scripts/run-s31-sql-v2-and-api-migrations.sh
 ```
 
 Artifacts:
 
-- `project_plan/reports/s30_migration_suite.log`
-- `project_plan/reports/s30_migration_report.json`
-- `project_plan/reports/s30_benchmark_migration.json`
+- `project_plan/reports/s31_sql_v2_migration.log`
+- `project_plan/reports/s31_sql_v2_migration_report.json`
+- `project_plan/reports/s31_benchmark_search_v2.json`
 
 Run SQL-only conformance for cookbook patterns:
 

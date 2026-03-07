@@ -35,8 +35,9 @@ pub use ingest::{
 };
 pub use mcp::{McpServerConfig, mcp_tools_manifest_document, run_stdio_mcp_server};
 pub use migrate::{
-    MigrationEmbeddingFormat, MigrationReport, PgvectorJsonlMigrationConfig, SqliteMigrationConfig,
-    migrate_pgvector_jsonl, migrate_sqlite,
+    ApiFirstSourceKind, ApiJsonlMigrationConfig, MigrationEmbeddingFormat, MigrationReport,
+    PgvectorJsonlMigrationConfig, SqliteMigrationConfig, migrate_api_jsonl, migrate_pgvector_jsonl,
+    migrate_sqlite,
 };
 pub use ops::{
     BackupPruneReport, BackupSnapshotRecord, HealthReport, backup_file, build_health_report,

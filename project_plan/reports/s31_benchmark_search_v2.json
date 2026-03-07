@@ -1,0 +1,19 @@
+{
+  "generated_unix_ms": 1772862027758,
+  "embedding_model": "fixture_f32le_v1",
+  "dataset_id": "s31_api_first_fixture_v1",
+  "hardware_class": "darwin-arm64-10cpu",
+  "hardware": {
+    "platform": "darwin",
+    "machine": "arm64",
+    "cpu_count": 10
+  },
+  "qdrant_duration_ms": 4.6609169999999995,
+  "qdrant_rows_per_sec": 429.1001,
+  "weaviate_duration_ms": 3.2079169999999997,
+  "weaviate_rows_per_sec": 311.7288,
+  "milvus_duration_ms": 2.903375,
+  "milvus_rows_per_sec": 344.4267,
+  "http_sql_elapsed_ms": 0.18312499999999998,
+  "rerank_row_count": 2
+}

@@ -56,6 +56,13 @@ The format is based on Keep a Changelog.
   - `docs/runbooks/migration_cli_workflow.md`
   - `scripts/run-s30-migration-suite.sh`
   - `.github/workflows/migration-toolchain.yml`
+- API-first migration and SQL v2 workflow:
+  - `sqlrite migrate qdrant`
+  - `sqlrite migrate weaviate`
+  - `sqlrite migrate milvus`
+  - `SEARCH(...)` SQL rewrite prototype in `sqlrite sql` and `/v1/sql`
+  - `scripts/run-s31-sql-v2-and-api-migrations.sh`
+  - `.github/workflows/sql-v2-api-migrations.yml`
 - SQL-only conformance runner:
   - `scripts/run-sql-cookbook-conformance.sh`
 - Sprint 7 evidence artifacts:
@@ -232,6 +239,13 @@ The format is based on Keep a Changelog.
   - `project_plan/reports/s30_migration_suite.log`
   - `project_plan/reports/s30_migration_report.json`
   - `project_plan/reports/s30_benchmark_migration.json`
+- Sprint 31 evidence artifacts:
+  - `project_plan/reports/S31.md`
+  - `project_plan/reports/s31_quality_gates.log`
+  - `project_plan/reports/s31_sql_v2_migration.log`
+  - `project_plan/reports/s31_sql_v2_migration_report.json`
+  - `project_plan/reports/s31_benchmark_search_v2.json`
+  - `project_plan/reports/s31_competitor_gap_analysis.md`
   - `project_plan/reports/s18_observability_smoke.log`
   - `project_plan/reports/s18_benchmark_observability.json`
 - S19 disaster-recovery game-day and soak gate harness:

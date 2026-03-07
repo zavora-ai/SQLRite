@@ -56,6 +56,32 @@ pub struct PgvectorJsonlMigrationConfig {
     pub create_indexes: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApiFirstSourceKind {
+    Qdrant,
+    Weaviate,
+    Milvus,
+}
+
+#[derive(Debug, Clone)]
+pub struct ApiJsonlMigrationConfig {
+    pub source_kind: ApiFirstSourceKind,
+    pub input_path: PathBuf,
+    pub target_path: PathBuf,
+    pub runtime: RuntimeConfig,
+    pub batch_size: usize,
+    pub create_indexes: bool,
+    pub id_field: String,
+    pub doc_id_field: String,
+    pub content_field: String,
+    pub embedding_field: String,
+    pub metadata_field: Option<String>,
+    pub source_field: Option<String>,
+    pub doc_metadata_field: Option<String>,
+    pub doc_source_field: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MigrationReport {
     pub kind: String,
@@ -172,6 +198,99 @@ pub fn migrate_pgvector_jsonl(config: &PgvectorJsonlMigrationConfig) -> Result<M
 
     Ok(MigrationReport {
         kind: "pgvector_jsonl".to_string(),
+        source_path: config.input_path.clone(),
+        target_path: config.target_path.clone(),
+        documents_upserted: docs.len(),
+        chunks_migrated: chunks.len(),
+        batch_size: config.batch_size,
+        embedding_format: "json_array".to_string(),
+        create_indexes: config.create_indexes,
+        vector_index_mode: vector_index_mode_name(config.runtime.vector_index_mode).to_string(),
+        duration_ms: started.elapsed().as_secs_f64() * 1000.0,
+    })
+}
+
+pub fn migrate_api_jsonl(config: &ApiJsonlMigrationConfig) -> Result<MigrationReport> {
+    let started = Instant::now();
+    let db = SqlRite::open_with_config(&config.target_path, config.runtime.clone())?;
+    let payload = fs::read_to_string(&config.input_path)?;
+
+    let mut chunks = Vec::new();
+    let mut documents = HashMap::<String, SourceDocument>::new();
+    for (line_no, line) in payload.lines().enumerate() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let record = serde_json::from_str::<Value>(trimmed).map_err(|error| {
+            SqlRiteError::UnsupportedOperation(format!(
+                "failed to parse jsonl line {}: {}",
+                line_no + 1,
+                error
+            ))
+        })?;
+        let id = extract_required_string_field(&record, &config.id_field)?;
+        let doc_id = extract_required_string_field(&record, &config.doc_id_field)?;
+        let content = extract_required_string_field(&record, &config.content_field)?;
+        let embedding_value = extract_required_field(&record, &config.embedding_field)?;
+        let source = config
+            .source_field
+            .as_deref()
+            .map(|path| extract_optional_string_field(&record, path))
+            .transpose()?
+            .flatten();
+        let doc_source = config
+            .doc_source_field
+            .as_deref()
+            .map(|path| extract_optional_string_field(&record, path))
+            .transpose()?
+            .flatten();
+        let metadata = config
+            .metadata_field
+            .as_deref()
+            .map(|path| extract_optional_json_field(&record, path))
+            .transpose()?
+            .flatten();
+        let doc_metadata = config
+            .doc_metadata_field
+            .as_deref()
+            .map(|path| extract_optional_json_field(&record, path))
+            .transpose()?
+            .flatten();
+        let embedding =
+            parse_embedding_value(embedding_value, MigrationEmbeddingFormat::JsonArray, None)?;
+
+        documents
+            .entry(doc_id.clone())
+            .or_insert_with(|| SourceDocument {
+                id: doc_id.clone(),
+                source: doc_source.clone().or_else(|| source.clone()),
+                metadata: doc_metadata
+                    .clone()
+                    .or_else(|| metadata.clone())
+                    .unwrap_or_else(|| json!({})),
+            });
+        chunks.push(ChunkInput {
+            id,
+            doc_id,
+            content,
+            metadata: normalize_json_value(metadata)?,
+            embedding,
+            source,
+        });
+    }
+
+    let docs = documents.into_values().collect::<Vec<_>>();
+    upsert_documents(&config.target_path, &docs)?;
+    ingest_chunks_in_batches(&db, &chunks, config.batch_size)?;
+    create_indexes_if_requested(
+        &config.target_path,
+        config.runtime.vector_index_mode,
+        config.create_indexes,
+    )?;
+
+    Ok(MigrationReport {
+        kind: api_source_kind_name(config.source_kind).to_string(),
         source_path: config.input_path.clone(),
         target_path: config.target_path.clone(),
         documents_upserted: docs.len(),
@@ -391,6 +510,14 @@ fn vector_index_mode_name(value: VectorIndexMode) -> &'static str {
     }
 }
 
+fn api_source_kind_name(value: ApiFirstSourceKind) -> &'static str {
+    match value {
+        ApiFirstSourceKind::Qdrant => "qdrant_jsonl",
+        ApiFirstSourceKind::Weaviate => "weaviate_jsonl",
+        ApiFirstSourceKind::Milvus => "milvus_jsonl",
+    }
+}
+
 fn sanitize_identifier(value: &str) -> Result<String> {
     if value.is_empty()
         || !value
@@ -423,6 +550,61 @@ fn normalize_json_value(value: Option<Value>) -> Result<Value> {
     }
 }
 
+fn extract_required_field<'a>(value: &'a Value, path: &str) -> Result<&'a Value> {
+    extract_json_path(value, path).ok_or_else(|| {
+        SqlRiteError::UnsupportedOperation(format!("missing required field `{path}`"))
+    })
+}
+
+fn extract_required_string_field(value: &Value, path: &str) -> Result<String> {
+    let field = extract_required_field(value, path)?;
+    match field {
+        Value::String(text) => Ok(text.clone()),
+        Value::Number(number) => Ok(number.to_string()),
+        other => Err(SqlRiteError::UnsupportedOperation(format!(
+            "field `{path}` must be string-compatible, found {other}"
+        ))),
+    }
+}
+
+fn extract_optional_string_field(value: &Value, path: &str) -> Result<Option<String>> {
+    let Some(field) = extract_json_path(value, path) else {
+        return Ok(None);
+    };
+    match field {
+        Value::Null => Ok(None),
+        Value::String(text) => Ok(Some(text.clone())),
+        Value::Number(number) => Ok(Some(number.to_string())),
+        other => Err(SqlRiteError::UnsupportedOperation(format!(
+            "field `{path}` must be string-compatible, found {other}"
+        ))),
+    }
+}
+
+fn extract_optional_json_field(value: &Value, path: &str) -> Result<Option<Value>> {
+    let Some(field) = extract_json_path(value, path) else {
+        return Ok(None);
+    };
+    match field {
+        Value::Null => Ok(None),
+        other => Ok(Some(other.clone())),
+    }
+}
+
+fn extract_json_path<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
+    let mut current = value;
+    for segment in path.split('.') {
+        if segment.is_empty() {
+            return None;
+        }
+        current = match current {
+            Value::Object(map) => map.get(segment)?,
+            _ => return None,
+        };
+    }
+    Some(current)
+}
+
 fn parse_embedding_value(
     value: &Value,
     format: MigrationEmbeddingFormat,
@@ -444,6 +626,18 @@ fn parse_embedding_value(
                 )),
             })
             .collect(),
+        Value::Object(map) => {
+            if let Some((_, inner)) = map
+                .iter()
+                .find(|(_, value)| matches!(value, Value::Array(_)))
+            {
+                parse_embedding_value(inner, format, embedding_dim)
+            } else {
+                Err(SqlRiteError::UnsupportedOperation(
+                    "embedding object must contain at least one array value".to_string(),
+                ))
+            }
+        }
         Value::String(text) => parse_embedding_text(text, format),
         Value::Null => Err(SqlRiteError::UnsupportedOperation(
             "embedding cannot be null".to_string(),
@@ -627,6 +821,44 @@ mod tests {
         let db = SqlRite::open_with_config(target, RuntimeConfig::default())?;
         let results = db.search(crate::SearchRequest::text("pgvector", 1))?;
         assert_eq!(results[0].chunk_id, "p1");
+        Ok(())
+    }
+
+    #[test]
+    fn migrate_api_jsonl_imports_qdrant_shaped_rows() -> Result<()> {
+        let tmp = tempdir()?;
+        let input = tmp.path().join("qdrant.jsonl");
+        let target = tmp.path().join("sqlrite.db");
+        fs::write(
+            &input,
+            concat!(
+                "{\"id\":\"pt-1\",\"payload\":{\"doc_id\":\"doc-1\",\"content\":\"qdrant migrated chunk\",\"source\":\"qdrant/doc-1.md\",\"tenant\":\"acme\"},\"vector\":[0.9,0.1]}\n",
+                "{\"id\":\"pt-2\",\"payload\":{\"doc_id\":\"doc-2\",\"content\":\"qdrant second chunk\",\"source\":\"qdrant/doc-2.md\",\"tenant\":\"acme\"},\"vector\":{\"default\":[0.8,0.2]}}\n"
+            ),
+        )?;
+
+        let report = migrate_api_jsonl(&ApiJsonlMigrationConfig {
+            source_kind: ApiFirstSourceKind::Qdrant,
+            input_path: input.clone(),
+            target_path: target.clone(),
+            runtime: RuntimeConfig::default(),
+            batch_size: 16,
+            create_indexes: false,
+            id_field: "id".to_string(),
+            doc_id_field: "payload.doc_id".to_string(),
+            content_field: "payload.content".to_string(),
+            embedding_field: "vector".to_string(),
+            metadata_field: Some("payload".to_string()),
+            source_field: Some("payload.source".to_string()),
+            doc_metadata_field: Some("payload".to_string()),
+            doc_source_field: Some("payload.source".to_string()),
+        })?;
+
+        assert_eq!(report.kind, "qdrant_jsonl");
+        assert_eq!(report.chunks_migrated, 2);
+        let db = SqlRite::open_with_config(target, RuntimeConfig::default())?;
+        let results = db.search(crate::SearchRequest::text("qdrant migrated", 1))?;
+        assert_eq!(results[0].chunk_id, "pt-1");
         Ok(())
     }
 

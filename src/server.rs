@@ -3347,6 +3347,41 @@ mod tests {
     }
 
     #[test]
+    fn sql_endpoint_executes_search_statement() -> Result<()> {
+        let db_file = NamedTempFile::new().map_err(std::io::Error::other)?;
+        let db = SqlRite::open_with_config(db_file.path(), RuntimeConfig::default())?;
+        db.ingest_chunk(&ChunkInput {
+            id: "search-sql-1".to_string(),
+            doc_id: "doc-1".to_string(),
+            content: "server sql search endpoint".to_string(),
+            embedding: vec![1.0, 0.0],
+            metadata: json!({"tenant": "demo"}),
+            source: Some("docs/search-sql-1.md".to_string()),
+        })?;
+
+        let state = Arc::new(Mutex::new(ControlPlaneState::new(
+            HaRuntimeProfile::default(),
+        )));
+        let body = json!({
+            "statement": "SELECT chunk_id, doc_id, hybrid_score FROM SEARCH('server sql', vector('1,0'), 3, 0.65, 500, 'balanced', NULL, NULL) ORDER BY hybrid_score DESC, chunk_id ASC;"
+        })
+        .to_string();
+        let request = make_request("POST", "/v1/sql", Some(&body), None);
+
+        let (status, _content_type, body) = build_response(
+            &db,
+            db_file.path(),
+            DurabilityProfile::Balanced,
+            &ServerConfig::default(),
+            &state,
+            &request,
+        )?;
+        assert_eq!(status, 200, "{body}");
+        assert!(body.contains("\"chunk_id\":\"search-sql-1\""));
+        Ok(())
+    }
+
+    #[test]
     fn openapi_endpoint_exposes_query_and_grpc_paths() -> Result<()> {
         let db = SqlRite::open_in_memory_with_config(RuntimeConfig::default())?;
         let state = Arc::new(Mutex::new(ControlPlaneState::new(
