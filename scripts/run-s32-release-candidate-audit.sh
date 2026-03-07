@@ -373,7 +373,7 @@ def main():
     risk_register_path.write_text("\n".join(risk_lines) + "\n", encoding="utf-8")
 
     release_lines = [
-        "# SQLRite v1.0.0-rc1 Release Notes Draft",
+        "# SQLRite v1.0.0 Release Notes",
         "",
         "## Highlights",
         "",

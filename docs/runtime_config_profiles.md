@@ -74,7 +74,7 @@ Configuration:
 
 ## Stability Guarantees
 
-1. Option names (`--profile`, `--index-mode`) are stable in v0.x and carried to v1.0.
+1. Option names (`--profile`, `--index-mode`) are stable in `v1.x`; breaking changes require major-version policy.
 2. Profile semantics are documented release-to-release; any change requires release note callout.
 3. Default profile remains `balanced` unless major-version policy says otherwise.
 

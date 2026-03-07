@@ -30,7 +30,7 @@ Downloads release artifacts from GitHub Releases and installs `sqlrite` to `~/.l
 Example:
 
 ```bash
-bash scripts/sqlrite-install.sh --version 0.5.0
+bash scripts/sqlrite-install.sh --version 1.0.0
 ```
 
 ### Release archive creation
@@ -40,7 +40,7 @@ bash scripts/sqlrite-install.sh --version 0.5.0
 Example:
 
 ```bash
-bash scripts/create-release-archive.sh --version 0.5.0
+bash scripts/create-release-archive.sh --version 1.0.0
 ```
 
 ### Linux package generation (`.deb` / `.rpm`)
@@ -51,7 +51,7 @@ bash scripts/create-release-archive.sh --version 0.5.0
 Example:
 
 ```bash
-bash scripts/package-linux.sh --version 0.5.0
+bash scripts/package-linux.sh --version 1.0.0
 ```
 
 If `nfpm` is missing, the script still produces tar archives and skips deb/rpm output.
@@ -65,14 +65,14 @@ Example:
 
 ```bash
 bash scripts/generate-homebrew-formula.sh \
-  --version 0.5.0 \
-  --macos-arm64-url https://github.com/zavora-ai/SQLRite/releases/download/v0.5.0/sqlrite-v0.5.0-aarch64-apple-darwin.tar.gz \
+  --version 1.0.0 \
+  --macos-arm64-url https://github.com/zavora-ai/SQLRite/releases/download/v1.0.0/sqlrite-v1.0.0-aarch64-apple-darwin.tar.gz \
   --macos-arm64-sha <sha> \
-  --macos-amd64-url https://github.com/zavora-ai/SQLRite/releases/download/v0.5.0/sqlrite-v0.5.0-x86_64-apple-darwin.tar.gz \
+  --macos-amd64-url https://github.com/zavora-ai/SQLRite/releases/download/v1.0.0/sqlrite-v1.0.0-x86_64-apple-darwin.tar.gz \
   --macos-amd64-sha <sha> \
-  --linux-arm64-url https://github.com/zavora-ai/SQLRite/releases/download/v0.5.0/sqlrite-v0.5.0-aarch64-unknown-linux-gnu.tar.gz \
+  --linux-arm64-url https://github.com/zavora-ai/SQLRite/releases/download/v1.0.0/sqlrite-v1.0.0-aarch64-unknown-linux-gnu.tar.gz \
   --linux-arm64-sha <sha> \
-  --linux-amd64-url https://github.com/zavora-ai/SQLRite/releases/download/v0.5.0/sqlrite-v0.5.0-x86_64-unknown-linux-gnu.tar.gz \
+  --linux-amd64-url https://github.com/zavora-ai/SQLRite/releases/download/v1.0.0/sqlrite-v1.0.0-x86_64-unknown-linux-gnu.tar.gz \
   --linux-amd64-sha <sha>
 ```
 
@@ -85,10 +85,10 @@ Example:
 
 ```bash
 bash scripts/generate-winget-manifests.sh \
-  --version 0.5.0 \
-  --windows-amd64-url https://github.com/zavora-ai/SQLRite/releases/download/v0.5.0/sqlrite-v0.5.0-x86_64-pc-windows-msvc.tar.gz \
+  --version 1.0.0 \
+  --windows-amd64-url https://github.com/zavora-ai/SQLRite/releases/download/v1.0.0/sqlrite-v1.0.0-x86_64-pc-windows-msvc.tar.gz \
   --windows-amd64-sha <sha> \
-  --windows-arm64-url https://github.com/zavora-ai/SQLRite/releases/download/v0.5.0/sqlrite-v0.5.0-aarch64-pc-windows-msvc.tar.gz \
+  --windows-arm64-url https://github.com/zavora-ai/SQLRite/releases/download/v1.0.0/sqlrite-v1.0.0-aarch64-pc-windows-msvc.tar.gz \
   --windows-arm64-sha <sha>
 ```
 

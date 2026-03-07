@@ -6,6 +6,8 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-03-07
+
 ### Added
 
 - Unified `sqlrite` umbrella CLI with subcommands:

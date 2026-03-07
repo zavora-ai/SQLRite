@@ -5,7 +5,7 @@ Date: March 1, 2026
 
 ## Purpose
 
-Define the reference high-availability profile for SQLRite server mode (`v0.8.0` target) with:
+Define the reference high-availability profile for SQLRite server mode as carried into the `v1.0.0` GA release, with:
 
 1. multi-node topology primitives
 2. replication and failover configuration surface

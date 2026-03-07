@@ -1,4 +1,4 @@
-# SQLRite v1.0.0-rc1 Release Notes Draft
+# SQLRite v1.0.0 Release Notes
 
 ## Highlights
 
@@ -11,8 +11,8 @@
 - release_candidate_pass: `true`
 - open_p0_count: `0`
 - open_p1_count: `0`
-- quick_qps: `166.73`
-- 10k_p95_ms: `12.3622`
+- quick_qps: `162.57`
+- 10k_p95_ms: `11.4753`
 - availability_percent: `100.00`
 - observed_rpo_seconds: `0.0050`
 

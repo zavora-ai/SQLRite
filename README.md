@@ -136,7 +136,7 @@ bash scripts/sqlrite-global-update.sh --quick
 Install from GitHub Release assets (curl-friendly):
 
 ```bash
-bash scripts/sqlrite-install.sh --version 0.5.0
+bash scripts/sqlrite-install.sh --version 1.0.0
 ```
 
 ## Quickstart Gate (Sprint 3)
@@ -644,6 +644,7 @@ This runs:
 
 ### Generated S33 artifacts
 
+- `docs/releases/v1.0.0.md`
 - `project_plan/reports/s33_quality_gates.log`
 - `project_plan/reports/s33_ga_checklist.md`
 - `project_plan/reports/s33_benchmark_reliability_report.md`
@@ -1012,7 +1013,7 @@ Sample output:
 
 ```text
 sqlrite doctor
-- version=0.1.0
+- version=1.0.0
 - supported_profiles=balanced,durable,fast_unsafe
 - supported_index_modes=brute_force,lsh_ann,hnsw_baseline,disabled
 - supported_vector_storage=f32,f16,int8
@@ -1328,7 +1329,7 @@ Sample output (`health`):
 ```json
 {
   "status": "ok",
-  "version": "0.1.0"
+  "version": "1.0.0"
 }
 ```
 
@@ -2052,13 +2053,13 @@ fn demo() -> Result<()> {
 Build release archives:
 
 ```bash
-bash scripts/create-release-archive.sh --version 0.5.0
+bash scripts/create-release-archive.sh --version 1.0.0
 ```
 
 Build Linux packages (`.deb`, `.rpm`) when `nfpm` is installed:
 
 ```bash
-bash scripts/package-linux.sh --version 0.5.0
+bash scripts/package-linux.sh --version 1.0.0
 ```
 
 Build Docker image:

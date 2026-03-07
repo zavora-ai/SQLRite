@@ -10,8 +10,8 @@ sqlite_ok=True
 libsql_alias_ok=True
 pgvector_ok=True
 hardware_class=darwin-arm64-10cpu
-sqlite_rows_per_sec=412.0349
-libsql_alias_rows_per_sec=442.837
-pgvector_rows_per_sec=630.6496
+sqlite_rows_per_sec=322.0482
+libsql_alias_rows_per_sec=447.0439
+pgvector_rows_per_sec=701.9699
 pass=True
 [s30-migration-suite-complete] report=project_plan/reports/s30_migration_report.json benchmark=project_plan/reports/s30_benchmark_migration.json quality_log=project_plan/reports/s30_quality_gates.log

@@ -1,5 +1,5 @@
 {
-  "generated_unix_ms": 1772864943471,
+  "generated_unix_ms": 1772865493327,
   "embedding_model": "fixture_f32le_v1",
   "dataset_id": "s30_migration_fixture_v1",
   "hardware_class": "darwin-arm64-10cpu",
@@ -19,11 +19,11 @@
       "embedding_format": "blob_f32le",
       "create_indexes": true,
       "vector_index_mode": "hnsw_baseline",
-      "duration_ms": 4.853958
+      "duration_ms": 6.210249999999999
     },
     "doctor_chunk_count": 2,
     "query_hit": true,
-    "rows_per_sec": 412.0349,
+    "rows_per_sec": 322.0482,
     "ok": true
   },
   "libsql_alias": {
@@ -37,11 +37,11 @@
       "embedding_format": "csv",
       "create_indexes": false,
       "vector_index_mode": "hnsw_baseline",
-      "duration_ms": 2.2581670000000003
+      "duration_ms": 2.236917
     },
     "doctor_chunk_count": 1,
     "query_hit": true,
-    "rows_per_sec": 442.837,
+    "rows_per_sec": 447.0439,
     "ok": true
   },
   "pgvector": {
@@ -55,11 +55,11 @@
       "embedding_format": "json_array",
       "create_indexes": true,
       "vector_index_mode": "hnsw_baseline",
-      "duration_ms": 3.171333
+      "duration_ms": 2.849125
     },
     "doctor_chunk_count": 2,
     "query_hit": true,
-    "rows_per_sec": 630.6496,
+    "rows_per_sec": 701.9699,
     "ok": true
   },
   "pass": true

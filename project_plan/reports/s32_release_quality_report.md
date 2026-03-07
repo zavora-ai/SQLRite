@@ -22,12 +22,12 @@ Generated: `2026-03-07`
 
 ## Performance And Efficiency
 
-- quick_qps: `166.73`
-- quick_p50_ms: `5.9623`
-- quick_p95_ms: `6.2084`
-- quick_p99_ms: `6.2944`
-- 10k_qps: `87.52`
-- 10k_p95_ms: `12.3622`
+- quick_qps: `162.57`
+- quick_p50_ms: `6.1107`
+- quick_p95_ms: `6.4154`
+- quick_p99_ms: `6.6484`
+- 10k_qps: `89.58`
+- 10k_p95_ms: `11.4753`
 - 10k_top1_hit_rate: `1.0000`
 - 10k_approx_working_set_bytes: `11300140`
 - 10k_vector_index_estimated_memory_bytes: `5660000`
@@ -42,9 +42,9 @@ Generated: `2026-03-07`
 
 ## Throughput By Concurrency
 
-- concurrency 1: qps=`165.25`, p95_ms=`6.1662`
-- concurrency 2: qps=`76.55`, p95_ms=`6.4101`
-- concurrency 4: qps=`41.18`, p95_ms=`11.9033`
+- concurrency 1: qps=`161.20`, p95_ms=`6.4437`
+- concurrency 2: qps=`76.60`, p95_ms=`6.9354`
+- concurrency 4: qps=`44.17`, p95_ms=`7.5024`
 
 ## Operational Resilience
 

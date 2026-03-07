@@ -1,5 +1,5 @@
 {
-  "generated_unix_ms": 1772864943471,
+  "generated_unix_ms": 1772865493327,
   "embedding_model": "fixture_f32le_v1",
   "dataset_id": "s30_migration_fixture_v1",
   "hardware_class": "darwin-arm64-10cpu",
@@ -8,10 +8,10 @@
     "machine": "arm64",
     "cpu_count": 10
   },
-  "sqlite_duration_ms": 4.853958,
-  "sqlite_rows_per_sec": 412.0349,
-  "libsql_alias_duration_ms": 2.2581670000000003,
-  "libsql_alias_rows_per_sec": 442.837,
-  "pgvector_duration_ms": 3.171333,
-  "pgvector_rows_per_sec": 630.6496
+  "sqlite_duration_ms": 6.210249999999999,
+  "sqlite_rows_per_sec": 322.0482,
+  "libsql_alias_duration_ms": 2.236917,
+  "libsql_alias_rows_per_sec": 447.0439,
+  "pgvector_duration_ms": 2.849125,
+  "pgvector_rows_per_sec": 701.9699
 }

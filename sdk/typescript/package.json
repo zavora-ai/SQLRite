@@ -1,6 +1,6 @@
 {
   "name": "@sqlrite/sdk",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "TypeScript SDK for SQLRite query and SQL APIs",
   "type": "module",
   "main": "dist/index.js",

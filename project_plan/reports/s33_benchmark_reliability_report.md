@@ -5,10 +5,10 @@ Host target archive: `dist/sqlrite-v1.0.0-aarch64-apple-darwin.tar.gz`
 
 ## Benchmark Publication
 
-- quick profile weighted/brute_force qps: `166.73`
-- quick profile weighted/brute_force p95 ms: `6.2084`
-- 10k profile weighted/brute_force qps: `87.52`
-- 10k profile weighted/brute_force p95 ms: `12.3622`
+- quick profile weighted/brute_force qps: `162.57`
+- quick profile weighted/brute_force p95 ms: `6.4154`
+- 10k profile weighted/brute_force qps: `89.58`
+- 10k profile weighted/brute_force p95 ms: `11.4753`
 - 10k approx working set bytes: `11300140`
 - 10k vector index estimated memory bytes: `5660000`
 

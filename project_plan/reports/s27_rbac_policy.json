@@ -4,14 +4,14 @@
       "query",
       "ingest"
     ],
-    "reader": [
-      "query"
-    ],
     "admin": [
       "query",
       "ingest",
       "sql_admin",
       "delete_tenant"
+    ],
+    "reader": [
+      "query"
     ],
     "tenant_admin": [
       "query",

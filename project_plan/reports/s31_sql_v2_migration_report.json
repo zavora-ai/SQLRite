@@ -1,5 +1,5 @@
 {
-  "generated_unix_ms": 1772864945309,
+  "generated_unix_ms": 1772865495160,
   "embedding_model": "fixture_f32le_v1",
   "dataset_id": "s31_api_first_fixture_v1",
   "hardware_class": "darwin-arm64-10cpu",
@@ -14,9 +14,9 @@
   "cli_search_ok": true,
   "http_sql_ok": true,
   "rerank_hook_ok": true,
-  "qdrant_rows_per_sec": 174.1137,
-  "weaviate_rows_per_sec": 377.8932,
-  "milvus_rows_per_sec": 209.1175,
-  "http_sql_elapsed_ms": 0.189083,
+  "qdrant_rows_per_sec": 320.5856,
+  "weaviate_rows_per_sec": 374.2049,
+  "milvus_rows_per_sec": 336.2993,
+  "http_sql_elapsed_ms": 0.225708,
   "pass": true
 }

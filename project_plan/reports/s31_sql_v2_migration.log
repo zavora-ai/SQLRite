@@ -17,7 +17,7 @@ milvus_ok=True
 cli_search_ok=True
 http_sql_ok=True
 rerank_hook_ok=True
-qdrant_rows_per_sec=174.1137
-http_sql_elapsed_ms=0.189083
+qdrant_rows_per_sec=320.5856
+http_sql_elapsed_ms=0.225708
 pass=True
 [s31-complete] report=project_plan/reports/s31_sql_v2_migration_report.json benchmark=project_plan/reports/s31_benchmark_search_v2.json gap=project_plan/reports/s31_competitor_gap_analysis.md

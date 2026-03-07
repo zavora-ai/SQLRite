@@ -1,1 +1,1 @@
-{"unix_ms":1772864941617,"actor_id":"reader-1","tenant_id":"demo","operation":"query","allowed":true,"detail":{"kind":"rerank_hook","path":"/v1/rerank-hook","row_count":1}}
+{"unix_ms":1772865491482,"actor_id":"reader-1","tenant_id":"demo","operation":"query","allowed":true,"detail":{"kind":"rerank_hook","path":"/v1/rerank-hook","row_count":1}}
