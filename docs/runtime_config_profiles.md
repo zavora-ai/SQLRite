@@ -236,3 +236,16 @@ S25 reference integration and phase-E gate additions:
 - `scripts/run-s25-release-gate-review.sh`
 5. Reference integration CI validation:
 - `.github/workflows/agent-integrations.yml`
+
+S26 API-freeze and edge-story additions:
+
+1. Frozen API contract manifest:
+- `docs/contracts/api_freeze_v1.json`
+2. Compatibility contract suite:
+- `scripts/run-s26-api-compat-suite.sh`
+3. API compatibility CI workflow:
+- `.github/workflows/api-compatibility.yml`
+4. Edge/WASM read-query architecture RFC:
+- `docs/rfcs/0002-edge-read-query-wasm.md`
+5. API freeze operation runbook:
+- `docs/runbooks/api_compatibility_freeze.md`

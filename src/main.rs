@@ -4453,6 +4453,49 @@ mod tests {
     }
 
     #[test]
+    fn usage_contract_lists_frozen_commands() {
+        let help = usage();
+        for command in [
+            "init",
+            "sql",
+            "ingest",
+            "query",
+            "quickstart",
+            "serve",
+            "grpc",
+            "mcp",
+            "backup",
+            "compact",
+            "benchmark",
+            "doctor",
+        ] {
+            assert!(
+                help.contains(&format!("\n  {command}")),
+                "expected command in usage: {command}"
+            );
+        }
+    }
+
+    #[test]
+    fn usage_contract_lists_frozen_env_overrides() {
+        let help = usage();
+        for env_name in [
+            "SQLRITE_VECTOR_STORAGE",
+            "SQLRITE_ANN_MIN_CANDIDATES",
+            "SQLRITE_ANN_MAX_HAMMING_RADIUS",
+            "SQLRITE_ANN_MAX_CANDIDATE_MULTIPLIER",
+            "SQLRITE_ENABLE_ANN_PERSISTENCE",
+            "SQLRITE_SQLITE_MMAP_SIZE",
+            "SQLRITE_SQLITE_CACHE_SIZE_KIB",
+        ] {
+            assert!(
+                help.contains(env_name),
+                "expected env override in usage: {env_name}"
+            );
+        }
+    }
+
+    #[test]
     fn compact_args_defaults_to_safe_maintenance_actions() -> Result<(), Box<dyn std::error::Error>>
     {
         let parsed = parse_compact_args(&[]).map_err(std::io::Error::other)?;

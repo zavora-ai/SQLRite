@@ -1,0 +1,23 @@
+name: API Compatibility
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  api-compatibility:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Run S26 API compatibility suite
+        shell: bash
+        run: bash scripts/run-s26-api-compat-suite.sh
+      - name: Upload S26 compatibility artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: s26-api-compatibility
+          path: |
+            project_plan/reports/s26_api_compatibility.log
+            project_plan/reports/s26_api_current_manifest.json
+            project_plan/reports/s26_api_compatibility_report.json

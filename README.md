@@ -1229,6 +1229,35 @@ Artifacts produced by S25 harnesses:
 - `project_plan/reports/s25_agent_memory_setup.json`
 - `project_plan/reports/s25_release_gate_review.md`
 
+## API Freeze and Edge Story (Sprint 26)
+
+Frozen v1 API contract manifest:
+
+```bash
+cat docs/contracts/api_freeze_v1.json
+```
+
+Compatibility suite (fails on contract drift):
+
+```bash
+bash scripts/run-s26-api-compat-suite.sh
+```
+
+Edge/WASM read-query design RFC:
+
+- `docs/rfcs/0002-edge-read-query-wasm.md`
+
+API freeze runbook:
+
+- `docs/runbooks/api_compatibility_freeze.md`
+
+Artifacts produced by S26 harnesses:
+
+- `project_plan/reports/s26_api_compatibility.log`
+- `project_plan/reports/s26_api_current_manifest.json`
+- `project_plan/reports/s26_api_compatibility_report.json`
+- `project_plan/reports/s26_benchmark_api_freeze.json`
+
 Reproducible S16 smoke harness:
 
 ```bash

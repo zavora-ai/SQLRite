@@ -299,6 +299,19 @@ The format is based on Keep a Changelog.
   - `project_plan/reports/s25_agent_memory_setup.json`
   - `project_plan/reports/s25_benchmark_reference_integrations.json`
   - `project_plan/reports/s25_release_gate_review.md`
+- S26 API freeze and compatibility baseline:
+  - frozen manifest: `docs/contracts/api_freeze_v1.json`
+  - compatibility suite: `scripts/run-s26-api-compat-suite.sh`
+  - API compatibility CI workflow: `.github/workflows/api-compatibility.yml`
+  - edge/WASM RFC: `docs/rfcs/0002-edge-read-query-wasm.md`
+  - runbook: `docs/runbooks/api_compatibility_freeze.md`
+- Sprint 26 evidence artifacts:
+  - `project_plan/reports/S26.md`
+  - `project_plan/reports/s26_quality_gates.log`
+  - `project_plan/reports/s26_api_compatibility.log`
+  - `project_plan/reports/s26_api_current_manifest.json`
+  - `project_plan/reports/s26_api_compatibility_report.json`
+  - `project_plan/reports/s26_benchmark_api_freeze.json`
 
 ### Changed
 
