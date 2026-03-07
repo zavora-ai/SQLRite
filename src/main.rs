@@ -6,13 +6,13 @@ use serde::Serialize;
 use serde_json::{Map, Value, json};
 use sqlrite::{
     BenchmarkConfig, ChunkInput, CompactionOptions, DurabilityProfile, FailoverMode,
-    FusionStrategy, GrpcServerConfig, HaRuntimeProfile, McpServerConfig, RecoveryConfig,
-    ReplicationConfig, RuntimeConfig, SearchRequest, ServerConfig, ServerRole, SqlRite,
-    VectorIndexMode, VectorStorageKind, backup_file, build_health_report, create_backup_snapshot,
-    list_backup_snapshots, mcp_tools_manifest_document, prune_backup_snapshots,
-    restore_backup_file, restore_backup_file_verified, run_benchmark, run_grpc_server,
-    run_stdio_mcp_server, select_backup_snapshot_for_time, serve_health_endpoints,
-    verify_backup_file,
+    FusionStrategy, GrpcServerConfig, HaRuntimeProfile, McpServerConfig, RbacPolicy,
+    RecoveryConfig, ReplicationConfig, RuntimeConfig, SearchRequest, ServerConfig, ServerRole,
+    ServerSecurityConfig, SqlRite, VectorIndexMode, VectorStorageKind, backup_file,
+    build_health_report, create_backup_snapshot, list_backup_snapshots,
+    mcp_tools_manifest_document, prune_backup_snapshots, restore_backup_file,
+    restore_backup_file_verified, run_benchmark, run_grpc_server, run_stdio_mcp_server,
+    select_backup_snapshot_for_time, serve_health_endpoints, verify_backup_file,
 };
 use std::collections::{HashMap, HashSet};
 use std::env;
@@ -1043,6 +1043,10 @@ struct ServeArgs {
     pitr_retention_seconds: u64,
     control_token: Option<String>,
     enable_sql_endpoint: bool,
+    secure_defaults: bool,
+    require_auth_context: bool,
+    authz_policy_path: Option<PathBuf>,
+    audit_log_path: Option<PathBuf>,
 }
 
 fn cmd_serve(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
@@ -1081,14 +1085,32 @@ fn cmd_serve(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
 
     println!("starting SQLRite server on {}", args.bind_addr);
     println!(
-        "ha profile: enabled={} role={:?} cluster={} node={} peers={} sql_endpoint={}",
+        "ha profile: enabled={} role={:?} cluster={} node={} peers={} sql_endpoint={} security_enabled={}",
         ha_profile.replication.enabled,
         ha_profile.replication.role,
         ha_profile.replication.cluster_id,
         ha_profile.replication.node_id,
         ha_profile.replication.peers.len(),
-        args.enable_sql_endpoint
+        args.enable_sql_endpoint,
+        args.secure_defaults || args.require_auth_context || args.authz_policy_path.is_some()
     );
+    let security_policy = if let Some(path) = &args.authz_policy_path {
+        Some(RbacPolicy::load_from_json_file(path)?)
+    } else if args.secure_defaults {
+        Some(RbacPolicy::default())
+    } else {
+        None
+    };
+    let security = ServerSecurityConfig {
+        secure_defaults: args.secure_defaults,
+        require_auth_context: args.require_auth_context || args.secure_defaults,
+        policy: security_policy,
+        audit_log_path: args.audit_log_path.clone().or_else(|| {
+            args.secure_defaults
+                .then(|| PathBuf::from(".sqlrite/audit/server_audit.jsonl"))
+        }),
+        ..ServerSecurityConfig::default()
+    };
     serve_health_endpoints(
         args.db_path,
         runtime_config(args.profile, args.index_mode),
@@ -1097,6 +1119,7 @@ fn cmd_serve(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
             ha_profile,
             control_api_token: args.control_token,
             enable_sql_endpoint: args.enable_sql_endpoint,
+            security,
         },
     )
     .map_err(|error| error.into())
@@ -1123,6 +1146,10 @@ fn parse_serve_args(args: &[String]) -> Result<ServeArgs, String> {
         pitr_retention_seconds: 86_400,
         control_token: None,
         enable_sql_endpoint: true,
+        secure_defaults: false,
+        require_auth_context: false,
+        authz_policy_path: None,
+        audit_log_path: None,
     };
 
     let mut i = 0;
@@ -1205,12 +1232,26 @@ fn parse_serve_args(args: &[String]) -> Result<ServeArgs, String> {
             "--disable-sql-endpoint" => {
                 out.enable_sql_endpoint = false;
             }
+            "--secure-defaults" => {
+                out.secure_defaults = true;
+            }
+            "--require-auth-context" => {
+                out.require_auth_context = true;
+            }
+            "--authz-policy" => {
+                i += 1;
+                out.authz_policy_path = Some(PathBuf::from(parse_string(args, i, "--authz-policy")?));
+            }
+            "--audit-log" => {
+                i += 1;
+                out.audit_log_path = Some(PathBuf::from(parse_string(args, i, "--audit-log")?));
+            }
             "--help" | "-h" => {
-                return Err("usage: sqlrite serve [--db PATH] [--bind HOST:PORT] [--profile balanced|durable|fast_unsafe] [--index-mode brute_force|lsh_ann|hnsw_baseline|disabled] [--ha-role standalone|primary|replica] [--cluster-id ID] [--node-id ID] [--advertise HOST:PORT] [--peer HOST:PORT]... [--sync-ack-quorum N] [--heartbeat-ms N] [--election-timeout-ms N] [--max-replication-lag-ms N] [--failover manual|automatic] [--backup-dir DIR] [--snapshot-interval-s N] [--pitr-retention-s N] [--control-token TOKEN] [--disable-sql-endpoint]".to_string())
+                return Err("usage: sqlrite serve [--db PATH] [--bind HOST:PORT] [--profile balanced|durable|fast_unsafe] [--index-mode brute_force|lsh_ann|hnsw_baseline|disabled] [--ha-role standalone|primary|replica] [--cluster-id ID] [--node-id ID] [--advertise HOST:PORT] [--peer HOST:PORT]... [--sync-ack-quorum N] [--heartbeat-ms N] [--election-timeout-ms N] [--max-replication-lag-ms N] [--failover manual|automatic] [--backup-dir DIR] [--snapshot-interval-s N] [--pitr-retention-s N] [--control-token TOKEN] [--disable-sql-endpoint] [--secure-defaults] [--require-auth-context] [--authz-policy PATH] [--audit-log PATH]".to_string())
             }
             other => {
                 return Err(format!(
-                    "unknown argument `{other}`\nusage: sqlrite serve [--db PATH] [--bind HOST:PORT] [--profile balanced|durable|fast_unsafe] [--index-mode brute_force|lsh_ann|hnsw_baseline|disabled] [--ha-role standalone|primary|replica] [--cluster-id ID] [--node-id ID] [--advertise HOST:PORT] [--peer HOST:PORT]... [--sync-ack-quorum N] [--heartbeat-ms N] [--election-timeout-ms N] [--max-replication-lag-ms N] [--failover manual|automatic] [--backup-dir DIR] [--snapshot-interval-s N] [--pitr-retention-s N] [--control-token TOKEN] [--disable-sql-endpoint]"
+                    "unknown argument `{other}`\nusage: sqlrite serve [--db PATH] [--bind HOST:PORT] [--profile balanced|durable|fast_unsafe] [--index-mode brute_force|lsh_ann|hnsw_baseline|disabled] [--ha-role standalone|primary|replica] [--cluster-id ID] [--node-id ID] [--advertise HOST:PORT] [--peer HOST:PORT]... [--sync-ack-quorum N] [--heartbeat-ms N] [--election-timeout-ms N] [--max-replication-lag-ms N] [--failover manual|automatic] [--backup-dir DIR] [--snapshot-interval-s N] [--pitr-retention-s N] [--control-token TOKEN] [--disable-sql-endpoint] [--secure-defaults] [--require-auth-context] [--authz-policy PATH] [--audit-log PATH]"
                 ))
             }
         }
@@ -4378,7 +4419,7 @@ fn sql_value_to_json(value: ValueRef<'_>) -> Value {
 }
 
 fn usage() -> &'static str {
-    "sqlrite unified CLI\n\nusage:\n  sqlrite <command> [options]\n\ncommands:\n  init       Create/open a SQLRite database and apply runtime profile\n  sql        Execute SQL or enter interactive SQL shell\n  ingest     Ingest a single chunk directly from CLI flags\n  query      Run text/vector/hybrid retrieval query\n  quickstart Run init->query UX flow with telemetry/gates\n  serve      Start server (health/readiness/metrics + HA control plane + SQL API)\n  grpc       Start native gRPC QueryService endpoint\n  mcp        Start MCP stdio tool server or print MCP manifest\n  backup     Create, verify, snapshot, restore, PITR-restore, or prune backups\n  compact    Run ingestion-compaction maintenance workflow\n  benchmark  Run synthetic retrieval benchmark\n  doctor     Run environment and database health checks\n\nenv overrides:\n  SQLRITE_VECTOR_STORAGE=f32|f16|int8\n  SQLRITE_ANN_MIN_CANDIDATES=<int>\n  SQLRITE_ANN_MAX_HAMMING_RADIUS=<int>\n  SQLRITE_ANN_MAX_CANDIDATE_MULTIPLIER=<int>\n  SQLRITE_ENABLE_ANN_PERSISTENCE=true|false\n  SQLRITE_SQLITE_MMAP_SIZE=<bytes>\n  SQLRITE_SQLITE_CACHE_SIZE_KIB=<kib>\n\nexamples:\n  sqlrite init --db sqlrite_demo.db --seed-demo\n  sqlrite quickstart --db sqlrite_demo.db --runs 5 --max-median-ms 180000 --min-success-rate 0.95\n  sqlrite query --db sqlrite_demo.db --text \"agents local memory\" --top-k 3\n  sqlrite grpc --db sqlrite_demo.db --bind 127.0.0.1:50051\n  sqlrite mcp --db sqlrite_demo.db --print-manifest\n  sqlrite mcp --db sqlrite_demo.db --auth-token dev-token\n  sqlrite backup snapshot --source sqlrite_demo.db --backup-dir ./backups --note pre_release\n  sqlrite backup pitr-restore --backup-dir ./backups --target-unix-ms 1772000000000 --dest restored.db --verify\n  sqlrite compact --db sqlrite_demo.db --json\n  sqlrite doctor --db sqlrite_demo.db --json\n  sqlrite sql --db sqlrite_demo.db\n  sqlrite sql --db sqlrite_demo.db --execute \"SELECT id, doc_id FROM chunks LIMIT 3;\""
+    "sqlrite unified CLI\n\nusage:\n  sqlrite <command> [options]\n\ncommands:\n  init       Create/open a SQLRite database and apply runtime profile\n  sql        Execute SQL or enter interactive SQL shell\n  ingest     Ingest a single chunk directly from CLI flags\n  query      Run text/vector/hybrid retrieval query\n  quickstart Run init->query UX flow with telemetry/gates\n  serve      Start server (health/readiness/metrics + HA control plane + SQL API)\n  grpc       Start native gRPC QueryService endpoint\n  mcp        Start MCP stdio tool server or print MCP manifest\n  backup     Create, verify, snapshot, restore, PITR-restore, or prune backups\n  compact    Run ingestion-compaction maintenance workflow\n  benchmark  Run synthetic retrieval benchmark\n  doctor     Run environment and database health checks\n\nenv overrides:\n  SQLRITE_VECTOR_STORAGE=f32|f16|int8\n  SQLRITE_ANN_MIN_CANDIDATES=<int>\n  SQLRITE_ANN_MAX_HAMMING_RADIUS=<int>\n  SQLRITE_ANN_MAX_CANDIDATE_MULTIPLIER=<int>\n  SQLRITE_ENABLE_ANN_PERSISTENCE=true|false\n  SQLRITE_SQLITE_MMAP_SIZE=<bytes>\n  SQLRITE_SQLITE_CACHE_SIZE_KIB=<kib>\n\nexamples:\n  sqlrite init --db sqlrite_demo.db --seed-demo\n  sqlrite quickstart --db sqlrite_demo.db --runs 5 --max-median-ms 180000 --min-success-rate 0.95\n  sqlrite query --db sqlrite_demo.db --text \"agents local memory\" --top-k 3\n  sqlrite serve --db sqlrite_demo.db --secure-defaults --authz-policy .sqlrite/rbac-policy.json --audit-log .sqlrite/audit/server_audit.jsonl\n  sqlrite grpc --db sqlrite_demo.db --bind 127.0.0.1:50051\n  sqlrite mcp --db sqlrite_demo.db --print-manifest\n  sqlrite mcp --db sqlrite_demo.db --auth-token dev-token\n  sqlrite backup snapshot --source sqlrite_demo.db --backup-dir ./backups --note pre_release\n  sqlrite backup pitr-restore --backup-dir ./backups --target-unix-ms 1772000000000 --dest restored.db --verify\n  sqlrite compact --db sqlrite_demo.db --json\n  sqlrite doctor --db sqlrite_demo.db --json\n  sqlrite sql --db sqlrite_demo.db\n  sqlrite sql --db sqlrite_demo.db --execute \"SELECT id, doc_id FROM chunks LIMIT 3;\""
 }
 
 #[cfg(test)]
@@ -4558,6 +4599,8 @@ mod tests {
         assert_eq!(parsed.cluster_id, "local-cluster");
         assert!(parsed.peers.is_empty());
         assert!(parsed.enable_sql_endpoint);
+        assert!(!parsed.secure_defaults);
+        assert!(!parsed.require_auth_context);
         Ok(())
     }
 
@@ -4579,6 +4622,11 @@ mod tests {
             "--failover".to_string(),
             "automatic".to_string(),
             "--disable-sql-endpoint".to_string(),
+            "--secure-defaults".to_string(),
+            "--authz-policy".to_string(),
+            "policy.json".to_string(),
+            "--audit-log".to_string(),
+            "audit.jsonl".to_string(),
         ])
         .map_err(std::io::Error::other)?;
 
@@ -4589,6 +4637,9 @@ mod tests {
         assert_eq!(parsed.sync_ack_quorum, 2);
         assert_eq!(parsed.failover_mode, FailoverMode::Automatic);
         assert!(!parsed.enable_sql_endpoint);
+        assert!(parsed.secure_defaults);
+        assert_eq!(parsed.authz_policy_path, Some(PathBuf::from("policy.json")));
+        assert_eq!(parsed.audit_log_path, Some(PathBuf::from("audit.jsonl")));
         Ok(())
     }
 

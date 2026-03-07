@@ -312,6 +312,20 @@ The format is based on Keep a Changelog.
   - `project_plan/reports/s26_api_current_manifest.json`
   - `project_plan/reports/s26_api_compatibility_report.json`
   - `project_plan/reports/s26_benchmark_api_freeze.json`
+- S27 security RBAC baseline:
+  - RBAC policy implementation and JSON config persistence in `src/security.rs`
+  - secure server flags and auth-context enforcement in `src/main.rs` and `src/server.rs`
+  - default policy generator command: `sqlrite-security init-policy --path <file>`
+  - security smoke harness: `scripts/run-s27-security-rbac-smoke.sh`
+  - CI workflow: `.github/workflows/security-rbac.yml`
+  - runbook: `docs/runbooks/security_rbac_defaults.md`
+- Sprint 27 evidence artifacts:
+  - `project_plan/reports/S27.md`
+  - `project_plan/reports/s27_quality_gates.log`
+  - `project_plan/reports/s27_security_rbac_smoke.log`
+  - `project_plan/reports/s27_security_rbac_report.json`
+  - `project_plan/reports/s27_security_audit.jsonl`
+  - `project_plan/reports/s27_benchmark_security_rbac.json`
 
 ### Changed
 

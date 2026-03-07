@@ -1,0 +1,25 @@
+{
+  "role_permissions": {
+    "reader": [
+      "query"
+    ],
+    "writer": [
+      "query",
+      "ingest"
+    ],
+    "admin": [
+      "query",
+      "ingest",
+      "sql_admin",
+      "delete_tenant"
+    ],
+    "tenant_admin": [
+      "query",
+      "ingest",
+      "delete_tenant"
+    ]
+  },
+  "cross_tenant_roles": [
+    "admin"
+  ]
+}

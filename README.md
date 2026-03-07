@@ -552,6 +552,12 @@ Output shape:
 
 ## Security Workflow
 
+### Generate default RBAC policy
+
+```bash
+cargo run --bin sqlrite-security -- init-policy --path .sqlrite/rbac-policy.json
+```
+
 ### Add tenant key
 
 ```bash
@@ -572,6 +578,43 @@ cargo run --bin sqlrite-security -- rotate-key \
   --tenant acme \
   --field secret_payload \
   --new-key-id k1
+```
+
+Tenant keys now require at least 16 bytes of key material.
+
+### Run server with secure defaults
+
+```bash
+cargo run -- serve \
+  --db sqlrite_demo.db \
+  --bind 127.0.0.1:8099 \
+  --secure-defaults \
+  --authz-policy .sqlrite/rbac-policy.json \
+  --audit-log .sqlrite/audit/server_audit.jsonl
+```
+
+Authenticated request headers:
+
+- `x-sqlrite-actor-id`
+- `x-sqlrite-tenant-id`
+- `x-sqlrite-roles`
+
+Reader query example:
+
+```bash
+curl -fsS -X POST \
+  -H "content-type: application/json" \
+  -H "x-sqlrite-actor-id: reader-1" \
+  -H "x-sqlrite-tenant-id: demo" \
+  -H "x-sqlrite-roles: reader" \
+  -d '{"query_text":"agent","top_k":2}' \
+  http://127.0.0.1:8099/v1/query | jq
+```
+
+Security summary endpoint:
+
+```bash
+curl -fsS http://127.0.0.1:8099/control/v1/security | jq
 ```
 
 ## Reindex Workflow
@@ -1257,6 +1300,25 @@ Artifacts produced by S26 harnesses:
 - `project_plan/reports/s26_api_current_manifest.json`
 - `project_plan/reports/s26_api_compatibility_report.json`
 - `project_plan/reports/s26_benchmark_api_freeze.json`
+
+## Security RBAC and Secure Defaults (Sprint 27)
+
+RBAC/security smoke harness:
+
+```bash
+bash scripts/run-s27-security-rbac-smoke.sh
+```
+
+Runbook:
+
+- `docs/runbooks/security_rbac_defaults.md`
+
+Artifacts produced by S27 harnesses:
+
+- `project_plan/reports/s27_security_rbac_smoke.log`
+- `project_plan/reports/s27_security_rbac_report.json`
+- `project_plan/reports/s27_security_audit.jsonl`
+- `project_plan/reports/s27_benchmark_security_rbac.json`
 
 Reproducible S16 smoke harness:
 

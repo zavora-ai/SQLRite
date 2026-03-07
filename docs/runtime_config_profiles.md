@@ -249,3 +249,22 @@ S26 API-freeze and edge-story additions:
 - `docs/rfcs/0002-edge-read-query-wasm.md`
 5. API freeze operation runbook:
 - `docs/runbooks/api_compatibility_freeze.md`
+
+S27 security and RBAC additions:
+
+1. Secure server flags:
+- `--secure-defaults`
+- `--require-auth-context`
+- `--authz-policy PATH`
+- `--audit-log PATH`
+2. Security summary endpoint:
+- `GET /control/v1/security`
+3. Default RBAC policy roles:
+- `reader`
+- `writer`
+- `tenant_admin`
+- `admin`
+4. Security smoke harness:
+- `scripts/run-s27-security-rbac-smoke.sh`
+5. Security operations runbook:
+- `docs/runbooks/security_rbac_defaults.md`

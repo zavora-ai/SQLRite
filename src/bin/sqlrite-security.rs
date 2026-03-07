@@ -1,5 +1,6 @@
 use sqlrite::{
-    InMemoryTenantKeyRegistry, RuntimeConfig, SqlRite, TenantKey, rotate_tenant_encryption_key,
+    InMemoryTenantKeyRegistry, RbacPolicy, RuntimeConfig, SqlRite, TenantKey,
+    rotate_tenant_encryption_key,
 };
 use std::path::PathBuf;
 
@@ -11,6 +12,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .ok_or_else(|| std::io::Error::other(usage()))?;
 
     match command.as_str() {
+        "init-policy" => {
+            let path = PathBuf::from(arg_value(&args, "--path")?);
+            let policy = RbacPolicy::default();
+            policy.save_to_json_file(&path)?;
+            println!("rbac policy written to {}", path.display());
+        }
         "add-key" => {
             let registry_path = PathBuf::from(arg_value(&args, "--registry")?);
             let tenant = arg_value(&args, "--tenant")?;
@@ -68,6 +75,6 @@ fn arg_value(args: &[String], flag: &str) -> Result<String, std::io::Error> {
 }
 
 fn usage() -> String {
-    "usage:\n  cargo run --bin sqlrite-security -- add-key --registry <keys.json> --tenant <tenant> --key-id <id> --key-material <secret> [--active]\n  cargo run --bin sqlrite-security -- rotate-key --db <db_path> --registry <keys.json> --tenant <tenant> --field <metadata_field> --new-key-id <id>"
+    "usage:\n  cargo run --bin sqlrite-security -- init-policy --path <rbac-policy.json>\n  cargo run --bin sqlrite-security -- add-key --registry <keys.json> --tenant <tenant> --key-id <id> --key-material <secret> [--active]\n  cargo run --bin sqlrite-security -- rotate-key --db <db_path> --registry <keys.json> --tenant <tenant> --field <metadata_field> --new-key-id <id>"
         .to_string()
 }

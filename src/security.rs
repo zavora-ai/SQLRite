@@ -9,10 +9,14 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+const MINIMUM_TENANT_KEY_BYTES: usize = 16;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum AccessOperation {
     Ingest,
     Query,
+    SqlAdmin,
     DeleteTenant,
 }
 
@@ -75,6 +79,163 @@ impl AccessPolicy for AllowAllPolicy {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RbacPolicyConfig {
+    pub role_permissions: HashMap<String, Vec<AccessOperation>>,
+    pub cross_tenant_roles: Vec<String>,
+}
+
+impl Default for RbacPolicyConfig {
+    fn default() -> Self {
+        Self {
+            role_permissions: HashMap::from([
+                ("reader".to_string(), vec![AccessOperation::Query]),
+                (
+                    "writer".to_string(),
+                    vec![AccessOperation::Query, AccessOperation::Ingest],
+                ),
+                (
+                    "tenant_admin".to_string(),
+                    vec![
+                        AccessOperation::Query,
+                        AccessOperation::Ingest,
+                        AccessOperation::DeleteTenant,
+                    ],
+                ),
+                (
+                    "admin".to_string(),
+                    vec![
+                        AccessOperation::Query,
+                        AccessOperation::Ingest,
+                        AccessOperation::SqlAdmin,
+                        AccessOperation::DeleteTenant,
+                    ],
+                ),
+            ]),
+            cross_tenant_roles: vec!["admin".to_string()],
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct RbacPolicy {
+    role_permissions: HashMap<String, HashSet<AccessOperation>>,
+    cross_tenant_roles: HashSet<String>,
+}
+
+impl Default for RbacPolicy {
+    fn default() -> Self {
+        Self::from_config(RbacPolicyConfig::default())
+    }
+}
+
+impl RbacPolicy {
+    pub fn from_config(config: RbacPolicyConfig) -> Self {
+        let role_permissions = config
+            .role_permissions
+            .into_iter()
+            .map(|(role, operations)| (role, operations.into_iter().collect()))
+            .collect();
+        let cross_tenant_roles = config.cross_tenant_roles.into_iter().collect();
+        Self {
+            role_permissions,
+            cross_tenant_roles,
+        }
+    }
+
+    pub fn to_config(&self) -> RbacPolicyConfig {
+        let mut role_permissions = HashMap::new();
+        for (role, operations) in &self.role_permissions {
+            let mut values = operations.iter().copied().collect::<Vec<_>>();
+            values.sort_by_key(|operation| match operation {
+                AccessOperation::Query => 0,
+                AccessOperation::Ingest => 1,
+                AccessOperation::SqlAdmin => 2,
+                AccessOperation::DeleteTenant => 3,
+            });
+            role_permissions.insert(role.clone(), values);
+        }
+
+        let mut cross_tenant_roles = self.cross_tenant_roles.iter().cloned().collect::<Vec<_>>();
+        cross_tenant_roles.sort();
+        RbacPolicyConfig {
+            role_permissions,
+            cross_tenant_roles,
+        }
+    }
+
+    pub fn load_from_json_file(path: impl AsRef<Path>) -> Result<Self> {
+        let path = path.as_ref();
+        if !path.exists() {
+            return Ok(Self::default());
+        }
+        let payload = fs::read_to_string(path)?;
+        let config = serde_json::from_str::<RbacPolicyConfig>(&payload)
+            .map_err(|e| SqlRiteError::UnsupportedOperation(e.to_string()))?;
+        Ok(Self::from_config(config))
+    }
+
+    pub fn save_to_json_file(&self, path: impl AsRef<Path>) -> Result<()> {
+        let path = path.as_ref();
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            fs::create_dir_all(parent)?;
+        }
+
+        let payload = serde_json::to_string_pretty(&self.to_config())?;
+        let temp = path.with_extension("tmp");
+        fs::write(&temp, payload)?;
+        fs::rename(temp, path)?;
+        Ok(())
+    }
+
+    pub fn role_names(&self) -> Vec<String> {
+        let mut roles = self.role_permissions.keys().cloned().collect::<Vec<_>>();
+        roles.sort();
+        roles
+    }
+}
+
+impl AccessPolicy for RbacPolicy {
+    fn authorize(
+        &self,
+        context: &AccessContext,
+        operation: AccessOperation,
+        target_tenant: &str,
+    ) -> Result<()> {
+        if context.tenant_id.trim().is_empty() || target_tenant.trim().is_empty() {
+            return Err(SqlRiteError::InvalidTenantId);
+        }
+
+        let allowed = context.roles.iter().any(|role| {
+            self.role_permissions
+                .get(role)
+                .is_some_and(|operations| operations.contains(&operation))
+        });
+        if !allowed {
+            return Err(SqlRiteError::AuthorizationDenied(format!(
+                "actor `{}` lacks role permission for {:?}",
+                context.actor_id, operation
+            )));
+        }
+
+        if context.tenant_id != target_tenant
+            && !context
+                .roles
+                .iter()
+                .any(|role| self.cross_tenant_roles.contains(role))
+        {
+            return Err(SqlRiteError::AuthorizationDenied(format!(
+                "tenant `{}` cannot access tenant `{}`",
+                context.tenant_id, target_tenant
+            )));
+        }
+
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TenantKey {
     pub key_id: String,
     pub material: Vec<u8>,
@@ -84,10 +245,10 @@ impl TenantKey {
     pub fn new(key_id: impl Into<String>, material: impl AsRef<[u8]>) -> Result<Self> {
         let key_id = key_id.into();
         let material = material.as_ref().to_vec();
-        if key_id.trim().is_empty() || material.is_empty() {
-            return Err(SqlRiteError::UnsupportedOperation(
-                "tenant key_id/material are required".to_string(),
-            ));
+        if key_id.trim().is_empty() || material.len() < MINIMUM_TENANT_KEY_BYTES {
+            return Err(SqlRiteError::UnsupportedOperation(format!(
+                "tenant key_id/material are required and key material must be at least {MINIMUM_TENANT_KEY_BYTES} bytes"
+            )));
         }
         Ok(Self { key_id, material })
     }
@@ -721,8 +882,8 @@ mod tests {
         let secure = SecureSqlRite::from_db(db, AllowAllPolicy, logger);
 
         let key_registry = InMemoryTenantKeyRegistry::new();
-        key_registry.set_active_key("acme", TenantKey::new("k1", b"secret-key-1")?)?;
-        key_registry.set_active_key("acme", TenantKey::new("k2", b"secret-key-2")?)?;
+        key_registry.set_active_key("acme", TenantKey::new("k1", b"secret-key-00001")?)?;
+        key_registry.set_active_key("acme", TenantKey::new("k2", b"secret-key-00002")?)?;
 
         let ctx = AccessContext::new("user-enc", "acme");
         secure.ingest_chunks_with_encryption(
@@ -783,13 +944,57 @@ mod tests {
         let tmp = tempdir()?;
         let path = tmp.path().join("tenant_keys.json");
         let registry = InMemoryTenantKeyRegistry::new();
-        registry.set_active_key("acme", TenantKey::new("k1", b"material-1")?)?;
-        registry.set_key("acme", TenantKey::new("k2", b"material-2")?, false)?;
+        registry.set_active_key("acme", TenantKey::new("k1", b"material-0000001")?)?;
+        registry.set_key("acme", TenantKey::new("k2", b"material-0000002")?, false)?;
         registry.save_to_json_file(&path)?;
 
         let restored = InMemoryTenantKeyRegistry::load_from_json_file(&path)?;
         assert!(restored.active_key("acme").is_some());
         assert!(restored.key_by_id("acme", "k2").is_some());
         Ok(())
+    }
+
+    #[test]
+    fn rbac_policy_enforces_role_permissions_and_cross_tenant_rules() -> Result<()> {
+        let policy = RbacPolicy::default();
+
+        let reader = AccessContext::new("reader-1", "acme").with_roles(vec!["reader".to_string()]);
+        policy.authorize(&reader, AccessOperation::Query, "acme")?;
+
+        let ingest_err = policy
+            .authorize(&reader, AccessOperation::Ingest, "acme")
+            .expect_err("reader ingest should be denied");
+        assert!(matches!(ingest_err, SqlRiteError::AuthorizationDenied(_)));
+
+        let cross_tenant_err = policy
+            .authorize(&reader, AccessOperation::Query, "beta")
+            .expect_err("reader cross-tenant query should be denied");
+        assert!(matches!(
+            cross_tenant_err,
+            SqlRiteError::AuthorizationDenied(_)
+        ));
+
+        let admin = AccessContext::new("admin-1", "acme").with_roles(vec!["admin".to_string()]);
+        policy.authorize(&admin, AccessOperation::SqlAdmin, "beta")?;
+        Ok(())
+    }
+
+    #[test]
+    fn rbac_policy_round_trips_to_disk() -> Result<()> {
+        let tmp = tempdir()?;
+        let path = tmp.path().join("rbac-policy.json");
+        let policy = RbacPolicy::default();
+        policy.save_to_json_file(&path)?;
+
+        let restored = RbacPolicy::load_from_json_file(&path)?;
+        assert_eq!(restored.role_names(), policy.role_names());
+        Ok(())
+    }
+
+    #[test]
+    fn tenant_key_requires_minimum_length() {
+        let error = TenantKey::new("k-short", b"too-short")
+            .expect_err("short key material should be rejected");
+        assert!(matches!(error, SqlRiteError::UnsupportedOperation(_)));
     }
 }

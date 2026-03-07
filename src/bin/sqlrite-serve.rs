@@ -1,6 +1,6 @@
 use sqlrite::{
-    FailoverMode, HaRuntimeProfile, RecoveryConfig, ReplicationConfig, RuntimeConfig, ServerConfig,
-    ServerRole, serve_health_endpoints,
+    FailoverMode, HaRuntimeProfile, RbacPolicy, RecoveryConfig, ReplicationConfig, RuntimeConfig,
+    ServerConfig, ServerRole, ServerSecurityConfig, serve_health_endpoints,
 };
 use std::path::PathBuf;
 
@@ -46,6 +46,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ha_profile,
             control_api_token: args.control_token,
             enable_sql_endpoint: args.enable_sql_endpoint,
+            security: ServerSecurityConfig {
+                secure_defaults: args.secure_defaults,
+                require_auth_context: args.require_auth_context || args.secure_defaults,
+                policy: if let Some(path) = &args.authz_policy_path {
+                    Some(RbacPolicy::load_from_json_file(path)?)
+                } else if args.secure_defaults {
+                    Some(RbacPolicy::default())
+                } else {
+                    None
+                },
+                audit_log_path: args.audit_log_path.clone().or_else(|| {
+                    args.secure_defaults
+                        .then(|| PathBuf::from(".sqlrite/audit/server_audit.jsonl"))
+                }),
+                ..ServerSecurityConfig::default()
+            },
         },
     )
     .map_err(|e| e.into())
@@ -70,6 +86,10 @@ struct Args {
     pitr_retention_seconds: u64,
     control_token: Option<String>,
     enable_sql_endpoint: bool,
+    secure_defaults: bool,
+    require_auth_context: bool,
+    authz_policy_path: Option<PathBuf>,
+    audit_log_path: Option<PathBuf>,
 }
 
 fn parse_args(args: Vec<String>) -> Result<Args, String> {
@@ -91,6 +111,10 @@ fn parse_args(args: Vec<String>) -> Result<Args, String> {
         pitr_retention_seconds: 86_400,
         control_token: None,
         enable_sql_endpoint: true,
+        secure_defaults: false,
+        require_auth_context: false,
+        authz_policy_path: None,
+        audit_log_path: None,
     };
 
     let mut i = 0;
@@ -165,6 +189,21 @@ fn parse_args(args: Vec<String>) -> Result<Args, String> {
             "--disable-sql-endpoint" => {
                 out.enable_sql_endpoint = false;
             }
+            "--secure-defaults" => {
+                out.secure_defaults = true;
+            }
+            "--require-auth-context" => {
+                out.require_auth_context = true;
+            }
+            "--authz-policy" => {
+                i += 1;
+                out.authz_policy_path =
+                    Some(PathBuf::from(parse_string(&args, i, "--authz-policy")?));
+            }
+            "--audit-log" => {
+                i += 1;
+                out.audit_log_path = Some(PathBuf::from(parse_string(&args, i, "--audit-log")?));
+            }
             "--help" | "-h" => return Err(usage()),
             other => return Err(format!("unknown argument `{other}`\n{}", usage())),
         }
@@ -210,5 +249,5 @@ fn parse_failover_mode(value: &str) -> Result<FailoverMode, String> {
 }
 
 fn usage() -> String {
-    "usage: cargo run --bin sqlrite-serve -- [--db PATH] [--bind HOST:PORT] [--ha-role standalone|primary|replica] [--cluster-id ID] [--node-id ID] [--advertise HOST:PORT] [--peer HOST:PORT]... [--sync-ack-quorum N] [--heartbeat-ms N] [--election-timeout-ms N] [--max-replication-lag-ms N] [--failover manual|automatic] [--backup-dir DIR] [--snapshot-interval-s N] [--pitr-retention-s N] [--control-token TOKEN] [--disable-sql-endpoint]".to_string()
+    "usage: cargo run --bin sqlrite-serve -- [--db PATH] [--bind HOST:PORT] [--ha-role standalone|primary|replica] [--cluster-id ID] [--node-id ID] [--advertise HOST:PORT] [--peer HOST:PORT]... [--sync-ack-quorum N] [--heartbeat-ms N] [--election-timeout-ms N] [--max-replication-lag-ms N] [--failover manual|automatic] [--backup-dir DIR] [--snapshot-interval-s N] [--pitr-retention-s N] [--control-token TOKEN] [--disable-sql-endpoint] [--secure-defaults] [--require-auth-context] [--authz-policy PATH] [--audit-log PATH]".to_string()
 }

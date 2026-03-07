@@ -1,5 +1,6 @@
 use crate::{
-    DurabilityProfile, FailoverMode, HaRuntimeProfile, HaRuntimeState, ReplicationLog,
+    AccessContext, AccessOperation, AccessPolicy, AuditEvent, AuditLogger, DurabilityProfile,
+    FailoverMode, HaRuntimeProfile, HaRuntimeState, JsonlAuditLogger, RbacPolicy, ReplicationLog,
     ReplicationLogEntry, Result, RuntimeConfig, ServerRole, SqlRite, build_health_report,
     create_backup_snapshot, execute_sdk_query, execute_sdk_sql, list_backup_snapshots,
     prune_backup_snapshots, restore_backup_file_verified, select_backup_snapshot_for_time,
@@ -11,7 +12,7 @@ use sqlrite_sdk_core::{QueryRequest as QueryApiRequest, SqlRequest as SqlApiRequ
 use std::collections::{HashMap, VecDeque};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -21,6 +22,42 @@ pub struct ServerConfig {
     pub ha_profile: HaRuntimeProfile,
     pub control_api_token: Option<String>,
     pub enable_sql_endpoint: bool,
+    pub security: ServerSecurityConfig,
+}
+
+#[derive(Debug, Clone)]
+pub struct ServerSecurityConfig {
+    pub secure_defaults: bool,
+    pub require_auth_context: bool,
+    pub policy: Option<RbacPolicy>,
+    pub audit_log_path: Option<PathBuf>,
+    pub audit_redacted_fields: Vec<String>,
+}
+
+impl Default for ServerSecurityConfig {
+    fn default() -> Self {
+        Self {
+            secure_defaults: false,
+            require_auth_context: false,
+            policy: None,
+            audit_log_path: None,
+            audit_redacted_fields: vec![
+                "statement".to_string(),
+                "query_embedding".to_string(),
+                "metadata_filters".to_string(),
+                "auth_token".to_string(),
+            ],
+        }
+    }
+}
+
+impl ServerSecurityConfig {
+    fn enabled(&self) -> bool {
+        self.secure_defaults
+            || self.require_auth_context
+            || self.policy.is_some()
+            || self.audit_log_path.is_some()
+    }
 }
 
 impl Default for ServerConfig {
@@ -30,6 +67,7 @@ impl Default for ServerConfig {
             ha_profile: HaRuntimeProfile::default(),
             control_api_token: None,
             enable_sql_endpoint: true,
+            security: ServerSecurityConfig::default(),
         }
     }
 }
@@ -792,6 +830,11 @@ fn build_response(
                 serde_json::to_string(&control.profile)?,
             ))
         }
+        ("GET", "/control/v1/security") => Ok((
+            200,
+            "application/json",
+            security_summary_json(config).to_string(),
+        )),
         ("GET", "/control/v1/state") => {
             let control = state
                 .lock()
@@ -1820,7 +1863,7 @@ fn build_response(
                     return Ok((400, "application/json", payload.to_string()));
                 }
             };
-            execute_sql_api_statement(db_path, sql_profile, sql_request)
+            execute_sql_api_statement(db_path, sql_profile, config, request, sql_request)
         }
         ("POST", "/v1/query") if config.enable_sql_endpoint => {
             let input = match parse_json_body::<QueryApiRequest>(request) {
@@ -1830,8 +1873,21 @@ fn build_response(
                     return Ok((400, "application/json", payload.to_string()));
                 }
             };
-            match execute_query_api(db, input) {
+            match execute_query_api(db, config, request, path, input) {
                 Ok(payload) => Ok((200, "application/json", payload.to_string())),
+                Err(error)
+                    if matches!(
+                        &error,
+                        crate::SqlRiteError::Io(io_error)
+                            if io_error.kind() == std::io::ErrorKind::PermissionDenied
+                    ) =>
+                {
+                    Ok((
+                        403,
+                        "application/json",
+                        json!({"error": error.to_string()}).to_string(),
+                    ))
+                }
                 Err(error) => Ok((
                     400,
                     "application/json",
@@ -1847,7 +1903,7 @@ fn build_response(
                     return Ok((400, "application/json", payload.to_string()));
                 }
             };
-            execute_sql_api_statement(db_path, sql_profile, sql_request)
+            execute_sql_api_statement(db_path, sql_profile, config, request, sql_request)
         }
         ("POST", "/grpc/sqlrite.v1.QueryService/Query") if config.enable_sql_endpoint => {
             let input = match parse_json_body::<QueryApiRequest>(request) {
@@ -1857,8 +1913,21 @@ fn build_response(
                     return Ok((400, "application/json", payload.to_string()));
                 }
             };
-            match execute_query_api(db, input) {
+            match execute_query_api(db, config, request, path, input) {
                 Ok(payload) => Ok((200, "application/json", payload.to_string())),
+                Err(error)
+                    if matches!(
+                        &error,
+                        crate::SqlRiteError::Io(io_error)
+                            if io_error.kind() == std::io::ErrorKind::PermissionDenied
+                    ) =>
+                {
+                    Ok((
+                        403,
+                        "application/json",
+                        json!({"error": error.to_string()}).to_string(),
+                    ))
+                }
                 Err(error) => Ok((
                     400,
                     "application/json",
@@ -1905,10 +1974,27 @@ fn build_response(
 fn execute_sql_api_statement(
     db_path: &Path,
     sql_profile: DurabilityProfile,
+    config: &ServerConfig,
+    request: &HttpRequest,
     input: SqlApiRequest,
 ) -> Result<(u16, &'static str, String)> {
+    if let Err(response) = authorize_request(config, request, AccessOperation::SqlAdmin, "/v1/sql")
+    {
+        return Ok(response);
+    }
+
+    let statement_len = input.statement.len();
     match execute_sdk_sql(db_path, sql_profile, input) {
-        Ok(payload) => Ok((200, "application/json", payload.to_string())),
+        Ok(payload) => {
+            audit_request(
+                config,
+                request,
+                AccessOperation::SqlAdmin,
+                true,
+                json!({"path": request.path.as_str(), "statement_len": statement_len}),
+            )?;
+            Ok((200, "application/json", payload.to_string()))
+        }
         Err(error) if error.is_validation() => Ok((
             400,
             "application/json",
@@ -1922,8 +2008,52 @@ fn execute_sql_api_statement(
     }
 }
 
-fn execute_query_api(db: &SqlRite, input: QueryApiRequest) -> Result<Value> {
+fn execute_query_api(
+    db: &SqlRite,
+    config: &ServerConfig,
+    request: &HttpRequest,
+    path: &str,
+    mut input: QueryApiRequest,
+) -> Result<Value> {
+    let context = authorize_request(config, request, AccessOperation::Query, path).map_err(
+        |(_, _, body)| {
+            std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                extract_error_message(&body),
+            )
+        },
+    )?;
+
+    if let Some(context) = context {
+        let tenant = context.tenant_id.clone();
+        let filters = input.metadata_filters.get_or_insert_with(HashMap::new);
+        if let Some(existing) = filters.get("tenant")
+            && existing != &tenant
+        {
+            audit_request(
+                config,
+                request,
+                AccessOperation::Query,
+                false,
+                json!({"path": path, "reason": "tenant filter mismatch"}),
+            )?;
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "tenant filter mismatch",
+            )
+            .into());
+        }
+        filters.insert("tenant".to_string(), tenant);
+    }
+
     let envelope = execute_sdk_query(db, input).map_err(std::io::Error::other)?;
+    audit_request(
+        config,
+        request,
+        AccessOperation::Query,
+        true,
+        json!({"path": path, "row_count": envelope.row_count}),
+    )?;
     Ok(serde_json::to_value(envelope)?)
 }
 
@@ -2102,6 +2232,124 @@ fn unauthorized_response() -> (u16, &'static str, String) {
         "application/json",
         json!({"error": "unauthorized control-plane request"}).to_string(),
     )
+}
+
+fn authorize_request(
+    config: &ServerConfig,
+    request: &HttpRequest,
+    operation: AccessOperation,
+    path: &str,
+) -> std::result::Result<Option<AccessContext>, (u16, &'static str, String)> {
+    if !config.security.enabled() {
+        return Ok(None);
+    }
+
+    let Some(context) = extract_access_context(request, config) else {
+        let response = (
+            401,
+            "application/json",
+            json!({"error": "missing auth context headers"}).to_string(),
+        );
+        let _ = audit_request(
+            config,
+            request,
+            operation,
+            false,
+            json!({"path": path, "reason": "missing_auth_context"}),
+        );
+        return Err(response);
+    };
+
+    if let Some(policy) = &config.security.policy
+        && let Err(error) = policy.authorize(&context, operation, &context.tenant_id)
+    {
+        let response = (
+            403,
+            "application/json",
+            json!({"error": error.to_string()}).to_string(),
+        );
+        let _ = audit_request(
+            config,
+            request,
+            operation,
+            false,
+            json!({"path": path, "reason": error.to_string()}),
+        );
+        return Err(response);
+    }
+
+    Ok(Some(context))
+}
+
+fn extract_access_context(request: &HttpRequest, config: &ServerConfig) -> Option<AccessContext> {
+    let actor_id = request.headers.get("x-sqlrite-actor-id").cloned();
+    let tenant_id = request.headers.get("x-sqlrite-tenant-id").cloned();
+    let roles = request
+        .headers
+        .get("x-sqlrite-roles")
+        .map(|value| {
+            value
+                .split(',')
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    match (actor_id, tenant_id) {
+        (Some(actor_id), Some(tenant_id)) => {
+            Some(AccessContext::new(actor_id, tenant_id).with_roles(roles))
+        }
+        _ if config.security.require_auth_context || config.security.enabled() => None,
+        _ => None,
+    }
+}
+
+fn audit_request(
+    config: &ServerConfig,
+    request: &HttpRequest,
+    operation: AccessOperation,
+    allowed: bool,
+    detail: Value,
+) -> Result<()> {
+    let Some(path) = &config.security.audit_log_path else {
+        return Ok(());
+    };
+
+    let context = extract_access_context(request, config)
+        .unwrap_or_else(|| AccessContext::new("anonymous", "unknown"));
+    let logger = JsonlAuditLogger::new(path, config.security.audit_redacted_fields.clone())?;
+    logger.log(&AuditEvent {
+        unix_ms: unix_ms_now(),
+        actor_id: context.actor_id,
+        tenant_id: context.tenant_id,
+        operation,
+        allowed,
+        detail,
+    })
+}
+
+fn security_summary_json(config: &ServerConfig) -> Value {
+    json!({
+        "enabled": config.security.enabled(),
+        "secure_defaults": config.security.secure_defaults,
+        "require_auth_context": config.security.require_auth_context,
+        "audit_log_path": config.security.audit_log_path,
+        "rbac_roles": config.security.policy.as_ref().map(|policy| policy.role_names()).unwrap_or_default(),
+    })
+}
+
+fn extract_error_message(body: &str) -> String {
+    serde_json::from_str::<Value>(body)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("error")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| body.to_string())
 }
 
 fn parse_json_body<T: for<'de> Deserialize<'de>>(
@@ -2700,7 +2948,7 @@ fn write_response(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ChunkInput, RuntimeConfig};
+    use crate::{ChunkInput, RbacPolicy, RuntimeConfig};
     use serde_json::json;
     use tempfile::{NamedTempFile, tempdir};
 
@@ -2735,6 +2983,19 @@ mod tests {
         cfg.ha_profile.replication.sync_ack_quorum = 2;
         cfg.ha_profile.replication.node_id = "node-a".to_string();
         cfg
+    }
+
+    fn secure_server_config(audit_log_path: PathBuf) -> ServerConfig {
+        ServerConfig {
+            security: ServerSecurityConfig {
+                secure_defaults: true,
+                require_auth_context: true,
+                policy: Some(RbacPolicy::default()),
+                audit_log_path: Some(audit_log_path),
+                ..ServerSecurityConfig::default()
+            },
+            ..ServerConfig::default()
+        }
     }
 
     #[test]
@@ -2903,6 +3164,211 @@ mod tests {
         assert!(!body.contains("\"/grpc/sqlrite.v1.QueryService/Sql\""));
         assert!(!body.contains("\"/grpc/sqlrite.v1.QueryService/Query\""));
         assert!(body.contains("\"/v1/openapi.json\""));
+        Ok(())
+    }
+
+    #[test]
+    fn security_endpoint_reports_secure_defaults_and_roles() -> Result<()> {
+        let tmp = tempdir()?;
+        let db = SqlRite::open_in_memory_with_config(RuntimeConfig::default())?;
+        let state = Arc::new(Mutex::new(ControlPlaneState::new(
+            HaRuntimeProfile::default(),
+        )));
+        let config = secure_server_config(tmp.path().join("audit.jsonl"));
+        let request = make_request("GET", "/control/v1/security", None, None);
+
+        let (status, _, body) = build_response(
+            &db,
+            Path::new(":memory:"),
+            DurabilityProfile::Balanced,
+            &config,
+            &state,
+            &request,
+        )?;
+        assert_eq!(status, 200);
+        assert!(body.contains("\"enabled\":true"));
+        assert!(body.contains("\"require_auth_context\":true"));
+        assert!(body.contains("tenant_admin"));
+        Ok(())
+    }
+
+    #[test]
+    fn secure_query_requires_auth_context_headers() -> Result<()> {
+        let tmp = tempdir()?;
+        let db = SqlRite::open_in_memory_with_config(RuntimeConfig::default())?;
+        let state = Arc::new(Mutex::new(ControlPlaneState::new(
+            HaRuntimeProfile::default(),
+        )));
+        let config = secure_server_config(tmp.path().join("audit.jsonl"));
+        let request = make_request(
+            "POST",
+            "/v1/query",
+            Some(r#"{"query_text":"agent","top_k":1}"#),
+            None,
+        );
+
+        let (status, _, body) = build_response(
+            &db,
+            Path::new(":memory:"),
+            DurabilityProfile::Balanced,
+            &config,
+            &state,
+            &request,
+        )?;
+        assert_eq!(status, 403);
+        assert!(body.contains("missing auth context"));
+        Ok(())
+    }
+
+    #[test]
+    fn secure_query_enforces_tenant_headers_and_audits() -> Result<()> {
+        let tmp = tempdir()?;
+        let audit_path = tmp.path().join("audit.jsonl");
+        let db = SqlRite::open_in_memory_with_config(RuntimeConfig::default())?;
+        db.ingest_chunk(&ChunkInput {
+            id: "tenant-1".to_string(),
+            doc_id: "doc-1".to_string(),
+            content: "tenant scoped agent memory".to_string(),
+            embedding: vec![1.0, 0.0],
+            metadata: json!({"tenant": "acme"}),
+            source: None,
+        })?;
+        let state = Arc::new(Mutex::new(ControlPlaneState::new(
+            HaRuntimeProfile::default(),
+        )));
+        let config = secure_server_config(audit_path.clone());
+
+        let mut ok_request = make_request(
+            "POST",
+            "/v1/query",
+            Some(r#"{"query_text":"agent","top_k":1}"#),
+            None,
+        );
+        ok_request
+            .headers
+            .insert("x-sqlrite-actor-id".to_string(), "reader-1".to_string());
+        ok_request
+            .headers
+            .insert("x-sqlrite-tenant-id".to_string(), "acme".to_string());
+        ok_request
+            .headers
+            .insert("x-sqlrite-roles".to_string(), "reader".to_string());
+
+        let (status, _, body) = build_response(
+            &db,
+            Path::new(":memory:"),
+            DurabilityProfile::Balanced,
+            &config,
+            &state,
+            &ok_request,
+        )?;
+        assert_eq!(status, 200);
+        assert!(body.contains("\"row_count\":1"));
+
+        let mut denied_request = make_request(
+            "POST",
+            "/v1/query",
+            Some(r#"{"query_text":"agent","top_k":1,"metadata_filters":{"tenant":"beta"}}"#),
+            None,
+        );
+        denied_request
+            .headers
+            .insert("x-sqlrite-actor-id".to_string(), "reader-1".to_string());
+        denied_request
+            .headers
+            .insert("x-sqlrite-tenant-id".to_string(), "acme".to_string());
+        denied_request
+            .headers
+            .insert("x-sqlrite-roles".to_string(), "reader".to_string());
+
+        let (status, _, body) = build_response(
+            &db,
+            Path::new(":memory:"),
+            DurabilityProfile::Balanced,
+            &config,
+            &state,
+            &denied_request,
+        )?;
+        assert_eq!(status, 403);
+        assert!(body.contains("tenant filter mismatch"));
+
+        let audit = std::fs::read_to_string(audit_path)?;
+        assert!(audit.contains("\"allowed\":true"));
+        assert!(audit.contains("\"allowed\":false"));
+        Ok(())
+    }
+
+    #[test]
+    fn secure_sql_requires_admin_role() -> Result<()> {
+        let tmp = tempdir()?;
+        let db_file = NamedTempFile::new().map_err(std::io::Error::other)?;
+        let db = SqlRite::open_with_config(db_file.path(), RuntimeConfig::default())?;
+        db.ingest_chunk(&ChunkInput {
+            id: "sql-1".to_string(),
+            doc_id: "doc-1".to_string(),
+            content: "sql secure query".to_string(),
+            embedding: vec![1.0, 0.0],
+            metadata: json!({"tenant": "acme"}),
+            source: None,
+        })?;
+        let state = Arc::new(Mutex::new(ControlPlaneState::new(
+            HaRuntimeProfile::default(),
+        )));
+        let config = secure_server_config(tmp.path().join("audit.jsonl"));
+
+        let mut reader_request = make_request(
+            "POST",
+            "/v1/sql",
+            Some(r#"{"statement":"SELECT id FROM chunks ORDER BY id ASC LIMIT 1;"}"#),
+            None,
+        );
+        reader_request
+            .headers
+            .insert("x-sqlrite-actor-id".to_string(), "reader-1".to_string());
+        reader_request
+            .headers
+            .insert("x-sqlrite-tenant-id".to_string(), "acme".to_string());
+        reader_request
+            .headers
+            .insert("x-sqlrite-roles".to_string(), "reader".to_string());
+
+        let (status, _, body) = build_response(
+            &db,
+            db_file.path(),
+            DurabilityProfile::Balanced,
+            &config,
+            &state,
+            &reader_request,
+        )?;
+        assert_eq!(status, 403);
+        assert!(body.contains("authorization denied"));
+
+        let mut admin_request = make_request(
+            "POST",
+            "/v1/sql",
+            Some(r#"{"statement":"SELECT id FROM chunks ORDER BY id ASC LIMIT 1;"}"#),
+            None,
+        );
+        admin_request
+            .headers
+            .insert("x-sqlrite-actor-id".to_string(), "admin-1".to_string());
+        admin_request
+            .headers
+            .insert("x-sqlrite-tenant-id".to_string(), "acme".to_string());
+        admin_request
+            .headers
+            .insert("x-sqlrite-roles".to_string(), "admin".to_string());
+
+        let (status, _, body) = build_response(
+            &db,
+            db_file.path(),
+            DurabilityProfile::Balanced,
+            &config,
+            &state,
+            &admin_request,
+        )?;
+        assert_eq!(status, 200);
+        assert!(body.contains("sql-1"));
         Ok(())
     }
 

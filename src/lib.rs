@@ -44,10 +44,10 @@ pub use sdk_runtime::{
 };
 pub use security::{
     AccessContext, AccessOperation, AccessPolicy, AllowAllPolicy, AuditEvent, AuditLogger,
-    InMemoryTenantKeyRegistry, JsonlAuditLogger, SecureSqlRite, TenantKey, TenantKeyRegistry,
-    rotate_tenant_encryption_key,
+    InMemoryTenantKeyRegistry, JsonlAuditLogger, RbacPolicy, RbacPolicyConfig, SecureSqlRite,
+    TenantKey, TenantKeyRegistry, rotate_tenant_encryption_key,
 };
-pub use server::{ServerConfig, serve_health_endpoints};
+pub use server::{ServerConfig, ServerSecurityConfig, serve_health_endpoints};
 pub use sql_semantics::{execute_sql_statement_json, prepare_sql_connection};
 use vector_index::BuiltinVectorIndex;
 pub use vector_index::{
