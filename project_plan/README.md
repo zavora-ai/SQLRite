@@ -2,7 +2,7 @@
 
 This folder contains executable sprint-level planning for the competitive roadmap.
 
-Roadmap source: `/Users/jameskaranja/Developer/projects/SQLRight/ROADMAP_COMPETITIVE_2026.md`
+Roadmap source: `/Users/jameskaranja/Developer/projects/SQLRight/project_plan/strategy/ROADMAP_COMPETITIVE_2026.md`
 
 ## Coverage Commitments
 
@@ -17,6 +17,7 @@ Roadmap source: `/Users/jameskaranja/Developer/projects/SQLRight/ROADMAP_COMPETI
 - `requirements_catalog.tsv`: normalized requirement IDs extracted from roadmap
 - `sprint_metadata.tsv`: sprint schedule, scope IDs, and sprint deliverables
 - `coverage_matrix.md`: requirement-to-sprint mapping (100% required)
+- `strategy/`: internal roadmap and competitive-planning source material
 - `sprints/`: detailed sprint execution plans (S01..S33)
 - `generate_plan.sh`: generator script for all plan artifacts
 

@@ -1,6 +1,6 @@
 # SQLRite Roadmap Coverage Matrix
 
-Source roadmap: `/Users/jameskaranja/Developer/projects/SQLRight/ROADMAP_COMPETITIVE_2026.md`
+Source roadmap: `/Users/jameskaranja/Developer/projects/SQLRight/project_plan/strategy/ROADMAP_COMPETITIVE_2026.md`
 
 Coverage status: **93/93 requirements mapped**.
 Coverage guarantee: **100%** (no unmapped roadmap requirements).

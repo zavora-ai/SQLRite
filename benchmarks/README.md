@@ -1,6 +1,16 @@
-# SQLRite Benchmark Profiles
+# SQLRite Benchmarks
 
-This directory publishes versioned benchmark profile definitions used by the S12/S13 benchmark tooling.
+This directory contains benchmark profile definitions, benchmark documentation, and curated benchmark artifacts.
+
+## What Lives Here
+
+| Path | Purpose |
+|---|---|
+| `benchmarks/profiles/` | versioned benchmark profile definitions |
+| `benchmarks/status.md` | benchmark status summary and historical notes |
+| `benchmarks/results/legacy/` | legacy benchmark JSON artifacts moved from the repo root |
+
+`examples/eval_dataset.json` remains outside this directory because the benchmark and evaluation CLIs use it directly as a stable default dataset path.
 
 ## Profiles
 
@@ -58,3 +68,7 @@ cargo run --bin sqlrite-bench-suite-assert -- \
   --rule "profile=1m,scenario=weighted + hnsw_baseline,max_p95_ms=90,min_top1=0.75" \
   --eval-rule "index_mode=lsh_ann,min_recall_k1=0.80,min_mrr_k1=0.95,min_ndcg_k1=0.95"
 ```
+
+## Historical Artifacts
+
+Legacy benchmark JSON files that used to live at the repo root were moved to `benchmarks/results/legacy/` to keep the top level focused on product entry points.

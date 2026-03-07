@@ -360,7 +360,7 @@ UNMAPPED_REQS=$((TOTAL_REQS - MAPPED_REQS))
 {
   echo "# SQLRite Roadmap Coverage Matrix"
   echo
-  echo "Source roadmap: \`/Users/jameskaranja/Developer/projects/SQLRight/ROADMAP_COMPETITIVE_2026.md\`"
+  echo "Source roadmap: \`/Users/jameskaranja/Developer/projects/SQLRight/project_plan/strategy/ROADMAP_COMPETITIVE_2026.md\`"
   echo
   echo "Coverage status: **${MAPPED_REQS}/${TOTAL_REQS} requirements mapped**."
   if [[ "$UNMAPPED_REQS" -eq 0 ]]; then
@@ -406,7 +406,7 @@ SPRINT_COUNT=$(awk 'END{print NR-1}' "$META_FILE")
   echo
   echo "This folder contains executable sprint-level planning for the competitive roadmap."
   echo
-  echo "Roadmap source: \`/Users/jameskaranja/Developer/projects/SQLRight/ROADMAP_COMPETITIVE_2026.md\`"
+  echo "Roadmap source: \`/Users/jameskaranja/Developer/projects/SQLRight/project_plan/strategy/ROADMAP_COMPETITIVE_2026.md\`"
   echo
   echo "## Coverage Commitments"
   echo
