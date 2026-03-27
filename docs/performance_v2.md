@@ -200,6 +200,43 @@ Improve memory density and search speed.
 - higher QPS
 - improved scale on laptop and edge-class hardware
 
+### Delivered in this phase
+
+- `VectorStorageKind` now changes live in-memory storage, not only snapshots
+- brute-force exact search now supports:
+  - `f32`
+  - `f16`
+  - `int8`
+- `hnsw_baseline` now stores its segment/rerank data in:
+  - `f32`
+  - `f16`
+  - `int8`
+- `lsh_ann` now stores normalized vectors in the selected storage format instead of always keeping fp32 payloads
+- the benchmark CLI now accepts `--storage-kind f32|f16|int8`
+- the Phase 6 quantization suite is now reproducible via:
+  - `/Users/jameskaranja/Developer/projects/SQLRight/scripts/run-p6-quantization-suite.sh`
+
+### Measured results
+
+On the internal 5k/150 weighted-hybrid benchmark:
+
+- brute-force:
+  - `f32`: `429.47 QPS`, `p95=2.5240 ms`, `1,550,000` estimated bytes
+  - `f16`: `413.50 QPS`, `p95=2.6368 ms`, `910,000` estimated bytes
+  - `int8`: `426.74 QPS`, `p95=2.5362 ms`, `610,000` estimated bytes
+- `hnsw_baseline`:
+  - `f32`: `423.40 QPS`, `p95=2.5516 ms`, `2,830,000` estimated bytes
+  - `f16`: `404.63 QPS`, `p95=2.7055 ms`, `2,190,000` estimated bytes
+  - `int8`: `420.87 QPS`, `p95=2.6683 ms`, `1,890,000` estimated bytes
+
+### Conclusion
+
+- `int8` is the best current tradeoff:
+  - near-f32 throughput
+  - materially lower estimated memory
+- `f16` reduces memory but costs more throughput than `int8` on the current workload
+- the next bottleneck after Phase 6 is ANN graph/query specialization, not raw exact-search storage size
+
 ## Phase 7: Planner Rewrite for Hybrid Retrieval
 
 ### Objective

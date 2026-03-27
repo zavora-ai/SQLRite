@@ -6,6 +6,7 @@ use std::path::Path;
 use std::pin::Pin;
 
 use crate::{Result, SqlRiteError};
+use half::f16;
 use hnsw_rs::api::AnnT;
 use hnsw_rs::hnswio::HnswIo;
 use hnsw_rs::prelude::{DistCosine, Hnsw};
@@ -162,14 +163,14 @@ impl BuiltinVectorIndex {
             Self::LshAnn(index) => index
                 .entries
                 .iter()
-                .map(|entry| (entry.chunk_id.clone(), entry.normalized_embedding.clone()))
+                .map(|entry| (entry.chunk_id.clone(), entry.normalized_embedding.to_vec()))
                 .collect(),
             Self::HnswBaseline(index) => index
                 .chunk_ids
                 .iter()
                 .enumerate()
                 .map(|(position, chunk_id)| {
-                    let embedding = index.segments.embedding(position).to_vec();
+                    let embedding = index.segments.embedding_vec(position);
                     (chunk_id.clone(), embedding)
                 })
                 .collect(),
@@ -282,30 +283,105 @@ impl VectorIndex for BuiltinVectorIndex {
 }
 
 #[derive(Debug, Clone)]
-struct VectorEntry {
-    chunk_id: String,
-    normalized_embedding: Vec<f32>,
+enum EncodedVector {
+    F32(Vec<f32>),
+    F16(Vec<u16>),
+    Int8 { values: Vec<i8>, scale: f32 },
 }
 
-#[derive(Debug, Default)]
+impl EncodedVector {
+    fn from_normalized(values: &[f32], storage_kind: VectorStorageKind) -> Self {
+        match storage_kind {
+            VectorStorageKind::F32 => Self::F32(values.to_vec()),
+            VectorStorageKind::F16 => Self::F16(
+                values
+                    .iter()
+                    .map(|value| f16::from_f32(*value).to_bits())
+                    .collect(),
+            ),
+            VectorStorageKind::Int8 => {
+                let (quantized, scale) = quantize_int8_slice(values);
+                Self::Int8 {
+                    values: quantized,
+                    scale,
+                }
+            }
+        }
+    }
+
+    fn dot_product(&self, query: &[f32]) -> f32 {
+        match self {
+            Self::F32(values) => dot_product(query, values),
+            Self::F16(values) => dot_product_f16_bits(query, values),
+            Self::Int8 { values, scale } => dot_product_i8_scaled(query, values, *scale),
+        }
+    }
+
+    fn to_vec(&self) -> Vec<f32> {
+        match self {
+            Self::F32(values) => values.clone(),
+            Self::F16(values) => values
+                .iter()
+                .map(|bits| f16::from_bits(*bits).to_f32())
+                .collect(),
+            Self::Int8 { values, scale } => {
+                values.iter().map(|value| *value as f32 * *scale).collect()
+            }
+        }
+    }
+
+    fn dimension(&self) -> usize {
+        match self {
+            Self::F32(values) => values.len(),
+            Self::F16(values) => values.len(),
+            Self::Int8 { values, .. } => values.len(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+enum OwnedSegmentValues {
+    F32(Vec<f32>),
+    F16(Vec<u16>),
+    Int8 { values: Vec<i8>, scales: Vec<f32> },
+}
+
+#[derive(Debug, Clone)]
 struct VectorSegmentStore {
     dimension: usize,
-    values: Vec<f32>,
+    values: OwnedSegmentValues,
+}
+
+impl Default for VectorSegmentStore {
+    fn default() -> Self {
+        Self {
+            dimension: 0,
+            values: OwnedSegmentValues::F32(Vec::new()),
+        }
+    }
 }
 
 impl VectorSegmentStore {
-    fn with_dimension(dimension: usize) -> Self {
-        Self {
-            dimension,
-            values: Vec::new(),
-        }
+    fn with_dimension_and_storage(dimension: usize, storage_kind: VectorStorageKind) -> Self {
+        let values = match storage_kind {
+            VectorStorageKind::F32 => OwnedSegmentValues::F32(Vec::new()),
+            VectorStorageKind::F16 => OwnedSegmentValues::F16(Vec::new()),
+            VectorStorageKind::Int8 => OwnedSegmentValues::Int8 {
+                values: Vec::new(),
+                scales: Vec::new(),
+            },
+        };
+        Self { dimension, values }
     }
 
     fn len(&self) -> usize {
         if self.dimension == 0 {
-            0
-        } else {
-            self.values.len() / self.dimension
+            return 0;
+        }
+        match &self.values {
+            OwnedSegmentValues::F32(values) => values.len() / self.dimension,
+            OwnedSegmentValues::F16(values) => values.len() / self.dimension,
+            OwnedSegmentValues::Int8 { values, .. } => values.len() / self.dimension,
         }
     }
 
@@ -314,26 +390,85 @@ impl VectorSegmentStore {
     }
 
     fn reserve(&mut self, additional_embeddings: usize) {
-        self.values
-            .reserve(additional_embeddings.saturating_mul(self.dimension));
+        match &mut self.values {
+            OwnedSegmentValues::F32(values) => {
+                values.reserve(additional_embeddings.saturating_mul(self.dimension));
+            }
+            OwnedSegmentValues::F16(values) => {
+                values.reserve(additional_embeddings.saturating_mul(self.dimension));
+            }
+            OwnedSegmentValues::Int8 { values, scales } => {
+                values.reserve(additional_embeddings.saturating_mul(self.dimension));
+                scales.reserve(additional_embeddings);
+            }
+        }
     }
 
     fn push(&mut self, embedding: &[f32]) {
         debug_assert_eq!(self.dimension, embedding.len());
-        self.values.extend_from_slice(embedding);
+        match &mut self.values {
+            OwnedSegmentValues::F32(values) => values.extend_from_slice(embedding),
+            OwnedSegmentValues::F16(values) => values.extend(
+                embedding
+                    .iter()
+                    .map(|value| f16::from_f32(*value).to_bits()),
+            ),
+            OwnedSegmentValues::Int8 { values, scales } => {
+                let (quantized, scale) = quantize_int8_slice(embedding);
+                values.extend_from_slice(&quantized);
+                scales.push(scale);
+            }
+        }
     }
 
     fn set(&mut self, index: usize, embedding: &[f32]) {
         debug_assert_eq!(self.dimension, embedding.len());
         let start = index * self.dimension;
         let end = start + self.dimension;
-        self.values[start..end].copy_from_slice(embedding);
+        match &mut self.values {
+            OwnedSegmentValues::F32(values) => values[start..end].copy_from_slice(embedding),
+            OwnedSegmentValues::F16(values) => {
+                for (slot, value) in values[start..end].iter_mut().zip(embedding.iter()) {
+                    *slot = f16::from_f32(*value).to_bits();
+                }
+            }
+            OwnedSegmentValues::Int8 { values, scales } => {
+                let (quantized, scale) = quantize_int8_slice(embedding);
+                values[start..end].copy_from_slice(&quantized);
+                scales[index] = scale;
+            }
+        }
     }
 
-    fn embedding(&self, index: usize) -> &[f32] {
+    fn embedding_vec(&self, index: usize) -> Vec<f32> {
         let start = index * self.dimension;
         let end = start + self.dimension;
-        &self.values[start..end]
+        match &self.values {
+            OwnedSegmentValues::F32(values) => values[start..end].to_vec(),
+            OwnedSegmentValues::F16(values) => values[start..end]
+                .iter()
+                .map(|bits| f16::from_bits(*bits).to_f32())
+                .collect(),
+            OwnedSegmentValues::Int8 { values, scales } => {
+                let scale = scales[index];
+                values[start..end]
+                    .iter()
+                    .map(|value| *value as f32 * scale)
+                    .collect()
+            }
+        }
+    }
+
+    fn dot_product(&self, index: usize, query: &[f32]) -> f32 {
+        let start = index * self.dimension;
+        let end = start + self.dimension;
+        match &self.values {
+            OwnedSegmentValues::F32(values) => dot_product(query, &values[start..end]),
+            OwnedSegmentValues::F16(values) => dot_product_f16_bits(query, &values[start..end]),
+            OwnedSegmentValues::Int8 { values, scales } => {
+                dot_product_i8_scaled(query, &values[start..end], scales[index])
+            }
+        }
     }
 
     fn swap_remove(&mut self, index: usize) {
@@ -345,12 +480,37 @@ impl VectorSegmentStore {
             let dim = self.dimension;
             let start = index * dim;
             let last_start = last_index * dim;
-            for offset in 0..dim {
-                self.values[start + offset] = self.values[last_start + offset];
+            match &mut self.values {
+                OwnedSegmentValues::F32(values) => {
+                    for offset in 0..dim {
+                        values[start + offset] = values[last_start + offset];
+                    }
+                }
+                OwnedSegmentValues::F16(values) => {
+                    for offset in 0..dim {
+                        values[start + offset] = values[last_start + offset];
+                    }
+                }
+                OwnedSegmentValues::Int8 { values, scales } => {
+                    for offset in 0..dim {
+                        values[start + offset] = values[last_start + offset];
+                    }
+                    scales[index] = scales[last_index];
+                }
             }
         }
-        self.values
-            .truncate(self.values.len().saturating_sub(self.dimension));
+        match &mut self.values {
+            OwnedSegmentValues::F32(values) => {
+                values.truncate(values.len().saturating_sub(self.dimension));
+            }
+            OwnedSegmentValues::F16(values) => {
+                values.truncate(values.len().saturating_sub(self.dimension));
+            }
+            OwnedSegmentValues::Int8 { values, scales } => {
+                values.truncate(values.len().saturating_sub(self.dimension));
+                scales.pop();
+            }
+        }
     }
 }
 
@@ -464,7 +624,8 @@ impl MmapVectorSegmentStore {
     }
 
     fn to_owned_store(&self) -> Result<VectorSegmentStore> {
-        let mut store = VectorSegmentStore::with_dimension(self.dimension);
+        let mut store =
+            VectorSegmentStore::with_dimension_and_storage(self.dimension, VectorStorageKind::F32);
         store.reserve(self.len());
         for position in 0..self.len() {
             let embedding = self.embedding(position);
@@ -489,14 +650,14 @@ impl Default for SegmentStorage {
 impl SegmentStorage {
     fn embedding_vec(&self, index: usize) -> Vec<f32> {
         match self {
-            Self::Owned(store) => store.embedding(index).to_vec(),
+            Self::Owned(store) => store.embedding_vec(index),
             Self::Mapped(store) => store.embedding(index),
         }
     }
 
     fn dot_product(&self, index: usize, query: &[f32]) -> f32 {
         match self {
-            Self::Owned(store) => dot_product(query, store.embedding(index)),
+            Self::Owned(store) => store.dot_product(index, query),
             Self::Mapped(store) => store.dot_product(index, query),
         }
     }
@@ -519,10 +680,7 @@ impl SegmentStorage {
 
     fn to_owned_store(&self) -> Result<VectorSegmentStore> {
         match self {
-            Self::Owned(store) => Ok(VectorSegmentStore {
-                dimension: store.dimension,
-                values: store.values.clone(),
-            }),
+            Self::Owned(store) => Ok(store.clone()),
             Self::Mapped(store) => store.to_owned_store(),
         }
     }
@@ -658,8 +816,10 @@ impl VectorIndex for BruteForceVectorIndex {
         self.ensure_owned_segments()?;
         if self.dimension.is_none() {
             self.dimension = Some(embedding.len());
-            self.segments =
-                SegmentStorage::Owned(VectorSegmentStore::with_dimension(embedding.len()));
+            self.segments = SegmentStorage::Owned(VectorSegmentStore::with_dimension_and_storage(
+                embedding.len(),
+                self.storage_kind,
+            ));
         }
 
         let normalized_embedding = normalize_embedding(embedding);
@@ -690,8 +850,10 @@ impl VectorIndex for BruteForceVectorIndex {
         self.ensure_owned_segments()?;
         if self.dimension.is_none() {
             self.dimension = Some(items[0].1.len());
-            self.segments =
-                SegmentStorage::Owned(VectorSegmentStore::with_dimension(items[0].1.len()));
+            self.segments = SegmentStorage::Owned(VectorSegmentStore::with_dimension_and_storage(
+                items[0].1.len(),
+                self.storage_kind,
+            ));
         }
 
         let prepared: Vec<(String, Vec<f32>)> = if items.len() >= BATCH_PARALLEL_PREP_THRESHOLD {
@@ -809,7 +971,7 @@ struct LshTable {
 #[derive(Debug, Clone)]
 struct LshEntry {
     chunk_id: String,
-    normalized_embedding: Vec<f32>,
+    normalized_embedding: EncodedVector,
     table_keys: Vec<u64>,
 }
 
@@ -988,7 +1150,7 @@ impl LshAnnVectorIndex {
                     let entry = &self.entries[*position];
                     VectorCandidate {
                         chunk_id: entry.chunk_id.clone(),
-                        score: dot_product(normalized_query, &entry.normalized_embedding),
+                        score: entry.normalized_embedding.dot_product(normalized_query),
                     }
                 })
                 .collect()
@@ -999,7 +1161,7 @@ impl LshAnnVectorIndex {
                     let entry = &self.entries[position];
                     VectorCandidate {
                         chunk_id: entry.chunk_id.clone(),
-                        score: dot_product(normalized_query, &entry.normalized_embedding),
+                        score: entry.normalized_embedding.dot_product(normalized_query),
                     }
                 })
                 .collect()
@@ -1012,19 +1174,28 @@ impl LshAnnVectorIndex {
         limit: usize,
         allowed_ids: &HashSet<String>,
     ) -> Result<Vec<VectorCandidate>> {
-        filtered_scan_entries(
-            &self
-                .entries
-                .iter()
-                .map(|entry| VectorEntry {
-                    chunk_id: entry.chunk_id.clone(),
-                    normalized_embedding: entry.normalized_embedding.clone(),
-                })
-                .collect::<Vec<_>>(),
-            query_embedding,
-            limit,
-            allowed_ids,
-        )
+        if limit == 0 || self.entries.is_empty() || allowed_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        validate_dimension(self.dimension, query_embedding)?;
+        let query_normalized = normalize_embedding(query_embedding);
+        let mut results: Vec<VectorCandidate> = self
+            .entries
+            .iter()
+            .filter(|entry| allowed_ids.contains(&entry.chunk_id))
+            .map(|entry| VectorCandidate {
+                chunk_id: entry.chunk_id.clone(),
+                score: entry.normalized_embedding.dot_product(&query_normalized),
+            })
+            .collect();
+
+        if results.len() > limit {
+            let nth = limit - 1;
+            results.select_nth_unstable_by(nth, compare_candidates_desc);
+            results.truncate(limit);
+        }
+        results.sort_by(compare_candidates_desc);
+        Ok(results)
     }
 }
 
@@ -1047,7 +1218,10 @@ impl VectorIndex for LshAnnVectorIndex {
             .iter()
             .map(|entry| {
                 entry.chunk_id.len()
-                    + vector_storage_bytes(entry.normalized_embedding.len(), self.storage_kind)
+                    + vector_storage_bytes(
+                        entry.normalized_embedding.dimension(),
+                        self.storage_kind,
+                    )
                     + entry.table_keys.len() * size_of::<u64>()
             })
             .sum::<usize>();
@@ -1090,11 +1264,13 @@ impl VectorIndex for LshAnnVectorIndex {
 
         let normalized_embedding = normalize_embedding(embedding);
         let table_keys = self.bucket_keys_for_embedding(&normalized_embedding);
+        let stored_embedding =
+            EncodedVector::from_normalized(&normalized_embedding, self.storage_kind);
 
         if let Some(position) = self.positions.get(chunk_id).copied() {
             let old_keys = std::mem::replace(&mut self.entries[position].table_keys, table_keys);
             self.remove_position_from_tables(position, &old_keys);
-            self.entries[position].normalized_embedding = normalized_embedding;
+            self.entries[position].normalized_embedding = stored_embedding;
             let new_keys = self.entries[position].table_keys.clone();
             self.insert_position_into_tables(position, &new_keys);
             return Ok(());
@@ -1103,7 +1279,7 @@ impl VectorIndex for LshAnnVectorIndex {
         let position = self.entries.len();
         self.entries.push(LshEntry {
             chunk_id: chunk_id.to_string(),
-            normalized_embedding,
+            normalized_embedding: stored_embedding,
             table_keys: table_keys.clone(),
         });
         self.positions.insert(chunk_id.to_string(), position);
@@ -1125,7 +1301,8 @@ impl VectorIndex for LshAnnVectorIndex {
         }
 
         let tables = &self.tables;
-        let prepared: Vec<(String, Vec<f32>, Vec<u64>)> = if items.len()
+        let storage_kind = self.storage_kind;
+        let prepared: Vec<(String, EncodedVector, Vec<u64>)> = if items.len()
             >= BATCH_PARALLEL_PREP_THRESHOLD
         {
             items
@@ -1136,7 +1313,11 @@ impl VectorIndex for LshAnnVectorIndex {
                         .iter()
                         .map(|table| Self::bucket_key(&table.hyperplanes, &normalized_embedding))
                         .collect::<Vec<_>>();
-                    ((*chunk_id).to_string(), normalized_embedding, table_keys)
+                    (
+                        (*chunk_id).to_string(),
+                        EncodedVector::from_normalized(&normalized_embedding, storage_kind),
+                        table_keys,
+                    )
                 })
                 .collect()
         } else {
@@ -1148,7 +1329,11 @@ impl VectorIndex for LshAnnVectorIndex {
                         .iter()
                         .map(|table| Self::bucket_key(&table.hyperplanes, &normalized_embedding))
                         .collect::<Vec<_>>();
-                    ((*chunk_id).to_string(), normalized_embedding, table_keys)
+                    (
+                        (*chunk_id).to_string(),
+                        EncodedVector::from_normalized(&normalized_embedding, storage_kind),
+                        table_keys,
+                    )
                 })
                 .collect()
         };
@@ -1423,11 +1608,13 @@ impl HnswBaselineVectorIndex {
             self.ef_construction,
             DistCosine {},
         );
-        let data_with_id: Vec<(&[f32], usize)> = self
-            .chunk_ids
+        let graph_embeddings: Vec<Vec<f32>> = (0..self.chunk_ids.len())
+            .map(|idx| self.segments.embedding_vec(idx))
+            .collect();
+        let data_with_id: Vec<(&[f32], usize)> = graph_embeddings
             .iter()
             .enumerate()
-            .map(|(idx, _)| (self.segments.embedding(idx), idx))
+            .map(|(idx, embedding)| (embedding.as_slice(), idx))
             .collect();
         graph.parallel_insert_slice(&data_with_id);
         graph.set_searching_mode(true);
@@ -1465,7 +1652,7 @@ impl HnswBaselineVectorIndex {
                 .par_iter()
                 .map(|position| VectorCandidate {
                     chunk_id: chunk_ids[*position].clone(),
-                    score: dot_product(query_normalized, segments.embedding(*position)),
+                    score: segments.dot_product(*position, query_normalized),
                 })
                 .collect()
         } else {
@@ -1473,7 +1660,7 @@ impl HnswBaselineVectorIndex {
                 .iter()
                 .map(|position| VectorCandidate {
                     chunk_id: chunk_ids[*position].clone(),
-                    score: dot_product(query_normalized, segments.embedding(*position)),
+                    score: segments.dot_product(*position, query_normalized),
                 })
                 .collect()
         };
@@ -1581,7 +1768,8 @@ impl VectorIndex for HnswBaselineVectorIndex {
         self.validate_dimension(embedding)?;
         if self.dimension.is_none() {
             self.dimension = Some(embedding.len());
-            self.segments = VectorSegmentStore::with_dimension(embedding.len());
+            self.segments =
+                VectorSegmentStore::with_dimension_and_storage(embedding.len(), self.storage_kind);
         }
 
         let normalized_embedding = normalize_embedding(embedding);
@@ -1609,7 +1797,8 @@ impl VectorIndex for HnswBaselineVectorIndex {
         }
         if self.dimension.is_none() {
             self.dimension = Some(items[0].1.len());
-            self.segments = VectorSegmentStore::with_dimension(items[0].1.len());
+            self.segments =
+                VectorSegmentStore::with_dimension_and_storage(items[0].1.len(), self.storage_kind);
         }
 
         let prepared: Vec<(String, Vec<f32>)> = if items.len() >= BATCH_PARALLEL_PREP_THRESHOLD {
@@ -1744,36 +1933,6 @@ fn compare_candidates_desc(left: &VectorCandidate, right: &VectorCandidate) -> O
         .then_with(|| left.chunk_id.cmp(&right.chunk_id))
 }
 
-fn filtered_scan_entries(
-    entries: &[VectorEntry],
-    query_embedding: &[f32],
-    limit: usize,
-    allowed_ids: &HashSet<String>,
-) -> Result<Vec<VectorCandidate>> {
-    if limit == 0 || entries.is_empty() || allowed_ids.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    validate_dimension(Some(entries[0].normalized_embedding.len()), query_embedding)?;
-    let query_normalized = normalize_embedding(query_embedding);
-    let mut results: Vec<VectorCandidate> = entries
-        .iter()
-        .filter(|entry| allowed_ids.contains(&entry.chunk_id))
-        .map(|entry| VectorCandidate {
-            chunk_id: entry.chunk_id.clone(),
-            score: dot_product(&query_normalized, &entry.normalized_embedding),
-        })
-        .collect();
-
-    if results.len() > limit {
-        let nth = limit - 1;
-        results.select_nth_unstable_by(nth, compare_candidates_desc);
-        results.truncate(limit);
-    }
-    results.sort_by(compare_candidates_desc);
-    Ok(results)
-}
-
 fn vector_storage_bytes(dim: usize, storage_kind: VectorStorageKind) -> usize {
     match storage_kind {
         VectorStorageKind::F32 => dim * size_of::<f32>(),
@@ -1896,6 +2055,63 @@ fn dot_product_f32_bytes(left: &[f32], right_bytes: &[u8]) -> f32 {
         i += 1;
     }
     acc0 + acc1 + acc2 + acc3 + tail
+}
+
+fn dot_product_f16_bits(left: &[f32], right_bits: &[u16]) -> f32 {
+    let len = left.len().min(right_bits.len());
+    let mut acc0 = 0.0f32;
+    let mut acc1 = 0.0f32;
+    let mut acc2 = 0.0f32;
+    let mut acc3 = 0.0f32;
+    let mut i = 0usize;
+    while i + 4 <= len {
+        acc0 += left[i] * f16::from_bits(right_bits[i]).to_f32();
+        acc1 += left[i + 1] * f16::from_bits(right_bits[i + 1]).to_f32();
+        acc2 += left[i + 2] * f16::from_bits(right_bits[i + 2]).to_f32();
+        acc3 += left[i + 3] * f16::from_bits(right_bits[i + 3]).to_f32();
+        i += 4;
+    }
+    let mut tail = 0.0f32;
+    while i < len {
+        tail += left[i] * f16::from_bits(right_bits[i]).to_f32();
+        i += 1;
+    }
+    acc0 + acc1 + acc2 + acc3 + tail
+}
+
+fn dot_product_i8_scaled(left: &[f32], right_values: &[i8], scale: f32) -> f32 {
+    let len = left.len().min(right_values.len());
+    let mut acc0 = 0.0f32;
+    let mut acc1 = 0.0f32;
+    let mut acc2 = 0.0f32;
+    let mut acc3 = 0.0f32;
+    let mut i = 0usize;
+    while i + 4 <= len {
+        acc0 += left[i] * right_values[i] as f32;
+        acc1 += left[i + 1] * right_values[i + 1] as f32;
+        acc2 += left[i + 2] * right_values[i + 2] as f32;
+        acc3 += left[i + 3] * right_values[i + 3] as f32;
+        i += 4;
+    }
+    let mut tail = 0.0f32;
+    while i < len {
+        tail += left[i] * right_values[i] as f32;
+        i += 1;
+    }
+    (acc0 + acc1 + acc2 + acc3 + tail) * scale
+}
+
+fn quantize_int8_slice(values: &[f32]) -> (Vec<i8>, f32) {
+    let max_abs = values
+        .iter()
+        .fold(0.0f32, |acc, value| acc.max(value.abs()))
+        .max(1e-6);
+    let scale = max_abs / 127.0;
+    let quantized = values
+        .iter()
+        .map(|value| ((*value / scale).round().clamp(-127.0, 127.0)) as i8)
+        .collect();
+    (quantized, scale)
 }
 
 fn l2_norm_unrolled(values: &[f32]) -> f32 {
@@ -2030,8 +2246,27 @@ mod tests {
     }
 
     #[test]
+    fn brute_force_quantized_storage_preserves_ranking() -> Result<()> {
+        for storage_kind in [VectorStorageKind::F16, VectorStorageKind::Int8] {
+            run_index_contract(BruteForceVectorIndex::new_with_storage(storage_kind))?;
+        }
+        Ok(())
+    }
+
+    #[test]
     fn lsh_ann_queries_by_similarity() -> Result<()> {
         run_index_contract(LshAnnVectorIndex::new())
+    }
+
+    #[test]
+    fn lsh_ann_quantized_storage_preserves_ranking() -> Result<()> {
+        for storage_kind in [VectorStorageKind::F16, VectorStorageKind::Int8] {
+            run_index_contract(LshAnnVectorIndex::new_with_options(
+                storage_kind,
+                AnnTuningConfig::default(),
+            ))?;
+        }
+        Ok(())
     }
 
     #[test]
@@ -2040,6 +2275,17 @@ mod tests {
             VectorStorageKind::F32,
             AnnTuningConfig::default(),
         ))
+    }
+
+    #[test]
+    fn hnsw_baseline_quantized_storage_preserves_ranking() -> Result<()> {
+        for storage_kind in [VectorStorageKind::F16, VectorStorageKind::Int8] {
+            run_index_contract(HnswBaselineVectorIndex::new_with_options(
+                storage_kind,
+                AnnTuningConfig::default(),
+            ))?;
+        }
+        Ok(())
     }
 
     #[test]

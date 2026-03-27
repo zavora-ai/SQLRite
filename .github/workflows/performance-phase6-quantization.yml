@@ -1,0 +1,19 @@
+name: performance-phase6-quantization
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  phase6-quantization:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+      - name: Run Phase 6 quantization suite
+        run: bash scripts/run-p6-quantization-suite.sh

@@ -1,6 +1,6 @@
 use sqlrite::{
     BenchmarkConfig, DurabilityProfile, FusionStrategy, QueryProfile, RuntimeConfig,
-    VectorIndexMode, run_benchmark,
+    VectorIndexMode, VectorStorageKind, run_benchmark,
 };
 use std::fs;
 use std::path::PathBuf;
@@ -36,7 +36,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         batch_size: args.batch_size,
     };
 
-    let mut runtime = RuntimeConfig::default().with_vector_index_mode(args.index_mode);
+    let mut runtime = RuntimeConfig::default()
+        .with_vector_index_mode(args.index_mode)
+        .with_vector_storage_kind(args.storage_kind);
     runtime.durability_profile = args.durability_profile;
 
     let report = run_benchmark(config, runtime)?;
@@ -68,6 +70,7 @@ struct BenchCliArgs {
     rrf_rank_constant: f32,
     output_path: Option<PathBuf>,
     index_mode: VectorIndexMode,
+    storage_kind: VectorStorageKind,
     durability_profile: DurabilityProfile,
 }
 
@@ -88,6 +91,7 @@ impl Default for BenchCliArgs {
             rrf_rank_constant: 60.0,
             output_path: None,
             index_mode: VectorIndexMode::BruteForce,
+            storage_kind: VectorStorageKind::F32,
             durability_profile: DurabilityProfile::Balanced,
         }
     }
@@ -166,6 +170,20 @@ fn parse_args(args: Vec<String>) -> Result<BenchCliArgs, String> {
                     }
                 };
             }
+            "--storage-kind" => {
+                i += 1;
+                let value = parse_string(&args, i, "--storage-kind")?;
+                cfg.storage_kind = match value.as_str() {
+                    "f32" => VectorStorageKind::F32,
+                    "f16" => VectorStorageKind::F16,
+                    "int8" => VectorStorageKind::Int8,
+                    other => {
+                        return Err(format!(
+                            "invalid --storage-kind `{other}`; expected f32, f16, or int8"
+                        ));
+                    }
+                };
+            }
             "--durability" => {
                 i += 1;
                 let value = parse_string(&args, i, "--durability")?;
@@ -220,7 +238,7 @@ fn parse_query_profile(raw: &str) -> Result<QueryProfile, String> {
 }
 
 fn usage() -> String {
-    "usage: cargo run --bin sqlrite-bench -- [--corpus N] [--queries N] [--warmup N] [--concurrency N] [--embedding-dim N] [--top-k N] [--candidate-limit N] [--query-profile balanced|latency|recall] [--batch-size N] [--alpha F] [--fusion weighted|rrf] [--rrf-k F] [--index-mode brute_force|lsh_ann|hnsw_baseline|disabled] [--durability balanced|durable|fast_unsafe] [--output PATH]".to_string()
+    "usage: cargo run --bin sqlrite-bench -- [--corpus N] [--queries N] [--warmup N] [--concurrency N] [--embedding-dim N] [--top-k N] [--candidate-limit N] [--query-profile balanced|latency|recall] [--batch-size N] [--alpha F] [--fusion weighted|rrf] [--rrf-k F] [--index-mode brute_force|lsh_ann|hnsw_baseline|disabled] [--storage-kind f32|f16|int8] [--durability balanced|durable|fast_unsafe] [--output PATH]".to_string()
 }
 
 fn print_summary(report: &sqlrite::BenchmarkReport) {
