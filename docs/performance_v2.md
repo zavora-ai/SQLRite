@@ -276,6 +276,7 @@ Make hybrid retrieval efficient enough to be a headline differentiator.
 - staged hybrid rerank now uses provisional hybrid scores from already-known vector/FTS signals before it fetches missing embeddings or lexical fallback content
 - partial FTS score lookups now fill only missing candidate ids instead of redoing the whole candidate set
 - lexical fallback content fetch now loads only candidates that are actually missing a usable FTS score
+- filtered vector search now resolves common `doc_id` and top-level string metadata filters through an in-memory chunk filter index before it falls back to SQLite scans
 - the Phase 7 planner suite is reproducible via:
   - `/Users/jameskaranja/Developer/projects/SQLRight/scripts/run-p7-hybrid-planner-suite.sh`
 

@@ -565,6 +565,7 @@ pub struct SqlRite {
     runtime_config: RuntimeConfig,
     schema_version: i64,
     vector_index: Option<RefCell<BuiltinVectorIndex>>,
+    filter_index: RefCell<ChunkFilterIndex>,
     db_path: Option<PathBuf>,
 }
 
@@ -573,6 +574,19 @@ struct CandidateChunkRecord {
     id: String,
     doc_id: String,
     metadata: Value,
+}
+
+#[derive(Debug, Clone)]
+struct ChunkFilterIndexEntry {
+    doc_id: String,
+    metadata_pairs: Vec<(String, String)>,
+}
+
+#[derive(Debug, Default)]
+struct ChunkFilterIndex {
+    by_doc_id: HashMap<String, HashSet<String>>,
+    by_metadata: HashMap<(String, String), HashSet<String>>,
+    by_chunk_id: HashMap<String, ChunkFilterIndexEntry>,
 }
 
 #[derive(Debug)]
@@ -593,6 +607,126 @@ enum HybridPlannerMode {
     VectorFirst,
     TextFirst,
     BalancedHybrid,
+}
+
+impl ChunkFilterIndex {
+    fn from_connection(conn: &Connection) -> Result<Self> {
+        let mut stmt = conn.prepare("SELECT id, doc_id, metadata FROM chunks")?;
+        let rows = stmt.query_map([], |row| {
+            let chunk_id: String = row.get(0)?;
+            let doc_id: String = row.get(1)?;
+            let metadata_text: String = row.get(2)?;
+            let metadata = serde_json::from_str::<Value>(&metadata_text).map_err(|e| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    2,
+                    rusqlite::types::Type::Text,
+                    Box::new(e),
+                )
+            })?;
+            Ok((chunk_id, doc_id, metadata))
+        })?;
+
+        let mut index = Self::default();
+        for row in rows {
+            let (chunk_id, doc_id, metadata) = row?;
+            index.upsert_chunk(&chunk_id, &doc_id, &metadata);
+        }
+        Ok(index)
+    }
+
+    fn upsert_chunk(&mut self, chunk_id: &str, doc_id: &str, metadata: &Value) {
+        self.remove_chunk(chunk_id);
+
+        self.by_doc_id
+            .entry(doc_id.to_string())
+            .or_default()
+            .insert(chunk_id.to_string());
+
+        let metadata_pairs = extract_filterable_metadata_pairs(metadata);
+        for (key, value) in &metadata_pairs {
+            self.by_metadata
+                .entry((key.clone(), value.clone()))
+                .or_default()
+                .insert(chunk_id.to_string());
+        }
+
+        self.by_chunk_id.insert(
+            chunk_id.to_string(),
+            ChunkFilterIndexEntry {
+                doc_id: doc_id.to_string(),
+                metadata_pairs,
+            },
+        );
+    }
+
+    fn remove_chunk(&mut self, chunk_id: &str) {
+        let Some(existing) = self.by_chunk_id.remove(chunk_id) else {
+            return;
+        };
+
+        if let Some(ids) = self.by_doc_id.get_mut(&existing.doc_id) {
+            ids.remove(chunk_id);
+            if ids.is_empty() {
+                self.by_doc_id.remove(&existing.doc_id);
+            }
+        }
+
+        for (key, value) in existing.metadata_pairs {
+            let map_key = (key, value);
+            if let Some(ids) = self.by_metadata.get_mut(&map_key) {
+                ids.remove(chunk_id);
+                if ids.is_empty() {
+                    self.by_metadata.remove(&map_key);
+                }
+            }
+        }
+    }
+
+    fn filtered_chunk_ids(&self, request: &SearchRequest) -> Option<HashSet<String>> {
+        if request.doc_id.is_none() && request.metadata_filters.is_empty() {
+            return None;
+        }
+
+        let mut working_set: Option<HashSet<String>> = None;
+
+        if let Some(doc_id) = &request.doc_id {
+            let ids = self.by_doc_id.get(doc_id)?;
+            working_set = Some(ids.iter().cloned().collect());
+        }
+
+        for (key, value) in &request.metadata_filters {
+            let ids = self.by_metadata.get(&(key.clone(), value.clone()))?;
+            if let Some(current) = &mut working_set {
+                current.retain(|chunk_id| ids.contains(chunk_id));
+                if current.is_empty() {
+                    return Some(HashSet::new());
+                }
+            } else {
+                working_set = Some(ids.iter().cloned().collect());
+            }
+        }
+
+        working_set
+    }
+}
+
+fn extract_filterable_metadata_pairs(metadata: &Value) -> Vec<(String, String)> {
+    let Some(object) = metadata.as_object() else {
+        return Vec::new();
+    };
+
+    object
+        .iter()
+        .filter_map(|(key, value)| {
+            let normalized = match value {
+                Value::String(text) => Some(text.clone()),
+                Value::Number(number) => Some(number.to_string()),
+                Value::Bool(flag) => Some(flag.to_string()),
+                _ => None,
+            }?;
+            Some((key.clone(), normalized))
+        })
+        .collect()
 }
 
 impl SqlRite {
@@ -673,6 +807,7 @@ impl SqlRite {
         let mut vector_index_rebuilt = false;
         if deduplicated_chunks > 0 {
             self.rebuild_vector_index()?;
+            self.rebuild_filter_index()?;
             self.persist_vector_index_artifacts_if_enabled()?;
             vector_index_rebuilt = true;
         }
@@ -729,6 +864,7 @@ impl SqlRite {
         let deleted = self.conn.execute(&sql, params![value])?;
         if deleted > 0 {
             self.rebuild_vector_index()?;
+            self.rebuild_filter_index()?;
             self.persist_vector_index_artifacts_if_enabled()?;
         }
         Ok(deleted)
@@ -792,6 +928,15 @@ impl SqlRite {
             "UPDATE chunks SET metadata = ?1 WHERE id = ?2",
             params![metadata_json, chunk_id],
         )?;
+        if let Ok(doc_id) = self.conn.query_row(
+            "SELECT doc_id FROM chunks WHERE id = ?1",
+            params![chunk_id],
+            |row| row.get::<_, String>(0),
+        ) {
+            self.filter_index
+                .borrow_mut()
+                .upsert_chunk(chunk_id, &doc_id, metadata);
+        }
         Ok(())
     }
 
@@ -856,6 +1001,13 @@ impl SqlRite {
                 .map(|chunk| (chunk.id.as_str(), chunk.embedding.as_slice()))
                 .collect();
             index.upsert_batch(&upserts)?;
+        }
+
+        {
+            let mut filter_index = self.filter_index.borrow_mut();
+            for chunk in chunks {
+                filter_index.upsert_chunk(&chunk.id, &chunk.doc_id, &chunk.metadata);
+            }
         }
 
         self.persist_vector_index_artifacts_if_enabled()?;
@@ -1189,6 +1341,7 @@ impl SqlRite {
         let fts_enabled = initialize_fts(&conn);
         let vector_index =
             load_vector_index(&conn, &runtime_config, db_path.as_deref())?.map(RefCell::new);
+        let filter_index = RefCell::new(ChunkFilterIndex::from_connection(&conn)?);
 
         Ok(Self {
             conn,
@@ -1196,8 +1349,14 @@ impl SqlRite {
             runtime_config,
             schema_version,
             vector_index,
+            filter_index,
             db_path,
         })
+    }
+
+    fn rebuild_filter_index(&self) -> Result<()> {
+        *self.filter_index.borrow_mut() = ChunkFilterIndex::from_connection(&self.conn)?;
+        Ok(())
     }
 
     fn persist_vector_index_artifacts_if_enabled(&self) -> Result<()> {
@@ -1454,6 +1613,10 @@ impl SqlRite {
     }
 
     fn filtered_chunk_ids(&self, request: &SearchRequest) -> Result<HashSet<String>> {
+        if let Some(ids) = self.filter_index.borrow().filtered_chunk_ids(request) {
+            return Ok(ids);
+        }
+
         let mut sql = String::from("SELECT id FROM chunks");
         let mut clauses = Vec::new();
         let mut params = Vec::new();
@@ -4239,5 +4402,69 @@ mod tests {
             hybrid_rerank_candidate_limit(&request, Some(HybridPlannerMode::BalancedHybrid)),
             60
         );
+    }
+
+    #[test]
+    fn filtered_chunk_ids_uses_in_memory_doc_and_metadata_index() -> Result<()> {
+        let db = SqlRite::open_in_memory()?;
+        db.ingest_chunks(&[
+            ChunkInput {
+                id: "chunk-a".to_string(),
+                doc_id: "doc-a".to_string(),
+                content: "tenant a memory".to_string(),
+                metadata: serde_json::json!({"tenant":"alpha","topic":"memory"}),
+                embedding: vec![1.0, 0.0],
+                source: None,
+            },
+            ChunkInput {
+                id: "chunk-b".to_string(),
+                doc_id: "doc-b".to_string(),
+                content: "tenant b ops".to_string(),
+                metadata: serde_json::json!({"tenant":"beta","topic":"ops"}),
+                embedding: vec![0.0, 1.0],
+                source: None,
+            },
+        ])?;
+
+        let request = SearchRequest {
+            doc_id: Some("doc-a".to_string()),
+            metadata_filters: HashMap::from([("tenant".to_string(), "alpha".to_string())]),
+            ..Default::default()
+        };
+
+        let filtered = db.filtered_chunk_ids(&request)?;
+        assert_eq!(filtered.len(), 1);
+        assert!(filtered.contains("chunk-a"));
+        Ok(())
+    }
+
+    #[test]
+    fn update_chunk_metadata_refreshes_filter_index() -> Result<()> {
+        let db = SqlRite::open_in_memory()?;
+        db.ingest_chunk(&ChunkInput {
+            id: "chunk-a".to_string(),
+            doc_id: "doc-a".to_string(),
+            content: "tenant alpha memory".to_string(),
+            metadata: serde_json::json!({"tenant":"alpha"}),
+            embedding: vec![1.0, 0.0],
+            source: None,
+        })?;
+
+        db.update_chunk_metadata("chunk-a", &serde_json::json!({"tenant":"beta"}))?;
+
+        let alpha_request = SearchRequest {
+            metadata_filters: HashMap::from([("tenant".to_string(), "alpha".to_string())]),
+            ..Default::default()
+        };
+        assert!(db.filtered_chunk_ids(&alpha_request)?.is_empty());
+
+        let beta_request = SearchRequest {
+            metadata_filters: HashMap::from([("tenant".to_string(), "beta".to_string())]),
+            ..Default::default()
+        };
+        let filtered = db.filtered_chunk_ids(&beta_request)?;
+        assert_eq!(filtered.len(), 1);
+        assert!(filtered.contains("chunk-a"));
+        Ok(())
     }
 }
