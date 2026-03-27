@@ -1,8 +1,12 @@
+use std::cell::{Cell, RefCell};
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::mem::size_of;
+use std::path::Path;
 
 use crate::{Result, SqlRiteError};
+use hnsw_rs::prelude::{DistCosine, Hnsw};
+use memmap2::{Mmap, MmapOptions};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -109,7 +113,7 @@ pub trait VectorIndex {
     fn query(&self, query_embedding: &[f32], limit: usize) -> Result<Vec<VectorCandidate>>;
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub(crate) enum BuiltinVectorIndex {
     BruteForce(BruteForceVectorIndex),
     LshAnn(LshAnnVectorIndex),
@@ -144,9 +148,13 @@ impl BuiltinVectorIndex {
     pub(crate) fn export_entries(&self) -> Vec<(String, Vec<f32>)> {
         match self {
             Self::BruteForce(index) => index
-                .entries
+                .chunk_ids
                 .iter()
-                .map(|entry| (entry.chunk_id.clone(), entry.normalized_embedding.clone()))
+                .enumerate()
+                .map(|(position, chunk_id)| {
+                    let embedding = index.segments.embedding_vec(position);
+                    (chunk_id.clone(), embedding)
+                })
                 .collect(),
             Self::LshAnn(index) => index
                 .entries
@@ -154,7 +162,6 @@ impl BuiltinVectorIndex {
                 .map(|entry| (entry.chunk_id.clone(), entry.normalized_embedding.clone()))
                 .collect(),
             Self::HnswBaseline(index) => index
-                .inner
                 .entries
                 .iter()
                 .map(|entry| (entry.chunk_id.clone(), entry.normalized_embedding.clone()))
@@ -169,6 +176,19 @@ impl BuiltinVectorIndex {
             .map(|(chunk_id, embedding)| (chunk_id.as_str(), embedding.as_slice()))
             .collect();
         self.upsert_batch(&refs)
+    }
+
+    pub(crate) fn query_filtered(
+        &self,
+        query_embedding: &[f32],
+        limit: usize,
+        allowed_ids: &HashSet<String>,
+    ) -> Result<Vec<VectorCandidate>> {
+        match self {
+            Self::BruteForce(index) => index.query_filtered(query_embedding, limit, allowed_ids),
+            Self::LshAnn(index) => index.query_filtered(query_embedding, limit, allowed_ids),
+            Self::HnswBaseline(index) => index.query_filtered(query_embedding, limit, allowed_ids),
+        }
     }
 }
 
@@ -252,11 +272,253 @@ struct VectorEntry {
     normalized_embedding: Vec<f32>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Default)]
+struct VectorSegmentStore {
+    dimension: usize,
+    values: Vec<f32>,
+}
+
+impl VectorSegmentStore {
+    fn with_dimension(dimension: usize) -> Self {
+        Self {
+            dimension,
+            values: Vec::new(),
+        }
+    }
+
+    fn len(&self) -> usize {
+        if self.dimension == 0 {
+            0
+        } else {
+            self.values.len() / self.dimension
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    fn reserve(&mut self, additional_embeddings: usize) {
+        self.values
+            .reserve(additional_embeddings.saturating_mul(self.dimension));
+    }
+
+    fn push(&mut self, embedding: &[f32]) {
+        debug_assert_eq!(self.dimension, embedding.len());
+        self.values.extend_from_slice(embedding);
+    }
+
+    fn set(&mut self, index: usize, embedding: &[f32]) {
+        debug_assert_eq!(self.dimension, embedding.len());
+        let start = index * self.dimension;
+        let end = start + self.dimension;
+        self.values[start..end].copy_from_slice(embedding);
+    }
+
+    fn embedding(&self, index: usize) -> &[f32] {
+        let start = index * self.dimension;
+        let end = start + self.dimension;
+        &self.values[start..end]
+    }
+
+    fn swap_remove(&mut self, index: usize) {
+        if self.is_empty() {
+            return;
+        }
+        let last_index = self.len() - 1;
+        if index != last_index {
+            let dim = self.dimension;
+            let start = index * dim;
+            let last_start = last_index * dim;
+            for offset in 0..dim {
+                self.values[start + offset] = self.values[last_start + offset];
+            }
+        }
+        self.values
+            .truncate(self.values.len().saturating_sub(self.dimension));
+    }
+}
+
+#[derive(Debug)]
+struct MmapVectorSegmentStore {
+    dimension: usize,
+    mmap: Mmap,
+    vector_offsets: Vec<usize>,
+}
+
+impl MmapVectorSegmentStore {
+    fn load_f32_sidecar(path: &Path) -> Result<(Vec<String>, usize, Self)> {
+        let file = std::fs::File::open(path)?;
+        let mmap = unsafe { MmapOptions::new().map(&file)? };
+        let bytes = &mmap[..];
+        if bytes.len() < 17 {
+            return Err(SqlRiteError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "exact segment sidecar is too small",
+            )));
+        }
+        if &bytes[..8] != b"SQLRSEG1" {
+            return Err(SqlRiteError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "invalid exact segment snapshot magic",
+            )));
+        }
+        let version = u32::from_le_bytes(bytes[8..12].try_into().expect("slice has length"));
+        if version != 1 {
+            return Err(SqlRiteError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("unsupported exact segment snapshot version {version}"),
+            )));
+        }
+        let storage_kind = bytes[12];
+        if storage_kind != 1 {
+            return Err(SqlRiteError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "mmap exact sidecar currently requires f32 storage",
+            )));
+        }
+        let entry_count =
+            u32::from_le_bytes(bytes[13..17].try_into().expect("slice has length")) as usize;
+        let mut cursor = 17usize;
+        let mut chunk_ids = Vec::with_capacity(entry_count);
+        let mut vector_offsets = Vec::with_capacity(entry_count);
+        let mut dimension = None;
+        for _ in 0..entry_count {
+            let id_len = read_u32_at(bytes, &mut cursor)? as usize;
+            let id_bytes = read_bytes_at(bytes, &mut cursor, id_len)?;
+            let chunk_id = String::from_utf8(id_bytes.to_vec()).map_err(|error| {
+                SqlRiteError::Io(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    error.to_string(),
+                ))
+            })?;
+            let entry_dimension = read_u32_at(bytes, &mut cursor)? as usize;
+            if let Some(expected_dimension) = dimension {
+                if expected_dimension != entry_dimension {
+                    return Err(SqlRiteError::Io(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "mixed dimensions in mmap exact sidecar",
+                    )));
+                }
+            } else {
+                dimension = Some(entry_dimension);
+            }
+            let vector_bytes = entry_dimension.saturating_mul(size_of::<f32>());
+            if cursor + vector_bytes > bytes.len() {
+                return Err(SqlRiteError::Io(std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    "unexpected EOF while parsing mmap exact sidecar",
+                )));
+            }
+            chunk_ids.push(chunk_id);
+            vector_offsets.push(cursor);
+            cursor += vector_bytes;
+        }
+
+        Ok((
+            chunk_ids,
+            dimension.unwrap_or(0),
+            Self {
+                dimension: dimension.unwrap_or(0),
+                mmap,
+                vector_offsets,
+            },
+        ))
+    }
+
+    fn len(&self) -> usize {
+        self.vector_offsets.len()
+    }
+
+    fn embedding(&self, index: usize) -> Vec<f32> {
+        let offset = self.vector_offsets[index];
+        let bytes = &self.mmap[offset..offset + self.dimension * size_of::<f32>()];
+        let mut values = Vec::with_capacity(self.dimension);
+        for chunk in bytes.chunks_exact(size_of::<f32>()) {
+            values.push(f32::from_le_bytes(
+                chunk.try_into().expect("chunk has exact f32 width"),
+            ));
+        }
+        values
+    }
+
+    fn dot_product(&self, index: usize, query: &[f32]) -> f32 {
+        let offset = self.vector_offsets[index];
+        let bytes = &self.mmap[offset..offset + self.dimension * size_of::<f32>()];
+        dot_product_f32_bytes(query, bytes)
+    }
+
+    fn to_owned_store(&self) -> Result<VectorSegmentStore> {
+        let mut store = VectorSegmentStore::with_dimension(self.dimension);
+        store.reserve(self.len());
+        for position in 0..self.len() {
+            let embedding = self.embedding(position);
+            store.push(&embedding);
+        }
+        Ok(store)
+    }
+}
+
+#[derive(Debug)]
+enum SegmentStorage {
+    Owned(VectorSegmentStore),
+    Mapped(MmapVectorSegmentStore),
+}
+
+impl Default for SegmentStorage {
+    fn default() -> Self {
+        Self::Owned(VectorSegmentStore::default())
+    }
+}
+
+impl SegmentStorage {
+    fn embedding_vec(&self, index: usize) -> Vec<f32> {
+        match self {
+            Self::Owned(store) => store.embedding(index).to_vec(),
+            Self::Mapped(store) => store.embedding(index),
+        }
+    }
+
+    fn dot_product(&self, index: usize, query: &[f32]) -> f32 {
+        match self {
+            Self::Owned(store) => dot_product(query, store.embedding(index)),
+            Self::Mapped(store) => store.dot_product(index, query),
+        }
+    }
+
+    fn estimated_bytes(
+        &self,
+        storage_kind: VectorStorageKind,
+        len: usize,
+        dimension: Option<usize>,
+    ) -> usize {
+        match self {
+            Self::Owned(_) => dimension
+                .map(|dim| len * vector_storage_bytes(dim, storage_kind))
+                .unwrap_or(0),
+            Self::Mapped(store) => {
+                store.mmap.len() + store.vector_offsets.len() * size_of::<usize>()
+            }
+        }
+    }
+
+    fn to_owned_store(&self) -> Result<VectorSegmentStore> {
+        match self {
+            Self::Owned(store) => Ok(VectorSegmentStore {
+                dimension: store.dimension,
+                values: store.values.clone(),
+            }),
+            Self::Mapped(store) => store.to_owned_store(),
+        }
+    }
+}
+
+#[derive(Debug, Default)]
 pub struct BruteForceVectorIndex {
     storage_kind: VectorStorageKind,
     dimension: Option<usize>,
-    entries: Vec<VectorEntry>,
+    chunk_ids: Vec<String>,
+    segments: SegmentStorage,
     positions: HashMap<String, usize>,
 }
 
@@ -281,8 +543,68 @@ impl BruteForceVectorIndex {
         }
     }
 
+    pub fn load_mmap_f32_sidecar(path: &Path) -> Result<Self> {
+        let (chunk_ids, dimension, mapped_store) = MmapVectorSegmentStore::load_f32_sidecar(path)?;
+        let positions = chunk_ids
+            .iter()
+            .enumerate()
+            .map(|(position, chunk_id)| (chunk_id.clone(), position))
+            .collect();
+        Ok(Self {
+            storage_kind: VectorStorageKind::F32,
+            dimension: if dimension == 0 {
+                None
+            } else {
+                Some(dimension)
+            },
+            chunk_ids,
+            segments: SegmentStorage::Mapped(mapped_store),
+            positions,
+        })
+    }
+
     fn validate_dimension(&self, embedding: &[f32]) -> Result<()> {
         validate_dimension(self.dimension, embedding)
+    }
+
+    fn ensure_owned_segments(&mut self) -> Result<()> {
+        if matches!(self.segments, SegmentStorage::Owned(_)) {
+            return Ok(());
+        }
+        self.segments = SegmentStorage::Owned(self.segments.to_owned_store()?);
+        Ok(())
+    }
+
+    fn query_filtered(
+        &self,
+        query_embedding: &[f32],
+        limit: usize,
+        allowed_ids: &HashSet<String>,
+    ) -> Result<Vec<VectorCandidate>> {
+        if limit == 0 || self.chunk_ids.is_empty() || allowed_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        self.validate_dimension(query_embedding)?;
+
+        let query_normalized = normalize_embedding(query_embedding);
+        let mut results: Vec<VectorCandidate> = self
+            .chunk_ids
+            .iter()
+            .enumerate()
+            .filter(|(_, chunk_id)| allowed_ids.contains(*chunk_id))
+            .map(|(position, chunk_id)| VectorCandidate {
+                chunk_id: chunk_id.clone(),
+                score: self.segments.dot_product(position, &query_normalized),
+            })
+            .collect();
+
+        if results.len() > limit {
+            let nth = limit - 1;
+            results.select_nth_unstable_by(nth, compare_candidates_desc);
+            results.truncate(limit);
+        }
+        results.sort_by(compare_candidates_desc);
+        Ok(results)
     }
 }
 
@@ -296,19 +618,17 @@ impl VectorIndex for BruteForceVectorIndex {
     }
 
     fn len(&self) -> usize {
-        self.entries.len()
+        self.chunk_ids.len()
     }
 
     fn estimated_memory_bytes(&self) -> usize {
-        let embedding_bytes = self
-            .entries
-            .iter()
-            .map(|entry| vector_storage_bytes(entry.normalized_embedding.len(), self.storage_kind))
-            .sum::<usize>();
+        let embedding_bytes =
+            self.segments
+                .estimated_bytes(self.storage_kind, self.chunk_ids.len(), self.dimension);
         let id_bytes = self
-            .entries
+            .chunk_ids
             .iter()
-            .map(|entry| entry.chunk_id.len())
+            .map(|chunk_id| chunk_id.len())
             .sum::<usize>();
         let positions_overhead =
             self.positions.len() * (size_of::<usize>() + size_of::<String>() + size_of::<usize>());
@@ -317,21 +637,26 @@ impl VectorIndex for BruteForceVectorIndex {
 
     fn upsert(&mut self, chunk_id: &str, embedding: &[f32]) -> Result<()> {
         self.validate_dimension(embedding)?;
+        self.ensure_owned_segments()?;
         if self.dimension.is_none() {
             self.dimension = Some(embedding.len());
+            self.segments =
+                SegmentStorage::Owned(VectorSegmentStore::with_dimension(embedding.len()));
         }
 
         let normalized_embedding = normalize_embedding(embedding);
         if let Some(position) = self.positions.get(chunk_id).copied() {
-            self.entries[position].normalized_embedding = normalized_embedding;
+            if let SegmentStorage::Owned(store) = &mut self.segments {
+                store.set(position, &normalized_embedding);
+            }
             return Ok(());
         }
 
-        let position = self.entries.len();
-        self.entries.push(VectorEntry {
-            chunk_id: chunk_id.to_string(),
-            normalized_embedding,
-        });
+        let position = self.chunk_ids.len();
+        self.chunk_ids.push(chunk_id.to_string());
+        if let SegmentStorage::Owned(store) = &mut self.segments {
+            store.push(&normalized_embedding);
+        }
         self.positions.insert(chunk_id.to_string(), position);
         Ok(())
     }
@@ -344,8 +669,11 @@ impl VectorIndex for BruteForceVectorIndex {
         for (_, embedding) in items {
             self.validate_dimension(embedding)?;
         }
+        self.ensure_owned_segments()?;
         if self.dimension.is_none() {
             self.dimension = Some(items[0].1.len());
+            self.segments =
+                SegmentStorage::Owned(VectorSegmentStore::with_dimension(items[0].1.len()));
         }
 
         let prepared: Vec<(String, Vec<f32>)> = if items.len() >= BATCH_PARALLEL_PREP_THRESHOLD {
@@ -364,17 +692,22 @@ impl VectorIndex for BruteForceVectorIndex {
                 .collect()
         };
 
-        self.entries.reserve(prepared.len());
+        self.chunk_ids.reserve(prepared.len());
+        if let SegmentStorage::Owned(store) = &mut self.segments {
+            store.reserve(prepared.len());
+        }
         self.positions.reserve(prepared.len());
         for (chunk_id, normalized_embedding) in prepared {
             if let Some(position) = self.positions.get(&chunk_id).copied() {
-                self.entries[position].normalized_embedding = normalized_embedding;
+                if let SegmentStorage::Owned(store) = &mut self.segments {
+                    store.set(position, &normalized_embedding);
+                }
             } else {
-                let position = self.entries.len();
-                self.entries.push(VectorEntry {
-                    chunk_id: chunk_id.clone(),
-                    normalized_embedding,
-                });
+                let position = self.chunk_ids.len();
+                self.chunk_ids.push(chunk_id.clone());
+                if let SegmentStorage::Owned(store) = &mut self.segments {
+                    store.push(&normalized_embedding);
+                }
                 self.positions.insert(chunk_id, position);
             }
         }
@@ -383,51 +716,58 @@ impl VectorIndex for BruteForceVectorIndex {
     }
 
     fn remove(&mut self, chunk_id: &str) -> Result<()> {
+        self.ensure_owned_segments()?;
         let Some(position) = self.positions.remove(chunk_id) else {
             return Ok(());
         };
 
-        self.entries.swap_remove(position);
-        if position < self.entries.len() {
-            let moved_id = self.entries[position].chunk_id.clone();
+        self.chunk_ids.swap_remove(position);
+        if let SegmentStorage::Owned(store) = &mut self.segments {
+            store.swap_remove(position);
+        }
+        if position < self.chunk_ids.len() {
+            let moved_id = self.chunk_ids[position].clone();
             self.positions.insert(moved_id, position);
         }
 
-        if self.entries.is_empty() {
+        if self.chunk_ids.is_empty() {
             self.dimension = None;
+            self.segments = SegmentStorage::Owned(VectorSegmentStore::default());
         }
 
         Ok(())
     }
 
     fn reset(&mut self) -> Result<()> {
-        self.entries.clear();
+        self.chunk_ids.clear();
         self.positions.clear();
         self.dimension = None;
+        self.segments = SegmentStorage::Owned(VectorSegmentStore::default());
         Ok(())
     }
 
     fn query(&self, query_embedding: &[f32], limit: usize) -> Result<Vec<VectorCandidate>> {
-        if limit == 0 || self.entries.is_empty() {
+        if limit == 0 || self.chunk_ids.is_empty() {
             return Ok(Vec::new());
         }
         self.validate_dimension(query_embedding)?;
 
         let query_normalized = normalize_embedding(query_embedding);
-        let mut results: Vec<VectorCandidate> = if self.entries.len() >= PARALLEL_SCAN_THRESHOLD {
-            self.entries
-                .par_iter()
-                .map(|entry| VectorCandidate {
-                    chunk_id: entry.chunk_id.clone(),
-                    score: dot_product(&query_normalized, &entry.normalized_embedding),
+        let mut results: Vec<VectorCandidate> = if self.chunk_ids.len() >= PARALLEL_SCAN_THRESHOLD {
+            (0..self.chunk_ids.len())
+                .into_par_iter()
+                .map(|position| VectorCandidate {
+                    chunk_id: self.chunk_ids[position].clone(),
+                    score: self.segments.dot_product(position, &query_normalized),
                 })
                 .collect()
         } else {
-            self.entries
+            self.chunk_ids
                 .iter()
-                .map(|entry| VectorCandidate {
-                    chunk_id: entry.chunk_id.clone(),
-                    score: dot_product(&query_normalized, &entry.normalized_embedding),
+                .enumerate()
+                .map(|(position, chunk_id)| VectorCandidate {
+                    chunk_id: chunk_id.clone(),
+                    score: self.segments.dot_product(position, &query_normalized),
                 })
                 .collect()
         };
@@ -646,6 +986,27 @@ impl LshAnnVectorIndex {
                 })
                 .collect()
         }
+    }
+
+    fn query_filtered(
+        &self,
+        query_embedding: &[f32],
+        limit: usize,
+        allowed_ids: &HashSet<String>,
+    ) -> Result<Vec<VectorCandidate>> {
+        filtered_scan_entries(
+            &self
+                .entries
+                .iter()
+                .map(|entry| VectorEntry {
+                    chunk_id: entry.chunk_id.clone(),
+                    normalized_embedding: entry.normalized_embedding.clone(),
+                })
+                .collect::<Vec<_>>(),
+            query_embedding,
+            limit,
+            allowed_ids,
+        )
     }
 }
 
@@ -898,37 +1259,145 @@ impl VectorIndex for LshAnnVectorIndex {
     }
 }
 
-#[derive(Debug, Clone)]
 pub struct HnswBaselineVectorIndex {
-    inner: LshAnnVectorIndex,
+    storage_kind: VectorStorageKind,
+    dimension: Option<usize>,
+    entries: Vec<VectorEntry>,
+    positions: HashMap<String, usize>,
     m: usize,
     ef_construction: usize,
     ef_search: usize,
+    graph: RefCell<Option<Hnsw<'static, f32, DistCosine>>>,
+    graph_dirty: Cell<bool>,
+}
+
+impl std::fmt::Debug for HnswBaselineVectorIndex {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HnswBaselineVectorIndex")
+            .field("storage_kind", &self.storage_kind)
+            .field("dimension", &self.dimension)
+            .field("entries", &self.entries.len())
+            .field("m", &self.m)
+            .field("ef_construction", &self.ef_construction)
+            .field("ef_search", &self.ef_search)
+            .field("graph_dirty", &self.graph_dirty.get())
+            .finish()
+    }
 }
 
 impl HnswBaselineVectorIndex {
     pub fn new_with_options(storage_kind: VectorStorageKind, tuning: AnnTuningConfig) -> Self {
         let m = 16usize;
         let ef_construction = 64usize;
-        let ef_search = tuning.min_candidates.max(256);
-        let ann_tuning = AnnTuningConfig {
-            min_candidates: ef_search,
-            max_hamming_radius: tuning.max_hamming_radius.max(1),
-            max_candidate_multiplier: tuning.max_candidate_multiplier.max(4),
-        };
-        let mut inner = LshAnnVectorIndex::new_with_options(storage_kind, ann_tuning);
-        inner.bits_per_table = 16;
-        inner.table_count = 8;
+        let ef_search = tuning.min_candidates.max(64);
         Self {
-            inner,
+            storage_kind,
+            dimension: None,
+            entries: Vec::new(),
+            positions: HashMap::new(),
             m,
             ef_construction,
             ef_search,
+            graph: RefCell::new(None),
+            graph_dirty: Cell::new(true),
         }
     }
 
     fn storage_kind(&self) -> VectorStorageKind {
-        self.inner.storage_kind
+        self.storage_kind
+    }
+
+    fn validate_dimension(&self, embedding: &[f32]) -> Result<()> {
+        validate_dimension(self.dimension, embedding)
+    }
+
+    fn mark_dirty(&self) {
+        self.graph_dirty.set(true);
+    }
+
+    fn ensure_graph(&self) -> Result<()> {
+        if !self.graph_dirty.get() && self.graph.borrow().is_some() {
+            return Ok(());
+        }
+
+        if self.entries.is_empty() {
+            self.graph.borrow_mut().take();
+            self.graph_dirty.set(false);
+            return Ok(());
+        }
+
+        let max_layer = 16usize.min((self.entries.len().max(2) as f32).ln().ceil() as usize + 1);
+        let mut graph = Hnsw::<f32, DistCosine>::new(
+            self.m,
+            self.entries.len(),
+            max_layer,
+            self.ef_construction,
+            DistCosine {},
+        );
+        let data_with_id: Vec<(&Vec<f32>, usize)> = self
+            .entries
+            .iter()
+            .enumerate()
+            .map(|(idx, entry)| (&entry.normalized_embedding, idx))
+            .collect();
+        graph.parallel_insert(&data_with_id);
+        graph.set_searching_mode(true);
+        *self.graph.borrow_mut() = Some(graph);
+        self.graph_dirty.set(false);
+        Ok(())
+    }
+
+    fn query_filtered(
+        &self,
+        query_embedding: &[f32],
+        limit: usize,
+        allowed_ids: &HashSet<String>,
+    ) -> Result<Vec<VectorCandidate>> {
+        if limit == 0 || self.entries.is_empty() || allowed_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        self.validate_dimension(query_embedding)?;
+        self.ensure_graph()?;
+
+        let mut allowed_positions = allowed_ids
+            .iter()
+            .filter_map(|chunk_id| self.positions.get(chunk_id).copied())
+            .collect::<Vec<_>>();
+        if allowed_positions.is_empty() {
+            return Ok(Vec::new());
+        }
+        allowed_positions.sort_unstable();
+
+        let query_normalized = normalize_embedding(query_embedding);
+        let ef_search = self.ef_search.max(limit);
+        let graph = self.graph.borrow();
+        let Some(graph) = graph.as_ref() else {
+            return Ok(Vec::new());
+        };
+
+        let mut results: Vec<VectorCandidate> = graph
+            .search_filter(
+                &query_normalized,
+                limit,
+                ef_search,
+                Some(&allowed_positions),
+            )
+            .into_iter()
+            .filter_map(|neighbor| {
+                self.entries
+                    .get(neighbor.d_id)
+                    .map(|entry| VectorCandidate {
+                        chunk_id: entry.chunk_id.clone(),
+                        score: (1.0 - neighbor.distance).clamp(-1.0, 1.0),
+                    })
+            })
+            .collect();
+
+        results.sort_by(compare_candidates_desc);
+        if results.len() > limit {
+            results.truncate(limit);
+        }
+        Ok(results)
     }
 }
 
@@ -938,35 +1407,162 @@ impl VectorIndex for HnswBaselineVectorIndex {
     }
 
     fn dimension(&self) -> Option<usize> {
-        self.inner.dimension()
+        self.dimension
     }
 
     fn len(&self) -> usize {
-        self.inner.len()
+        self.entries.len()
     }
 
     fn estimated_memory_bytes(&self) -> usize {
-        self.inner.estimated_memory_bytes() + (self.m + self.ef_construction + self.ef_search) * 8
+        let embedding_bytes = self
+            .entries
+            .iter()
+            .map(|entry| vector_storage_bytes(entry.normalized_embedding.len(), self.storage_kind))
+            .sum::<usize>();
+        let id_bytes = self
+            .entries
+            .iter()
+            .map(|entry| entry.chunk_id.len())
+            .sum::<usize>();
+        let positions_overhead =
+            self.positions.len() * (size_of::<usize>() + size_of::<String>() + size_of::<usize>());
+        let graph_link_budget = self.entries.len() * self.m * size_of::<usize>() * 2;
+        embedding_bytes + id_bytes + positions_overhead + graph_link_budget
     }
 
     fn upsert(&mut self, chunk_id: &str, embedding: &[f32]) -> Result<()> {
-        self.inner.upsert(chunk_id, embedding)
+        self.validate_dimension(embedding)?;
+        if self.dimension.is_none() {
+            self.dimension = Some(embedding.len());
+        }
+
+        let normalized_embedding = normalize_embedding(embedding);
+        if let Some(position) = self.positions.get(chunk_id).copied() {
+            self.entries[position].normalized_embedding = normalized_embedding;
+            self.mark_dirty();
+            return Ok(());
+        }
+
+        let position = self.entries.len();
+        self.entries.push(VectorEntry {
+            chunk_id: chunk_id.to_string(),
+            normalized_embedding,
+        });
+        self.positions.insert(chunk_id.to_string(), position);
+        self.mark_dirty();
+        Ok(())
     }
 
     fn upsert_batch(&mut self, items: &[(&str, &[f32])]) -> Result<()> {
-        self.inner.upsert_batch(items)
+        if items.is_empty() {
+            return Ok(());
+        }
+
+        for (_, embedding) in items {
+            self.validate_dimension(embedding)?;
+        }
+        if self.dimension.is_none() {
+            self.dimension = Some(items[0].1.len());
+        }
+
+        let prepared: Vec<(String, Vec<f32>)> = if items.len() >= BATCH_PARALLEL_PREP_THRESHOLD {
+            items
+                .par_iter()
+                .map(|(chunk_id, embedding)| {
+                    ((*chunk_id).to_string(), normalize_embedding(embedding))
+                })
+                .collect()
+        } else {
+            items
+                .iter()
+                .map(|(chunk_id, embedding)| {
+                    ((*chunk_id).to_string(), normalize_embedding(embedding))
+                })
+                .collect()
+        };
+
+        self.entries.reserve(prepared.len());
+        self.positions.reserve(prepared.len());
+        for (chunk_id, normalized_embedding) in prepared {
+            if let Some(position) = self.positions.get(&chunk_id).copied() {
+                self.entries[position].normalized_embedding = normalized_embedding;
+            } else {
+                let position = self.entries.len();
+                self.entries.push(VectorEntry {
+                    chunk_id: chunk_id.clone(),
+                    normalized_embedding,
+                });
+                self.positions.insert(chunk_id, position);
+            }
+        }
+        self.mark_dirty();
+        Ok(())
     }
 
     fn remove(&mut self, chunk_id: &str) -> Result<()> {
-        self.inner.remove(chunk_id)
+        let Some(position) = self.positions.remove(chunk_id) else {
+            return Ok(());
+        };
+
+        self.entries.swap_remove(position);
+        if position < self.entries.len() {
+            let moved_id = self.entries[position].chunk_id.clone();
+            self.positions.insert(moved_id, position);
+        }
+
+        if self.entries.is_empty() {
+            self.dimension = None;
+            self.graph.borrow_mut().take();
+            self.graph_dirty.set(false);
+        } else {
+            self.mark_dirty();
+        }
+
+        Ok(())
     }
 
     fn reset(&mut self) -> Result<()> {
-        self.inner.reset()
+        self.dimension = None;
+        self.entries.clear();
+        self.positions.clear();
+        self.graph.borrow_mut().take();
+        self.graph_dirty.set(false);
+        Ok(())
     }
 
     fn query(&self, query_embedding: &[f32], limit: usize) -> Result<Vec<VectorCandidate>> {
-        self.inner.query(query_embedding, limit)
+        if limit == 0 || self.entries.is_empty() {
+            return Ok(Vec::new());
+        }
+        self.validate_dimension(query_embedding)?;
+        self.ensure_graph()?;
+
+        let query_normalized = normalize_embedding(query_embedding);
+        let ef_search = self.ef_search.max(limit);
+        let graph = self.graph.borrow();
+        let Some(graph) = graph.as_ref() else {
+            return Ok(Vec::new());
+        };
+
+        let mut results: Vec<VectorCandidate> = graph
+            .search(&query_normalized, limit, ef_search)
+            .into_iter()
+            .filter_map(|neighbor| {
+                self.entries
+                    .get(neighbor.d_id)
+                    .map(|entry| VectorCandidate {
+                        chunk_id: entry.chunk_id.clone(),
+                        score: (1.0 - neighbor.distance).clamp(-1.0, 1.0),
+                    })
+            })
+            .collect();
+
+        results.sort_by(compare_candidates_desc);
+        if results.len() > limit {
+            results.truncate(limit);
+        }
+        Ok(results)
     }
 }
 
@@ -994,6 +1590,36 @@ fn compare_candidates_desc(left: &VectorCandidate, right: &VectorCandidate) -> O
         .then_with(|| left.chunk_id.cmp(&right.chunk_id))
 }
 
+fn filtered_scan_entries(
+    entries: &[VectorEntry],
+    query_embedding: &[f32],
+    limit: usize,
+    allowed_ids: &HashSet<String>,
+) -> Result<Vec<VectorCandidate>> {
+    if limit == 0 || entries.is_empty() || allowed_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    validate_dimension(Some(entries[0].normalized_embedding.len()), query_embedding)?;
+    let query_normalized = normalize_embedding(query_embedding);
+    let mut results: Vec<VectorCandidate> = entries
+        .iter()
+        .filter(|entry| allowed_ids.contains(&entry.chunk_id))
+        .map(|entry| VectorCandidate {
+            chunk_id: entry.chunk_id.clone(),
+            score: dot_product(&query_normalized, &entry.normalized_embedding),
+        })
+        .collect();
+
+    if results.len() > limit {
+        let nth = limit - 1;
+        results.select_nth_unstable_by(nth, compare_candidates_desc);
+        results.truncate(limit);
+    }
+    results.sort_by(compare_candidates_desc);
+    Ok(results)
+}
+
 fn vector_storage_bytes(dim: usize, storage_kind: VectorStorageKind) -> usize {
     match storage_kind {
         VectorStorageKind::F32 => dim * size_of::<f32>(),
@@ -1002,8 +1628,36 @@ fn vector_storage_bytes(dim: usize, storage_kind: VectorStorageKind) -> usize {
     }
 }
 
+fn read_u32_at(bytes: &[u8], cursor: &mut usize) -> Result<u32> {
+    if *cursor + size_of::<u32>() > bytes.len() {
+        return Err(SqlRiteError::Io(std::io::Error::new(
+            std::io::ErrorKind::UnexpectedEof,
+            "unexpected EOF while reading u32",
+        )));
+    }
+    let value = u32::from_le_bytes(
+        bytes[*cursor..*cursor + size_of::<u32>()]
+            .try_into()
+            .expect("slice has u32 length"),
+    );
+    *cursor += size_of::<u32>();
+    Ok(value)
+}
+
+fn read_bytes_at<'a>(bytes: &'a [u8], cursor: &mut usize, len: usize) -> Result<&'a [u8]> {
+    if *cursor + len > bytes.len() {
+        return Err(SqlRiteError::Io(std::io::Error::new(
+            std::io::ErrorKind::UnexpectedEof,
+            "unexpected EOF while reading bytes",
+        )));
+    }
+    let slice = &bytes[*cursor..*cursor + len];
+    *cursor += len;
+    Ok(slice)
+}
+
 fn normalize_embedding(embedding: &[f32]) -> Vec<f32> {
-    let norm = embedding.iter().map(|v| v * v).sum::<f32>().sqrt();
+    let norm = l2_norm_unrolled(embedding);
     if norm == 0.0 {
         return embedding.to_vec();
     }
@@ -1011,7 +1665,176 @@ fn normalize_embedding(embedding: &[f32]) -> Vec<f32> {
 }
 
 fn dot_product(left: &[f32], right: &[f32]) -> f32 {
-    left.iter().zip(right.iter()).map(|(a, b)| a * b).sum()
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    {
+        if std::arch::is_x86_feature_detected!("avx2") {
+            return unsafe { dot_product_avx2(left, right) };
+        }
+    }
+    dot_product_scalar(left, right)
+}
+
+fn dot_product_scalar(left: &[f32], right: &[f32]) -> f32 {
+    let len = left.len().min(right.len());
+    let mut acc0 = 0.0f32;
+    let mut acc1 = 0.0f32;
+    let mut acc2 = 0.0f32;
+    let mut acc3 = 0.0f32;
+    let mut i = 0usize;
+    while i + 4 <= len {
+        acc0 += left[i] * right[i];
+        acc1 += left[i + 1] * right[i + 1];
+        acc2 += left[i + 2] * right[i + 2];
+        acc3 += left[i + 3] * right[i + 3];
+        i += 4;
+    }
+    let mut tail = 0.0f32;
+    while i < len {
+        tail += left[i] * right[i];
+        i += 1;
+    }
+    acc0 + acc1 + acc2 + acc3 + tail
+}
+
+fn dot_product_f32_bytes(left: &[f32], right_bytes: &[u8]) -> f32 {
+    let available = right_bytes.len() / size_of::<f32>();
+    let len = left.len().min(available);
+    let mut acc0 = 0.0f32;
+    let mut acc1 = 0.0f32;
+    let mut acc2 = 0.0f32;
+    let mut acc3 = 0.0f32;
+    let mut i = 0usize;
+    while i + 4 <= len {
+        let right0 = f32::from_le_bytes(
+            right_bytes[i * 4..i * 4 + 4]
+                .try_into()
+                .expect("slice has f32 width"),
+        );
+        let right1 = f32::from_le_bytes(
+            right_bytes[(i + 1) * 4..(i + 1) * 4 + 4]
+                .try_into()
+                .expect("slice has f32 width"),
+        );
+        let right2 = f32::from_le_bytes(
+            right_bytes[(i + 2) * 4..(i + 2) * 4 + 4]
+                .try_into()
+                .expect("slice has f32 width"),
+        );
+        let right3 = f32::from_le_bytes(
+            right_bytes[(i + 3) * 4..(i + 3) * 4 + 4]
+                .try_into()
+                .expect("slice has f32 width"),
+        );
+        acc0 += left[i] * right0;
+        acc1 += left[i + 1] * right1;
+        acc2 += left[i + 2] * right2;
+        acc3 += left[i + 3] * right3;
+        i += 4;
+    }
+    let mut tail = 0.0f32;
+    while i < len {
+        let right = f32::from_le_bytes(
+            right_bytes[i * 4..i * 4 + 4]
+                .try_into()
+                .expect("slice has f32 width"),
+        );
+        tail += left[i] * right;
+        i += 1;
+    }
+    acc0 + acc1 + acc2 + acc3 + tail
+}
+
+fn l2_norm_unrolled(values: &[f32]) -> f32 {
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    {
+        if std::arch::is_x86_feature_detected!("avx2") {
+            return unsafe { l2_norm_avx2(values) };
+        }
+    }
+    l2_norm_scalar(values)
+}
+
+fn l2_norm_scalar(values: &[f32]) -> f32 {
+    let mut acc0 = 0.0f32;
+    let mut acc1 = 0.0f32;
+    let mut acc2 = 0.0f32;
+    let mut acc3 = 0.0f32;
+    let mut i = 0usize;
+    while i + 4 <= values.len() {
+        acc0 += values[i] * values[i];
+        acc1 += values[i + 1] * values[i + 1];
+        acc2 += values[i + 2] * values[i + 2];
+        acc3 += values[i + 3] * values[i + 3];
+        i += 4;
+    }
+    let mut tail = 0.0f32;
+    while i < values.len() {
+        tail += values[i] * values[i];
+        i += 1;
+    }
+    (acc0 + acc1 + acc2 + acc3 + tail).sqrt()
+}
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[target_feature(enable = "avx2")]
+unsafe fn dot_product_avx2(left: &[f32], right: &[f32]) -> f32 {
+    #[cfg(target_arch = "x86")]
+    use std::arch::x86::{
+        __m256, _mm256_add_ps, _mm256_loadu_ps, _mm256_mul_ps, _mm256_setzero_ps, _mm256_storeu_ps,
+    };
+    #[cfg(target_arch = "x86_64")]
+    use std::arch::x86_64::{
+        __m256, _mm256_add_ps, _mm256_loadu_ps, _mm256_mul_ps, _mm256_setzero_ps, _mm256_storeu_ps,
+    };
+
+    let len = left.len().min(right.len());
+    let mut i = 0usize;
+    let mut acc: __m256 = _mm256_setzero_ps();
+    while i + 8 <= len {
+        let left_vec = _mm256_loadu_ps(left.as_ptr().add(i));
+        let right_vec = _mm256_loadu_ps(right.as_ptr().add(i));
+        acc = _mm256_add_ps(acc, _mm256_mul_ps(left_vec, right_vec));
+        i += 8;
+    }
+
+    let mut lanes = [0.0f32; 8];
+    _mm256_storeu_ps(lanes.as_mut_ptr(), acc);
+    let mut total = lanes.iter().sum::<f32>();
+    while i < len {
+        total += left[i] * right[i];
+        i += 1;
+    }
+    total
+}
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[target_feature(enable = "avx2")]
+unsafe fn l2_norm_avx2(values: &[f32]) -> f32 {
+    #[cfg(target_arch = "x86")]
+    use std::arch::x86::{
+        __m256, _mm256_add_ps, _mm256_loadu_ps, _mm256_mul_ps, _mm256_setzero_ps, _mm256_storeu_ps,
+    };
+    #[cfg(target_arch = "x86_64")]
+    use std::arch::x86_64::{
+        __m256, _mm256_add_ps, _mm256_loadu_ps, _mm256_mul_ps, _mm256_setzero_ps, _mm256_storeu_ps,
+    };
+
+    let mut i = 0usize;
+    let mut acc: __m256 = _mm256_setzero_ps();
+    while i + 8 <= values.len() {
+        let vec = _mm256_loadu_ps(values.as_ptr().add(i));
+        acc = _mm256_add_ps(acc, _mm256_mul_ps(vec, vec));
+        i += 8;
+    }
+
+    let mut lanes = [0.0f32; 8];
+    _mm256_storeu_ps(lanes.as_mut_ptr(), acc);
+    let mut total = lanes.iter().sum::<f32>();
+    while i < values.len() {
+        total += values[i] * values[i];
+        i += 1;
+    }
+    total.sqrt()
 }
 
 fn generate_hyperplane(dim: usize, table_idx: usize, bit_idx: usize) -> Vec<f32> {
@@ -1034,6 +1857,7 @@ fn pseudo_uniform(seed: u64) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::tempdir;
 
     fn run_index_contract<I: VectorIndex>(mut index: I) -> Result<()> {
         index.upsert("c1", &[1.0, 0.0, 0.0])?;
@@ -1062,6 +1886,21 @@ mod tests {
             VectorStorageKind::F32,
             AnnTuningConfig::default(),
         ))
+    }
+
+    #[test]
+    fn hnsw_baseline_query_filtered_respects_allow_list() -> Result<()> {
+        let mut index =
+            HnswBaselineVectorIndex::new_with_options(VectorStorageKind::F32, Default::default());
+        index.upsert("acme-top", &[1.0, 0.0, 0.0])?;
+        index.upsert("beta-top", &[0.99, 0.01, 0.0])?;
+        index.upsert("beta-second", &[0.95, 0.05, 0.0])?;
+
+        let allowed = HashSet::from(["beta-top".to_string(), "beta-second".to_string()]);
+        let found = index.query_filtered(&[1.0, 0.0, 0.0], 1, &allowed)?;
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].chunk_id, "beta-top");
+        Ok(())
     }
 
     #[test]
@@ -1149,6 +1988,38 @@ mod tests {
             f16_index.estimated_memory_bytes() > int8_index.estimated_memory_bytes(),
             "expected f16 estimate > int8 estimate"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn brute_force_can_load_mmap_sidecar() -> Result<()> {
+        let dir = tempdir()?;
+        let path = dir.path().join("exact-sidecar-f32.bin");
+        let entries = [
+            ("c1", vec![1.0f32, 0.0, 0.0]),
+            ("c2", vec![0.0f32, 1.0, 0.0]),
+            ("c3", vec![0.8f32, 0.2, 0.0]),
+        ];
+
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"SQLRSEG1");
+        bytes.extend_from_slice(&1u32.to_le_bytes());
+        bytes.push(1u8);
+        bytes.extend_from_slice(&(entries.len() as u32).to_le_bytes());
+        for (chunk_id, embedding) in entries {
+            bytes.extend_from_slice(&(chunk_id.len() as u32).to_le_bytes());
+            bytes.extend_from_slice(chunk_id.as_bytes());
+            bytes.extend_from_slice(&(embedding.len() as u32).to_le_bytes());
+            for value in embedding {
+                bytes.extend_from_slice(&value.to_le_bytes());
+            }
+        }
+        std::fs::write(&path, bytes)?;
+
+        let index = BruteForceVectorIndex::load_mmap_f32_sidecar(&path)?;
+        let found = index.query(&[0.9, 0.1, 0.0], 2)?;
+        assert_eq!(found.len(), 2);
+        assert_eq!(found[0].chunk_id, "c1");
         Ok(())
     }
 }
