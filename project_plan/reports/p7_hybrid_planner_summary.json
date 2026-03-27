@@ -1,0 +1,22 @@
+{
+  "suite": "p7_hybrid_planner",
+  "quality_gates_pass": true,
+  "brute_force": {
+    "qps": 582.2957812414439,
+    "p95_ms": 1.906083,
+    "top1_hit_rate": 1.0,
+    "delta_vs_p6_f32_qps": 152.82184386733343,
+    "delta_vs_p6_f32_p95_ms": 0.6179590000000001
+  },
+  "hnsw_baseline": {
+    "qps": 573.5401101433309,
+    "p95_ms": 1.909291,
+    "top1_hit_rate": 1.0,
+    "delta_vs_p6_f32_qps": 150.14239957386786,
+    "delta_vs_p6_f32_p95_ms": 0.6422919999999999
+  },
+  "delta_hnsw_vs_bruteforce": {
+    "qps": -8.755671098112998,
+    "p95_ms": -0.0032080000000000997
+  }
+}

@@ -1,0 +1,228 @@
+
+$ cargo test hybrid_search_matches_text_and_vector -- --nocapture
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running unittests src/lib.rs (target/debug/deps/sqlrite-13612ca32ee58f63)
+
+running 1 test
+test tests::hybrid_search_matches_text_and_vector ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 198 filtered out; finished in 0.00s
+
+     Running unittests src/main.rs (target/debug/deps/sqlrite-f88293c42b71bfc0)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 35 filtered out; finished in 0.00s
+
+     Running unittests src/bin/sqlrite-bench.rs (target/debug/deps/sqlrite_bench-de895f5e1f983c8b)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/sqlrite-bench-assert.rs (target/debug/deps/sqlrite_bench_assert-2057176ae5841649)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/sqlrite-bench-matrix.rs (target/debug/deps/sqlrite_bench_matrix-c224d301bdc93cb6)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/sqlrite-bench-suite.rs (target/debug/deps/sqlrite_bench_suite-1c537d526bcb6391)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running unittests src/bin/sqlrite-bench-suite-assert.rs (target/debug/deps/sqlrite_bench_suite_assert-1ce22bcc8763acbf)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+
+     Running unittests src/bin/sqlrite-eval.rs (target/debug/deps/sqlrite_eval-8542a0093a19da49)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/sqlrite-grpc.rs (target/debug/deps/sqlrite_grpc-c61d62c6515b00df)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running unittests src/bin/sqlrite-grpc-client.rs (target/debug/deps/sqlrite_grpc_client-58012baae0b3e18b)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running unittests src/bin/sqlrite-ingest.rs (target/debug/deps/sqlrite_ingest-7a631d3a69cc63e7)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/sqlrite-mcp.rs (target/debug/deps/sqlrite_mcp-f3fb3eb4f1330f21)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running unittests src/bin/sqlrite-ops.rs (target/debug/deps/sqlrite_ops-3e3116a89021b1f5)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/sqlrite-query.rs (target/debug/deps/sqlrite_query-788ec4b382e9bb3e)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/sqlrite-reindex.rs (target/debug/deps/sqlrite_reindex-c88c767a66d9a1b3)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/sqlrite-security.rs (target/debug/deps/sqlrite_security-5ae15d3e9d329566)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/sqlrite-serve.rs (target/debug/deps/sqlrite_serve-a5d6cf471f5a0ac6)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+$ cargo test rrf_changes_hybrid_ordering -- --nocapture
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running unittests src/lib.rs (target/debug/deps/sqlrite-13612ca32ee58f63)
+
+running 1 test
+test tests::rrf_changes_hybrid_ordering ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 198 filtered out; finished in 0.00s
+
+     Running unittests src/main.rs (target/debug/deps/sqlrite-f88293c42b71bfc0)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 35 filtered out; finished in 0.00s
+
+     Running unittests src/bin/sqlrite-bench.rs (target/debug/deps/sqlrite_bench-de895f5e1f983c8b)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/sqlrite-bench-assert.rs (target/debug/deps/sqlrite_bench_assert-2057176ae5841649)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/sqlrite-bench-matrix.rs (target/debug/deps/sqlrite_bench_matrix-c224d301bdc93cb6)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/sqlrite-bench-suite.rs (target/debug/deps/sqlrite_bench_suite-1c537d526bcb6391)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running unittests src/bin/sqlrite-bench-suite-assert.rs (target/debug/deps/sqlrite_bench_suite_assert-1ce22bcc8763acbf)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+
+     Running unittests src/bin/sqlrite-eval.rs (target/debug/deps/sqlrite_eval-8542a0093a19da49)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/sqlrite-grpc.rs (target/debug/deps/sqlrite_grpc-c61d62c6515b00df)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running unittests src/bin/sqlrite-grpc-client.rs (target/debug/deps/sqlrite_grpc_client-58012baae0b3e18b)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running unittests src/bin/sqlrite-ingest.rs (target/debug/deps/sqlrite_ingest-7a631d3a69cc63e7)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/sqlrite-mcp.rs (target/debug/deps/sqlrite_mcp-f3fb3eb4f1330f21)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running unittests src/bin/sqlrite-ops.rs (target/debug/deps/sqlrite_ops-3e3116a89021b1f5)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/sqlrite-query.rs (target/debug/deps/sqlrite_query-788ec4b382e9bb3e)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/sqlrite-reindex.rs (target/debug/deps/sqlrite_reindex-c88c767a66d9a1b3)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/sqlrite-security.rs (target/debug/deps/sqlrite_security-5ae15d3e9d329566)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/sqlrite-serve.rs (target/debug/deps/sqlrite_serve-a5d6cf471f5a0ac6)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+$ env RUSTC_WRAPPER= cargo run --bin sqlrite-bench -- --corpus 5000 --queries 150 --warmup 30 --embedding-dim 64 --candidate-limit 200 --top-k 10 --index-mode brute_force --storage-kind f32 --output /Users/jameskaranja/Developer/projects/SQLRight/project_plan/reports/p7_benchmark_bruteforce_f32.json
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running `target/debug/sqlrite-bench --corpus 5000 --queries 150 --warmup 30 --embedding-dim 64 --candidate-limit 200 --top-k 10 --index-mode brute_force --storage-kind f32 --output /Users/jameskaranja/Developer/projects/SQLRight/project_plan/reports/p7_benchmark_bruteforce_f32.json`
+SQLRite benchmark: corpus=5000, queries=150, concurrency=1, index=brute_force, fusion=weighted, query_profile=balanced
+ingest_ms=182.97, query_ms=257.60, qps=582.30, top1_hit_rate=1.0000
+ingest_chunks_per_sec=27326.59, dataset_payload_bytes=1539515, index_estimated_bytes=1550000, approx_working_set_bytes=3089515
+latency_ms: avg=1.7113, p50=1.6802, p95=1.9061, p99=2.0824, min=1.5701, max=2.1583
+
+$ env RUSTC_WRAPPER= cargo run --bin sqlrite-bench -- --corpus 5000 --queries 150 --warmup 30 --embedding-dim 64 --candidate-limit 200 --top-k 10 --index-mode hnsw_baseline --storage-kind f32 --output /Users/jameskaranja/Developer/projects/SQLRight/project_plan/reports/p7_benchmark_hnsw_f32.json
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running `target/debug/sqlrite-bench --corpus 5000 --queries 150 --warmup 30 --embedding-dim 64 --candidate-limit 200 --top-k 10 --index-mode hnsw_baseline --storage-kind f32 --output /Users/jameskaranja/Developer/projects/SQLRight/project_plan/reports/p7_benchmark_hnsw_f32.json`
+SQLRite benchmark: corpus=5000, queries=150, concurrency=1, index=hnsw_baseline, fusion=weighted, query_profile=balanced
+ingest_ms=180.50, query_ms=261.53, qps=573.54, top1_hit_rate=1.0000
+ingest_chunks_per_sec=27701.27, dataset_payload_bytes=1539515, index_estimated_bytes=2830000, approx_working_set_bytes=4369515
+latency_ms: avg=1.7375, p50=1.7089, p95=1.9093, p99=2.1495, min=1.6072, max=2.1911

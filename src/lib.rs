@@ -588,6 +588,13 @@ struct FtsCandidates {
     scores: HashMap<String, f32>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HybridPlannerMode {
+    VectorFirst,
+    TextFirst,
+    BalancedHybrid,
+}
+
 impl SqlRite {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
@@ -866,49 +873,79 @@ impl SqlRite {
         let query_tokens = query_text.map(tokenize);
         let use_vector = query_embedding.is_some();
         let use_text = query_text.is_some();
+        let hybrid_planner_mode =
+            select_hybrid_planner_mode(&request, self.fts_enabled, self.vector_index.is_some());
 
-        let vector_candidates = if let Some(query_vector) = query_embedding {
-            self.vector_candidates(query_vector, &request)?
-        } else {
-            Vec::new()
-        };
-
-        let vector_score_lookup: HashMap<String, f32> = vector_candidates
-            .iter()
-            .map(|candidate| (candidate.chunk_id.clone(), candidate.score))
-            .collect();
-        let vector_candidate_ids: Vec<String> = vector_candidates
-            .iter()
-            .map(|candidate| candidate.chunk_id.clone())
-            .collect();
+        let mut vector_score_lookup = HashMap::new();
+        let mut vector_candidate_ids = Vec::new();
         let vector_fast_path =
             !use_text && request.doc_id.is_none() && request.metadata_filters.is_empty();
 
         let mut text_scores = HashMap::new();
         let mut text_candidate_ids = Vec::new();
+        if let Some(query_vector) = query_embedding
+            && !matches!(hybrid_planner_mode, Some(HybridPlannerMode::TextFirst))
+        {
+            let mut vector_request = request.clone();
+            if let Some(mode) = hybrid_planner_mode {
+                vector_request.candidate_limit = hybrid_primary_candidate_limit(&request, mode);
+            }
+            let vector_candidates = self.vector_candidates(query_vector, &vector_request)?;
+            vector_score_lookup = vector_candidates
+                .iter()
+                .map(|candidate| (candidate.chunk_id.clone(), candidate.score))
+                .collect();
+            vector_candidate_ids = vector_candidates
+                .iter()
+                .map(|candidate| candidate.chunk_id.clone())
+                .collect();
+        }
         if let Some(text) = query_text
             && self.fts_enabled
         {
-            let need_text_candidates =
-                !use_vector || vector_candidate_ids.len() < request.candidate_limit;
+            let need_text_candidates = match hybrid_planner_mode {
+                Some(HybridPlannerMode::VectorFirst) => vector_candidate_ids.len() < request.top_k,
+                Some(HybridPlannerMode::TextFirst) => true,
+                Some(HybridPlannerMode::BalancedHybrid) | None => {
+                    !use_vector || vector_candidate_ids.len() < request.candidate_limit
+                }
+            };
             if need_text_candidates {
-                let text_limit = if use_vector {
-                    match request.query_profile {
+                let text_limit = match hybrid_planner_mode {
+                    Some(mode) => hybrid_primary_candidate_limit(&request, mode),
+                    None if use_vector => match request.query_profile {
                         QueryProfile::Latency => request.candidate_limit,
                         QueryProfile::Balanced => request.candidate_limit.saturating_mul(2),
                         QueryProfile::Recall => request.candidate_limit.saturating_mul(4),
-                    }
-                } else {
-                    request.candidate_limit
+                    },
+                    None => request.candidate_limit,
                 };
                 let fts_candidates = self
                     .fts_text_candidates(text, &request, text_limit)
                     .unwrap_or_default();
                 text_candidate_ids = fts_candidates.ordered_chunk_ids;
-                if !use_vector {
+                if !use_vector || matches!(hybrid_planner_mode, Some(HybridPlannerMode::TextFirst))
+                {
                     text_scores = fts_candidates.scores;
                 }
             }
+        }
+        if let Some(query_vector) = query_embedding
+            && matches!(hybrid_planner_mode, Some(HybridPlannerMode::TextFirst))
+            && vector_candidate_ids.len() < request.top_k
+        {
+            let mut vector_request = request.clone();
+            vector_request.candidate_limit =
+                hybrid_secondary_candidate_limit(&request, HybridPlannerMode::TextFirst);
+            let vector_candidates = self.vector_candidates(query_vector, &vector_request)?;
+            vector_score_lookup = vector_candidates
+                .iter()
+                .map(|candidate| (candidate.chunk_id.clone(), candidate.score))
+                .collect();
+            vector_candidate_ids = vector_candidates
+                .iter()
+                .map(|candidate| candidate.chunk_id.clone())
+                .collect();
         }
 
         let fetch_ids = if vector_fast_path {
@@ -918,20 +955,36 @@ impl SqlRite {
                 .cloned()
                 .collect()
         } else {
-            merge_candidate_ids(
-                &vector_candidate_ids,
-                &text_candidate_ids,
-                request.candidate_limit,
-                use_vector,
-                use_text,
-            )
+            match hybrid_planner_mode {
+                Some(HybridPlannerMode::VectorFirst) => merge_ranked_candidate_ids(
+                    &vector_candidate_ids,
+                    &text_candidate_ids,
+                    request.candidate_limit,
+                ),
+                Some(HybridPlannerMode::TextFirst) => merge_ranked_candidate_ids(
+                    &text_candidate_ids,
+                    &vector_candidate_ids,
+                    request.candidate_limit,
+                ),
+                Some(HybridPlannerMode::BalancedHybrid) | None => merge_candidate_ids(
+                    &vector_candidate_ids,
+                    &text_candidate_ids,
+                    request.candidate_limit,
+                    use_vector,
+                    use_text,
+                ),
+            }
         };
 
         let candidate_ids = if fetch_ids.is_empty() {
             self.fetch_candidate_chunk_ids(&request)?
         } else {
             let mut items = fetch_ids;
-            if !vector_fast_path && items.len() < request.candidate_limit {
+            let allow_sql_backfill = matches!(
+                hybrid_planner_mode,
+                None | Some(HybridPlannerMode::BalancedHybrid)
+            );
+            if !vector_fast_path && allow_sql_backfill && items.len() < request.candidate_limit {
                 let fallback = self.fetch_candidate_chunk_ids(&request)?;
                 let mut seen_ids: HashSet<String> = items.iter().cloned().collect();
                 for chunk_id in fallback {
@@ -949,7 +1002,9 @@ impl SqlRite {
 
         if let Some(text) = query_text
             && self.fts_enabled
-            && text_scores.is_empty()
+            && candidate_ids
+                .iter()
+                .any(|chunk_id| !text_scores.contains_key(chunk_id))
             && !should_skip_fts_score_lookup(
                 use_vector,
                 self.fts_enabled,
@@ -957,9 +1012,17 @@ impl SqlRite {
                 request.candidate_limit,
             )
         {
-            text_scores = self
-                .fts_text_scores_for_ids(text, &candidate_ids)
-                .unwrap_or_default();
+            let missing_text_ids: Vec<String> = candidate_ids
+                .iter()
+                .filter(|chunk_id| !text_scores.contains_key(*chunk_id))
+                .cloned()
+                .collect();
+            if !missing_text_ids.is_empty() {
+                text_scores.extend(
+                    self.fts_text_scores_for_ids(text, &missing_text_ids)
+                        .unwrap_or_default(),
+                );
+            }
         }
 
         let mut scored = Vec::with_capacity(candidate_ids.len());
@@ -1789,6 +1852,98 @@ fn merge_candidate_ids(
     }
 
     merged
+}
+
+fn merge_ranked_candidate_ids(
+    primary_ids: &[String],
+    secondary_ids: &[String],
+    limit: usize,
+) -> Vec<String> {
+    if limit == 0 {
+        return Vec::new();
+    }
+
+    let mut merged = Vec::with_capacity(limit);
+    let mut seen = HashSet::with_capacity(limit.saturating_mul(2));
+
+    for id in primary_ids {
+        if seen.insert(id.clone()) {
+            merged.push(id.clone());
+            if merged.len() >= limit {
+                return merged;
+            }
+        }
+    }
+
+    for id in secondary_ids {
+        if seen.insert(id.clone()) {
+            merged.push(id.clone());
+            if merged.len() >= limit {
+                break;
+            }
+        }
+    }
+
+    merged
+}
+
+fn select_hybrid_planner_mode(
+    request: &SearchRequest,
+    fts_enabled: bool,
+    vector_index_available: bool,
+) -> Option<HybridPlannerMode> {
+    if request.query_text.is_none() || request.query_embedding.is_none() {
+        return None;
+    }
+    if !fts_enabled {
+        return Some(HybridPlannerMode::VectorFirst);
+    }
+    if !vector_index_available {
+        return Some(HybridPlannerMode::TextFirst);
+    }
+    if request.alpha >= 0.6 || request.query_profile == QueryProfile::Latency {
+        return Some(HybridPlannerMode::VectorFirst);
+    }
+    if request.alpha <= 0.35 {
+        return Some(HybridPlannerMode::TextFirst);
+    }
+    Some(HybridPlannerMode::BalancedHybrid)
+}
+
+fn hybrid_primary_candidate_limit(request: &SearchRequest, mode: HybridPlannerMode) -> usize {
+    let multiplier = match (mode, request.query_profile) {
+        (HybridPlannerMode::VectorFirst, QueryProfile::Latency) => 4,
+        (HybridPlannerMode::VectorFirst, QueryProfile::Balanced) => 8,
+        (HybridPlannerMode::VectorFirst, QueryProfile::Recall) => 12,
+        (HybridPlannerMode::TextFirst, QueryProfile::Latency) => 4,
+        (HybridPlannerMode::TextFirst, QueryProfile::Balanced) => 8,
+        (HybridPlannerMode::TextFirst, QueryProfile::Recall) => 12,
+        (HybridPlannerMode::BalancedHybrid, _) => return request.candidate_limit,
+    };
+    request
+        .top_k
+        .saturating_mul(multiplier)
+        .max(32)
+        .min(request.candidate_limit)
+        .max(request.top_k)
+}
+
+fn hybrid_secondary_candidate_limit(request: &SearchRequest, mode: HybridPlannerMode) -> usize {
+    let multiplier = match (mode, request.query_profile) {
+        (HybridPlannerMode::VectorFirst, QueryProfile::Latency) => 2,
+        (HybridPlannerMode::VectorFirst, QueryProfile::Balanced) => 4,
+        (HybridPlannerMode::VectorFirst, QueryProfile::Recall) => 6,
+        (HybridPlannerMode::TextFirst, QueryProfile::Latency) => 2,
+        (HybridPlannerMode::TextFirst, QueryProfile::Balanced) => 4,
+        (HybridPlannerMode::TextFirst, QueryProfile::Recall) => 6,
+        (HybridPlannerMode::BalancedHybrid, _) => return request.candidate_limit,
+    };
+    request
+        .top_k
+        .saturating_mul(multiplier)
+        .max(16)
+        .min(request.candidate_limit)
+        .max(request.top_k)
 }
 
 fn should_skip_fts_score_lookup(
@@ -3904,5 +4059,62 @@ mod tests {
         assert!(!should_skip_fts_score_lookup(false, true, 1000, 1000));
         assert!(!should_skip_fts_score_lookup(true, false, 1000, 1000));
         assert!(!should_skip_fts_score_lookup(true, true, 100, 1000));
+    }
+
+    #[test]
+    fn hybrid_planner_selects_vector_first_for_latency_or_high_alpha() {
+        let latency_request = SearchRequest {
+            query_text: Some("agent memory".to_string()),
+            query_embedding: Some(vec![1.0, 0.0]),
+            query_profile: QueryProfile::Latency,
+            ..Default::default()
+        };
+        assert_eq!(
+            select_hybrid_planner_mode(&latency_request, true, true),
+            Some(HybridPlannerMode::VectorFirst)
+        );
+
+        let high_alpha_request = SearchRequest {
+            query_text: Some("agent memory".to_string()),
+            query_embedding: Some(vec![1.0, 0.0]),
+            alpha: 0.8,
+            ..Default::default()
+        };
+        assert_eq!(
+            select_hybrid_planner_mode(&high_alpha_request, true, true),
+            Some(HybridPlannerMode::VectorFirst)
+        );
+    }
+
+    #[test]
+    fn hybrid_planner_selects_text_first_for_low_alpha_or_missing_index() {
+        let low_alpha_request = SearchRequest {
+            query_text: Some("agent memory".to_string()),
+            query_embedding: Some(vec![1.0, 0.0]),
+            alpha: 0.2,
+            ..Default::default()
+        };
+        assert_eq!(
+            select_hybrid_planner_mode(&low_alpha_request, true, true),
+            Some(HybridPlannerMode::TextFirst)
+        );
+        assert_eq!(
+            select_hybrid_planner_mode(&low_alpha_request, true, false),
+            Some(HybridPlannerMode::TextFirst)
+        );
+    }
+
+    #[test]
+    fn hybrid_planner_selects_balanced_for_mid_alpha_hybrid_queries() {
+        let balanced_request = SearchRequest {
+            query_text: Some("agent memory".to_string()),
+            query_embedding: Some(vec![1.0, 0.0]),
+            alpha: 0.5,
+            ..Default::default()
+        };
+        assert_eq!(
+            select_hybrid_planner_mode(&balanced_request, true, true),
+            Some(HybridPlannerMode::BalancedHybrid)
+        );
     }
 }

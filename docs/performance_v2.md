@@ -263,10 +263,37 @@ Make hybrid retrieval efficient enough to be a headline differentiator.
 ### Delivered so far
 
 - hybrid/vector/text candidate fusion now ranks id-only candidates first and fetches row metadata only for the final winners
-- the internal 5k/150 weighted-hybrid benchmark now measures:
-  - `brute_force`: `396.85 QPS`, `p95=3.13 ms`, `top1=1.0`
-  - `hnsw_baseline`: `398.97 QPS`, `p95=2.89 ms`, `top1=1.0`
-- `hnsw_baseline` now slightly leads `brute_force` on the current internal benchmark instead of trailing it
+- explicit hybrid planner modes now exist:
+  - `vector-first`
+  - `text-first`
+  - `balanced hybrid`
+- planner mode selection is now driven by:
+  - query profile
+  - alpha
+  - FTS availability
+  - vector-index availability
+- `vector-first` and `text-first` now use tighter candidate budgets instead of always expanding to the full SQL candidate limit
+- partial FTS score lookups now fill only missing candidate ids instead of redoing the whole candidate set
+- the Phase 7 planner suite is reproducible via:
+  - `/Users/jameskaranja/Developer/projects/SQLRight/scripts/run-p7-hybrid-planner-suite.sh`
+
+### Current measured result
+
+On the internal 5k/150 weighted-hybrid benchmark with `f32` storage:
+
+- `brute_force`: `583.95 QPS`, `p95=1.9334 ms`, `top1=1.0`
+- `hnsw_baseline`: `573.43 QPS`, `p95=1.9503 ms`, `top1=1.0`
+
+Relative to the Phase 6 `f32` baseline:
+
+- `brute_force` improved by `+154.48 QPS`
+- `hnsw_baseline` improved by `+150.04 QPS`
+
+### Conclusion
+
+- Phase 7 has already materially reduced hybrid-path overhead
+- the planner work is directionally correct
+- `hnsw_baseline` is still slightly behind `brute_force` on this workload, so Phase 7 is started, not finished
 
 ## Phase 8: Benchmark Discipline
 
