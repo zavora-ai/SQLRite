@@ -2,17 +2,19 @@
 $ cargo fmt --all --check
 
 $ cargo test hnsw_baseline_ -- --nocapture
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
+    Blocking waiting for file lock on build directory
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.16s
      Running unittests src/lib.rs (target/debug/deps/sqlrite-13612ca32ee58f63)
 
-running 5 tests
+running 6 tests
 test vector_index::tests::hnsw_baseline_rejects_dimension_mismatch ... ok
-test vector_index::tests::hnsw_baseline_remove_and_reinsert_is_consistent ... ok
 test vector_index::tests::hnsw_baseline_queries_by_similarity ... ok
+test vector_index::tests::hnsw_baseline_small_corpus_prefers_exact_scan ... ok
+test vector_index::tests::hnsw_baseline_remove_and_reinsert_is_consistent ... ok
 test vector_index::tests::hnsw_baseline_query_filtered_respects_allow_list ... ok
 test tests::hnsw_baseline_mode_rejects_mixed_embedding_dimensions ... ok
 
-test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 187 filtered out; finished in 0.00s
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 187 filtered out; finished in 0.01s
 
      Running unittests src/main.rs (target/debug/deps/sqlrite-f88293c42b71bfc0)
 

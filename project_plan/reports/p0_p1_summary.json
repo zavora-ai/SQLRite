@@ -3,17 +3,17 @@
   "quality_gates_pass": true,
   "sidecar_smoke_pass": true,
   "brute_force": {
-    "qps": 327.23331029509023,
-    "p95_ms": 3.254916,
+    "qps": 396.8549247215814,
+    "p95_ms": 3.127667,
     "top1_hit_rate": 1.0
   },
   "hnsw_baseline": {
-    "qps": 232.5039635880689,
-    "p95_ms": 4.550417,
-    "top1_hit_rate": 0.9866666666666667
+    "qps": 398.96946187996406,
+    "p95_ms": 2.8857079999999997,
+    "top1_hit_rate": 1.0
   },
   "delta": {
-    "qps_gain_vs_bruteforce": -94.72934670702134,
-    "p95_ms_gain_vs_bruteforce": -1.2955010000000002
+    "qps_gain_vs_bruteforce": 2.114537158382632,
+    "p95_ms_gain_vs_bruteforce": 0.24195900000000048
   }
 }

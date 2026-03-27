@@ -577,7 +577,7 @@ struct CandidateChunkRecord {
 
 #[derive(Debug)]
 struct ScoredChunk {
-    chunk: CandidateChunkRecord,
+    chunk_id: String,
     vector_score: f32,
     text_score: f32,
 }
@@ -927,18 +927,16 @@ impl SqlRite {
             )
         };
 
-        let candidates = if fetch_ids.is_empty() {
-            self.fetch_candidate_chunks(&request)?
+        let candidate_ids = if fetch_ids.is_empty() {
+            self.fetch_candidate_chunk_ids(&request)?
         } else {
-            let mut items = self.fetch_chunks_by_ids(&fetch_ids)?;
-            items.retain(|chunk| chunk_matches_request(chunk, &request));
+            let mut items = fetch_ids;
             if !vector_fast_path && items.len() < request.candidate_limit {
-                let fallback = self.fetch_candidate_chunks(&request)?;
-                let mut seen_ids: HashSet<String> =
-                    items.iter().map(|chunk| chunk.id.clone()).collect();
-                for chunk in fallback {
-                    if seen_ids.insert(chunk.id.clone()) {
-                        items.push(chunk);
+                let fallback = self.fetch_candidate_chunk_ids(&request)?;
+                let mut seen_ids: HashSet<String> = items.iter().cloned().collect();
+                for chunk_id in fallback {
+                    if seen_ids.insert(chunk_id.clone()) {
+                        items.push(chunk_id);
                         if items.len() >= request.candidate_limit {
                             break;
                         }
@@ -959,41 +957,37 @@ impl SqlRite {
                 request.candidate_limit,
             )
         {
-            let candidate_ids: Vec<String> =
-                candidates.iter().map(|chunk| chunk.id.clone()).collect();
             text_scores = self
                 .fts_text_scores_for_ids(text, &candidate_ids)
                 .unwrap_or_default();
         }
 
-        let mut scored = Vec::with_capacity(candidates.len());
+        let mut scored = Vec::with_capacity(candidate_ids.len());
         let mut content_cache = HashMap::new();
         let mut embedding_cache = HashMap::new();
         let missing_fts_scores = use_text
-            && candidates
+            && candidate_ids
                 .iter()
-                .any(|chunk| text_scores.get(&chunk.id).copied().unwrap_or(0.0) <= 0.0);
+                .any(|chunk_id| text_scores.get(chunk_id).copied().unwrap_or(0.0) <= 0.0);
         if missing_fts_scores {
-            let candidate_ids: Vec<String> =
-                candidates.iter().map(|chunk| chunk.id.clone()).collect();
             content_cache = self.fetch_chunk_contents_by_ids(&candidate_ids)?;
         }
         if use_vector {
-            let missing_vector_ids: Vec<String> = candidates
+            let missing_vector_ids: Vec<String> = candidate_ids
                 .iter()
-                .filter(|chunk| !vector_score_lookup.contains_key(&chunk.id))
-                .map(|chunk| chunk.id.clone())
+                .filter(|chunk_id| !vector_score_lookup.contains_key(*chunk_id))
+                .cloned()
                 .collect();
             if !missing_vector_ids.is_empty() {
                 embedding_cache = self.fetch_chunk_embeddings_by_ids(&missing_vector_ids)?;
             }
         }
 
-        for chunk in candidates {
+        for chunk_id in candidate_ids {
             let vector_score = if let Some(query_vector) = query_embedding {
-                if let Some(score) = vector_score_lookup.get(&chunk.id).copied() {
+                if let Some(score) = vector_score_lookup.get(&chunk_id).copied() {
                     score
-                } else if let Some(chunk_embedding) = embedding_cache.get(&chunk.id) {
+                } else if let Some(chunk_embedding) = embedding_cache.get(&chunk_id) {
                     if query_vector.len() != chunk_embedding.len() {
                         if !use_text {
                             continue;
@@ -1017,7 +1011,7 @@ impl SqlRite {
             };
 
             let text_score = if let Some(text) = query_text {
-                let fts_score = text_scores.get(&chunk.id).copied().unwrap_or(0.0);
+                let fts_score = text_scores.get(&chunk_id).copied().unwrap_or(0.0);
                 if self.fts_enabled && fts_score > 0.0 {
                     fts_score
                 } else {
@@ -1025,7 +1019,7 @@ impl SqlRite {
                         query_tokens.as_ref().expect("tokens exist"),
                         text,
                         content_cache
-                            .get(&chunk.id)
+                            .get(&chunk_id)
                             .map(String::as_str)
                             .unwrap_or_default(),
                     )
@@ -1035,7 +1029,7 @@ impl SqlRite {
             };
 
             scored.push(ScoredChunk {
-                chunk,
+                chunk_id,
                 vector_score,
                 text_score,
             });
@@ -1050,12 +1044,12 @@ impl SqlRite {
         );
         let mut results = Vec::with_capacity(scored.len());
         for entry in scored {
-            let hybrid_score = hybrid_scores.get(&entry.chunk.id).copied().unwrap_or(0.0);
+            let hybrid_score = hybrid_scores.get(&entry.chunk_id).copied().unwrap_or(0.0);
             results.push(SearchResult {
-                chunk_id: entry.chunk.id,
-                doc_id: entry.chunk.doc_id,
+                chunk_id: entry.chunk_id,
+                doc_id: String::new(),
                 content: String::new(),
-                metadata: entry.chunk.metadata,
+                metadata: Value::Null,
                 vector_score: entry.vector_score,
                 text_score: entry.text_score,
                 hybrid_score,
@@ -1071,6 +1065,24 @@ impl SqlRite {
                 .then_with(|| left.chunk_id.cmp(&right.chunk_id))
         });
         results.truncate(request.top_k);
+        let final_ids: Vec<String> = results
+            .iter()
+            .map(|result| result.chunk_id.clone())
+            .collect();
+        if !final_ids.is_empty() {
+            let final_chunks = self.fetch_chunks_by_ids(&final_ids)?;
+            let final_chunk_lookup: HashMap<String, CandidateChunkRecord> = final_chunks
+                .into_iter()
+                .map(|chunk| (chunk.id.clone(), chunk))
+                .collect();
+            results.retain(|result| final_chunk_lookup.contains_key(&result.chunk_id));
+            for result in &mut results {
+                if let Some(chunk) = final_chunk_lookup.get(&result.chunk_id) {
+                    result.doc_id = chunk.doc_id.clone();
+                    result.metadata = chunk.metadata.clone();
+                }
+            }
+        }
         let missing_content_ids: Vec<String> = results
             .iter()
             .filter(|result| !content_cache.contains_key(&result.chunk_id))
@@ -1171,8 +1183,8 @@ impl SqlRite {
         Ok(())
     }
 
-    fn fetch_candidate_chunks(&self, request: &SearchRequest) -> Result<Vec<CandidateChunkRecord>> {
-        let mut sql = String::from("SELECT id, doc_id, metadata FROM chunks");
+    fn fetch_candidate_chunk_ids(&self, request: &SearchRequest) -> Result<Vec<String>> {
+        let mut sql = String::from("SELECT id FROM chunks");
         let mut clauses = Vec::new();
         let mut params = Vec::new();
 
@@ -1196,7 +1208,7 @@ impl SqlRite {
         params.push(SqlValue::Integer(request.candidate_limit as i64));
 
         let mut stmt = self.conn.prepare(&sql)?;
-        let rows = stmt.query_map(params_from_iter(params), map_candidate_chunk_row)?;
+        let rows = stmt.query_map(params_from_iter(params), |row| row.get::<_, String>(0))?;
 
         let mut items = Vec::new();
         for row in rows {
@@ -1738,34 +1750,6 @@ fn map_candidate_chunk_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Candidat
         doc_id: row.get(1)?,
         metadata,
     })
-}
-
-fn chunk_matches_request(chunk: &CandidateChunkRecord, request: &SearchRequest) -> bool {
-    if let Some(doc_id) = &request.doc_id
-        && &chunk.doc_id != doc_id
-    {
-        return false;
-    }
-
-    for (key, value) in &request.metadata_filters {
-        let Some(actual) = chunk.metadata.get(key) else {
-            return false;
-        };
-
-        let matches = if let Some(actual_text) = actual.as_str() {
-            actual_text == value
-        } else if let Ok(parsed_value) = serde_json::from_str::<Value>(value) {
-            &parsed_value == actual
-        } else {
-            false
-        };
-
-        if !matches {
-            return false;
-        }
-    }
-
-    true
 }
 
 fn merge_candidate_ids(
@@ -2371,7 +2355,7 @@ fn compute_hybrid_scores(
             .iter()
             .map(|entry| {
                 (
-                    entry.chunk.id.clone(),
+                    entry.chunk_id.clone(),
                     alpha * entry.vector_score + (1.0 - alpha) * entry.text_score,
                 )
             })
@@ -2380,42 +2364,42 @@ fn compute_hybrid_scores(
             let vector_ranks = rank_lookup(
                 scored
                     .iter()
-                    .map(|entry| (&entry.chunk.id, entry.vector_score)),
+                    .map(|entry| (&entry.chunk_id, entry.vector_score)),
             );
             let text_ranks = rank_lookup(
                 scored
                     .iter()
-                    .map(|entry| (&entry.chunk.id, entry.text_score)),
+                    .map(|entry| (&entry.chunk_id, entry.text_score)),
             );
 
             scored
                 .iter()
                 .map(|entry| {
                     let vector_term = vector_ranks
-                        .get(&entry.chunk.id)
+                        .get(&entry.chunk_id)
                         .copied()
                         .map(|rank| 1.0 / (rank_constant + rank as f32))
                         .unwrap_or(0.0);
                     let text_term = text_ranks
-                        .get(&entry.chunk.id)
+                        .get(&entry.chunk_id)
                         .copied()
                         .map(|rank| 1.0 / (rank_constant + rank as f32))
                         .unwrap_or(0.0);
-                    (entry.chunk.id.clone(), vector_term + text_term)
+                    (entry.chunk_id.clone(), vector_term + text_term)
                 })
                 .collect()
         }
         (true, false, _) => scored
             .iter()
-            .map(|entry| (entry.chunk.id.clone(), entry.vector_score))
+            .map(|entry| (entry.chunk_id.clone(), entry.vector_score))
             .collect(),
         (false, true, _) => scored
             .iter()
-            .map(|entry| (entry.chunk.id.clone(), entry.text_score))
+            .map(|entry| (entry.chunk_id.clone(), entry.text_score))
             .collect(),
         (false, false, _) => scored
             .iter()
-            .map(|entry| (entry.chunk.id.clone(), 0.0))
+            .map(|entry| (entry.chunk_id.clone(), 0.0))
             .collect(),
     }
 }

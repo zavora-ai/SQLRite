@@ -539,6 +539,8 @@ pub struct BruteForceVectorIndex {
 
 const PARALLEL_SCAN_THRESHOLD: usize = 4_096;
 const HNSW_GRAPH_LAYER_COUNT: usize = 16;
+const HNSW_EXACT_CROSSOVER_MIN: usize = 2_048;
+const HNSW_FILTER_EXACT_CROSSOVER_MIN: usize = 512;
 const LSH_DEFAULT_BITS_PER_TABLE: usize = 14;
 const LSH_DEFAULT_TABLE_COUNT: usize = 6;
 const LSH_DEFAULT_MIN_CANDIDATES: usize = 192;
@@ -1434,6 +1436,57 @@ impl HnswBaselineVectorIndex {
         Ok(())
     }
 
+    fn exact_crossover_limit(&self) -> usize {
+        self.ef_search
+            .saturating_mul(32)
+            .max(HNSW_EXACT_CROSSOVER_MIN)
+    }
+
+    fn filtered_exact_crossover_limit(&self) -> usize {
+        self.ef_search
+            .saturating_mul(16)
+            .max(HNSW_FILTER_EXACT_CROSSOVER_MIN)
+    }
+
+    fn should_prefer_exact_scan(&self) -> bool {
+        self.chunk_ids.len() <= self.exact_crossover_limit()
+    }
+
+    fn exact_scan_positions(
+        &self,
+        query_normalized: &[f32],
+        positions: &[usize],
+        limit: usize,
+    ) -> Vec<VectorCandidate> {
+        let chunk_ids = &self.chunk_ids;
+        let segments = &self.segments;
+        let mut results: Vec<VectorCandidate> = if positions.len() >= PARALLEL_SCAN_THRESHOLD {
+            positions
+                .par_iter()
+                .map(|position| VectorCandidate {
+                    chunk_id: chunk_ids[*position].clone(),
+                    score: dot_product(query_normalized, segments.embedding(*position)),
+                })
+                .collect()
+        } else {
+            positions
+                .iter()
+                .map(|position| VectorCandidate {
+                    chunk_id: chunk_ids[*position].clone(),
+                    score: dot_product(query_normalized, segments.embedding(*position)),
+                })
+                .collect()
+        };
+
+        if results.len() > limit {
+            let nth = limit - 1;
+            results.select_nth_unstable_by(nth, compare_candidates_desc);
+            results.truncate(limit);
+        }
+        results.sort_by(compare_candidates_desc);
+        results
+    }
+
     fn query_filtered(
         &self,
         query_embedding: &[f32],
@@ -1456,6 +1509,12 @@ impl HnswBaselineVectorIndex {
         allowed_positions.sort_unstable();
 
         let query_normalized = normalize_embedding(query_embedding);
+        if self.should_prefer_exact_scan()
+            || allowed_positions.len() <= self.filtered_exact_crossover_limit()
+        {
+            return Ok(self.exact_scan_positions(&query_normalized, &allowed_positions, limit));
+        }
+
         let ef_search = self.ef_search.max(limit);
         let graph = self.graph.borrow();
         let Some(graph) = graph.as_ref() else {
@@ -1625,9 +1684,14 @@ impl VectorIndex for HnswBaselineVectorIndex {
             return Ok(Vec::new());
         }
         self.validate_dimension(query_embedding)?;
-        self.ensure_graph()?;
 
         let query_normalized = normalize_embedding(query_embedding);
+        if self.should_prefer_exact_scan() {
+            let positions: Vec<usize> = (0..self.chunk_ids.len()).collect();
+            return Ok(self.exact_scan_positions(&query_normalized, &positions, limit));
+        }
+
+        self.ensure_graph()?;
         let ef_search = self.ef_search.max(limit);
         let graph = self.graph.borrow();
         let Some(graph) = graph.as_ref() else {
@@ -2070,6 +2134,24 @@ mod tests {
         index.upsert("c3", &[1.0, 0.0])?;
         let found = index.query(&[1.0, 0.0], 2)?;
         assert_eq!(found[0].chunk_id, "c3");
+        Ok(())
+    }
+
+    #[test]
+    fn hnsw_baseline_small_corpus_prefers_exact_scan() -> Result<()> {
+        let mut index =
+            HnswBaselineVectorIndex::new_with_options(VectorStorageKind::F32, Default::default());
+        index.upsert("c1", &[1.0, 0.0, 0.0])?;
+        index.upsert("c2", &[0.0, 1.0, 0.0])?;
+        index.upsert("c3", &[0.8, 0.2, 0.0])?;
+
+        let found = index.query(&[0.9, 0.1, 0.0], 2)?;
+        assert_eq!(found.len(), 2);
+        assert_eq!(found[0].chunk_id, "c1");
+        assert!(
+            !index.graph_ready(),
+            "small-corpus HNSW should use exact crossover without building the graph"
+        );
         Ok(())
     }
 

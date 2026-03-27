@@ -1,12 +1,12 @@
 
 $ cargo test ann_snapshot_persists_for_file_backed_ann_index -- --nocapture
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
      Running unittests src/lib.rs (target/debug/deps/sqlrite-13612ca32ee58f63)
 
 running 1 test
 test tests::ann_snapshot_persists_for_file_backed_ann_index ... ok
 
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 191 filtered out; finished in 0.01s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 192 filtered out; finished in 0.00s
 
      Running unittests src/main.rs (target/debug/deps/sqlrite-f88293c42b71bfc0)
 
@@ -106,13 +106,13 @@ test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 
 
 $ cargo test file_backed_ann_reopen_prefers_binary_entry_sidecar -- --nocapture
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
      Running unittests src/lib.rs (target/debug/deps/sqlrite-13612ca32ee58f63)
 
 running 1 test
 test tests::file_backed_ann_reopen_prefers_binary_entry_sidecar ... ok
 
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 191 filtered out; finished in 0.01s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 192 filtered out; finished in 0.01s
 
      Running unittests src/main.rs (target/debug/deps/sqlrite-f88293c42b71bfc0)
 
@@ -212,13 +212,13 @@ test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 
 
 $ cargo test exact_segment_persists_for_file_backed_bruteforce_index -- --nocapture
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
      Running unittests src/lib.rs (target/debug/deps/sqlrite-13612ca32ee58f63)
 
 running 1 test
 test tests::exact_segment_persists_for_file_backed_bruteforce_index ... ok
 
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 191 filtered out; finished in 0.00s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 192 filtered out; finished in 0.00s
 
      Running unittests src/main.rs (target/debug/deps/sqlrite-f88293c42b71bfc0)
 
@@ -318,13 +318,13 @@ test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 
 
 $ cargo test file_backed_bruteforce_reopen_prefers_exact_segment_sidecar -- --nocapture
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
      Running unittests src/lib.rs (target/debug/deps/sqlrite-13612ca32ee58f63)
 
 running 1 test
 test tests::file_backed_bruteforce_reopen_prefers_exact_segment_sidecar ... ok
 
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 191 filtered out; finished in 0.00s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 192 filtered out; finished in 0.01s
 
      Running unittests src/main.rs (target/debug/deps/sqlrite-f88293c42b71bfc0)
 
@@ -424,18 +424,17 @@ test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 
 
 $ env RUSTC_WRAPPER= cargo run --bin sqlrite-bench -- --corpus 5000 --queries 150 --warmup 30 --embedding-dim 64 --candidate-limit 200 --top-k 10 --index-mode brute_force --output /Users/jameskaranja/Developer/projects/SQLRight/project_plan/reports/p0_p1_benchmark_bruteforce.json
-   Compiling sqlrite v1.0.0 (/Users/jameskaranja/Developer/projects/SQLRight)
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.04s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.10s
      Running `target/debug/sqlrite-bench --corpus 5000 --queries 150 --warmup 30 --embedding-dim 64 --candidate-limit 200 --top-k 10 --index-mode brute_force --output /Users/jameskaranja/Developer/projects/SQLRight/project_plan/reports/p0_p1_benchmark_bruteforce.json`
 SQLRite benchmark: corpus=5000, queries=150, concurrency=1, index=brute_force, fusion=weighted, query_profile=balanced
-ingest_ms=191.38, query_ms=458.39, qps=327.23, top1_hit_rate=1.0000
-ingest_chunks_per_sec=26125.73, dataset_payload_bytes=1539515, index_estimated_bytes=1550000, approx_working_set_bytes=3089515
-latency_ms: avg=3.0493, p50=3.0201, p95=3.2549, p99=3.4014, min=2.8780, max=3.4684
+ingest_ms=181.00, query_ms=377.97, qps=396.85, top1_hit_rate=1.0000
+ingest_chunks_per_sec=27623.79, dataset_payload_bytes=1539515, index_estimated_bytes=1550000, approx_working_set_bytes=3089515
+latency_ms: avg=2.5127, p50=2.4138, p95=3.1277, p99=3.3830, min=2.2828, max=3.4455
 
 $ env RUSTC_WRAPPER= cargo run --bin sqlrite-bench -- --corpus 5000 --queries 150 --warmup 30 --embedding-dim 64 --candidate-limit 200 --top-k 10 --index-mode hnsw_baseline --output /Users/jameskaranja/Developer/projects/SQLRight/project_plan/reports/p0_p1_benchmark_hnsw.json
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.09s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.10s
      Running `target/debug/sqlrite-bench --corpus 5000 --queries 150 --warmup 30 --embedding-dim 64 --candidate-limit 200 --top-k 10 --index-mode hnsw_baseline --output /Users/jameskaranja/Developer/projects/SQLRight/project_plan/reports/p0_p1_benchmark_hnsw.json`
 SQLRite benchmark: corpus=5000, queries=150, concurrency=1, index=hnsw_baseline, fusion=weighted, query_profile=balanced
-ingest_ms=184.74, query_ms=645.15, qps=232.50, top1_hit_rate=0.9867
-ingest_chunks_per_sec=27065.30, dataset_payload_bytes=1539515, index_estimated_bytes=2830000, approx_working_set_bytes=4369515
-latency_ms: avg=4.2944, p50=4.2619, p95=4.5504, p99=4.6750, min=4.1287, max=4.8443
+ingest_ms=193.98, query_ms=375.97, qps=398.97, top1_hit_rate=1.0000
+ingest_chunks_per_sec=25775.98, dataset_payload_bytes=1539515, index_estimated_bytes=2830000, approx_working_set_bytes=4369515
+latency_ms: avg=2.4997, p50=2.4266, p95=2.8857, p99=3.3300, min=2.3054, max=3.6705

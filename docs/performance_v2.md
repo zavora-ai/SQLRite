@@ -64,6 +64,7 @@ Replace the current pseudo-HNSW path with a real ANN graph.
 - filtered HNSW search in the planner
 - binary ANN entry sidecars for file-backed ANN modes, with binary-first reload and JSON fallback
 - on-disk HNSW graph snapshots with eager reload for file-backed reopen
+- adaptive exact-scan crossover for `hnsw_baseline` on small corpora and small filtered subsets
 
 ### Deferred
 
@@ -93,9 +94,10 @@ Stop materializing full rows during candidate generation.
 
 ### Delivered so far
 
-- candidate fetches now materialize ids, doc ids, and metadata without embeddings
+- candidate fetches now materialize ids first for the common vector/text path
 - `content` is fetched only for lexical fallback and final top-k payloads
 - embeddings are fetched on demand only for candidate ids that need fallback vector scoring
+- `doc_id` and `metadata` are now fetched only for the final top-k rows after hybrid/vector/text ranking
 
 ## Phase 3: Filter-First Retrieval
 
@@ -220,6 +222,14 @@ Make hybrid retrieval efficient enough to be a headline differentiator.
 
 - preserve quality gains from hybrid retrieval
 - reduce the current severe latency penalty
+
+### Delivered so far
+
+- hybrid/vector/text candidate fusion now ranks id-only candidates first and fetches row metadata only for the final winners
+- the internal 5k/150 weighted-hybrid benchmark now measures:
+  - `brute_force`: `396.85 QPS`, `p95=3.13 ms`, `top1=1.0`
+  - `hnsw_baseline`: `398.97 QPS`, `p95=2.89 ms`, `top1=1.0`
+- `hnsw_baseline` now slightly leads `brute_force` on the current internal benchmark instead of trailing it
 
 ## Phase 8: Benchmark Discipline
 
