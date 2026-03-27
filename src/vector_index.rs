@@ -3,8 +3,11 @@ use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::mem::size_of;
 use std::path::Path;
+use std::pin::Pin;
 
 use crate::{Result, SqlRiteError};
+use hnsw_rs::api::AnnT;
+use hnsw_rs::hnswio::HnswIo;
 use hnsw_rs::prelude::{DistCosine, Hnsw};
 use memmap2::{Mmap, MmapOptions};
 use rayon::prelude::*;
@@ -162,9 +165,13 @@ impl BuiltinVectorIndex {
                 .map(|entry| (entry.chunk_id.clone(), entry.normalized_embedding.clone()))
                 .collect(),
             Self::HnswBaseline(index) => index
-                .entries
+                .chunk_ids
                 .iter()
-                .map(|entry| (entry.chunk_id.clone(), entry.normalized_embedding.clone()))
+                .enumerate()
+                .map(|(position, chunk_id)| {
+                    let embedding = index.segments.embedding(position).to_vec();
+                    (chunk_id.clone(), embedding)
+                })
                 .collect(),
         }
     }
@@ -188,6 +195,14 @@ impl BuiltinVectorIndex {
             Self::BruteForce(index) => index.query_filtered(query_embedding, limit, allowed_ids),
             Self::LshAnn(index) => index.query_filtered(query_embedding, limit, allowed_ids),
             Self::HnswBaseline(index) => index.query_filtered(query_embedding, limit, allowed_ids),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn graph_ready(&self) -> bool {
+        match self {
+            Self::HnswBaseline(index) => index.graph_ready(),
+            _ => false,
         }
     }
 }
@@ -523,6 +538,7 @@ pub struct BruteForceVectorIndex {
 }
 
 const PARALLEL_SCAN_THRESHOLD: usize = 4_096;
+const HNSW_GRAPH_LAYER_COUNT: usize = 16;
 const LSH_DEFAULT_BITS_PER_TABLE: usize = 14;
 const LSH_DEFAULT_TABLE_COUNT: usize = 6;
 const LSH_DEFAULT_MIN_CANDIDATES: usize = 192;
@@ -1262,12 +1278,13 @@ impl VectorIndex for LshAnnVectorIndex {
 pub struct HnswBaselineVectorIndex {
     storage_kind: VectorStorageKind,
     dimension: Option<usize>,
-    entries: Vec<VectorEntry>,
+    chunk_ids: Vec<String>,
+    segments: VectorSegmentStore,
     positions: HashMap<String, usize>,
     m: usize,
     ef_construction: usize,
     ef_search: usize,
-    graph: RefCell<Option<Hnsw<'static, f32, DistCosine>>>,
+    graph: RefCell<Option<PersistedHnswGraph>>,
     graph_dirty: Cell<bool>,
 }
 
@@ -1276,12 +1293,56 @@ impl std::fmt::Debug for HnswBaselineVectorIndex {
         f.debug_struct("HnswBaselineVectorIndex")
             .field("storage_kind", &self.storage_kind)
             .field("dimension", &self.dimension)
-            .field("entries", &self.entries.len())
+            .field("entries", &self.chunk_ids.len())
             .field("m", &self.m)
             .field("ef_construction", &self.ef_construction)
             .field("ef_search", &self.ef_search)
             .field("graph_dirty", &self.graph_dirty.get())
             .finish()
+    }
+}
+
+struct PersistedHnswGraph {
+    graph: Hnsw<'static, f32, DistCosine>,
+    // The pinned reloader must outlive `graph` for reload-backed graphs.
+    _reloader: Option<Pin<Box<HnswIo>>>,
+}
+
+impl PersistedHnswGraph {
+    fn from_built(graph: Hnsw<'static, f32, DistCosine>) -> Self {
+        Self {
+            graph,
+            _reloader: None,
+        }
+    }
+
+    fn load(directory: &Path, basename: &str) -> Result<Self> {
+        let mut reloader = Box::pin(HnswIo::new(directory, basename));
+        // SAFETY: the returned HNSW may borrow data owned by the pinned reloader.
+        // The reloader is heap-pinned and stored alongside the graph for the same lifetime.
+        let graph = unsafe {
+            let reloader_ref = Pin::as_mut(&mut reloader).get_unchecked_mut();
+            std::mem::transmute::<Hnsw<'_, f32, DistCosine>, Hnsw<'static, f32, DistCosine>>(
+                reloader_ref
+                    .load_hnsw::<f32, DistCosine>()
+                    .map_err(|error| SqlRiteError::Io(std::io::Error::other(error.to_string())))?,
+            )
+        };
+        Ok(Self {
+            graph,
+            _reloader: Some(reloader),
+        })
+    }
+
+    fn dump(&self, directory: &Path, basename: &str) -> Result<()> {
+        self.graph
+            .file_dump(directory, basename)
+            .map_err(|error| SqlRiteError::Io(std::io::Error::other(error.to_string())))?;
+        Ok(())
+    }
+
+    fn as_ref(&self) -> &Hnsw<'static, f32, DistCosine> {
+        &self.graph
     }
 }
 
@@ -1293,7 +1354,8 @@ impl HnswBaselineVectorIndex {
         Self {
             storage_kind,
             dimension: None,
-            entries: Vec::new(),
+            chunk_ids: Vec::new(),
+            segments: VectorSegmentStore::default(),
             positions: HashMap::new(),
             m,
             ef_construction,
@@ -1312,7 +1374,33 @@ impl HnswBaselineVectorIndex {
     }
 
     fn mark_dirty(&self) {
+        self.graph.borrow_mut().take();
         self.graph_dirty.set(true);
+    }
+
+    pub(crate) fn dump_graph_snapshot(&self, directory: &Path, basename: &str) -> Result<()> {
+        self.ensure_graph()?;
+        if let Some(graph) = self.graph.borrow().as_ref() {
+            graph.dump(directory, basename)?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn load_graph_snapshot(&self, directory: &Path, basename: &str) -> Result<()> {
+        if self.chunk_ids.is_empty() {
+            self.graph.borrow_mut().take();
+            self.graph_dirty.set(false);
+            return Ok(());
+        }
+        let graph = PersistedHnswGraph::load(directory, basename)?;
+        *self.graph.borrow_mut() = Some(graph);
+        self.graph_dirty.set(false);
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn graph_ready(&self) -> bool {
+        !self.graph_dirty.get() && self.graph.borrow().is_some()
     }
 
     fn ensure_graph(&self) -> Result<()> {
@@ -1320,29 +1408,28 @@ impl HnswBaselineVectorIndex {
             return Ok(());
         }
 
-        if self.entries.is_empty() {
+        if self.chunk_ids.is_empty() {
             self.graph.borrow_mut().take();
             self.graph_dirty.set(false);
             return Ok(());
         }
 
-        let max_layer = 16usize.min((self.entries.len().max(2) as f32).ln().ceil() as usize + 1);
         let mut graph = Hnsw::<f32, DistCosine>::new(
             self.m,
-            self.entries.len(),
-            max_layer,
+            self.chunk_ids.len(),
+            HNSW_GRAPH_LAYER_COUNT,
             self.ef_construction,
             DistCosine {},
         );
-        let data_with_id: Vec<(&Vec<f32>, usize)> = self
-            .entries
+        let data_with_id: Vec<(&[f32], usize)> = self
+            .chunk_ids
             .iter()
             .enumerate()
-            .map(|(idx, entry)| (&entry.normalized_embedding, idx))
+            .map(|(idx, _)| (self.segments.embedding(idx), idx))
             .collect();
-        graph.parallel_insert(&data_with_id);
+        graph.parallel_insert_slice(&data_with_id);
         graph.set_searching_mode(true);
-        *self.graph.borrow_mut() = Some(graph);
+        *self.graph.borrow_mut() = Some(PersistedHnswGraph::from_built(graph));
         self.graph_dirty.set(false);
         Ok(())
     }
@@ -1353,7 +1440,7 @@ impl HnswBaselineVectorIndex {
         limit: usize,
         allowed_ids: &HashSet<String>,
     ) -> Result<Vec<VectorCandidate>> {
-        if limit == 0 || self.entries.is_empty() || allowed_ids.is_empty() {
+        if limit == 0 || self.chunk_ids.is_empty() || allowed_ids.is_empty() {
             return Ok(Vec::new());
         }
         self.validate_dimension(query_embedding)?;
@@ -1376,6 +1463,7 @@ impl HnswBaselineVectorIndex {
         };
 
         let mut results: Vec<VectorCandidate> = graph
+            .as_ref()
             .search_filter(
                 &query_normalized,
                 limit,
@@ -1384,10 +1472,10 @@ impl HnswBaselineVectorIndex {
             )
             .into_iter()
             .filter_map(|neighbor| {
-                self.entries
+                self.chunk_ids
                     .get(neighbor.d_id)
-                    .map(|entry| VectorCandidate {
-                        chunk_id: entry.chunk_id.clone(),
+                    .map(|chunk_id| VectorCandidate {
+                        chunk_id: chunk_id.clone(),
                         score: (1.0 - neighbor.distance).clamp(-1.0, 1.0),
                     })
             })
@@ -1411,23 +1499,22 @@ impl VectorIndex for HnswBaselineVectorIndex {
     }
 
     fn len(&self) -> usize {
-        self.entries.len()
+        self.chunk_ids.len()
     }
 
     fn estimated_memory_bytes(&self) -> usize {
         let embedding_bytes = self
-            .entries
-            .iter()
-            .map(|entry| vector_storage_bytes(entry.normalized_embedding.len(), self.storage_kind))
-            .sum::<usize>();
+            .dimension
+            .map(|dim| self.chunk_ids.len() * vector_storage_bytes(dim, self.storage_kind))
+            .unwrap_or(0);
         let id_bytes = self
-            .entries
+            .chunk_ids
             .iter()
-            .map(|entry| entry.chunk_id.len())
+            .map(|chunk_id| chunk_id.len())
             .sum::<usize>();
         let positions_overhead =
             self.positions.len() * (size_of::<usize>() + size_of::<String>() + size_of::<usize>());
-        let graph_link_budget = self.entries.len() * self.m * size_of::<usize>() * 2;
+        let graph_link_budget = self.chunk_ids.len() * self.m * size_of::<usize>() * 2;
         embedding_bytes + id_bytes + positions_overhead + graph_link_budget
     }
 
@@ -1435,20 +1522,19 @@ impl VectorIndex for HnswBaselineVectorIndex {
         self.validate_dimension(embedding)?;
         if self.dimension.is_none() {
             self.dimension = Some(embedding.len());
+            self.segments = VectorSegmentStore::with_dimension(embedding.len());
         }
 
         let normalized_embedding = normalize_embedding(embedding);
         if let Some(position) = self.positions.get(chunk_id).copied() {
-            self.entries[position].normalized_embedding = normalized_embedding;
+            self.segments.set(position, &normalized_embedding);
             self.mark_dirty();
             return Ok(());
         }
 
-        let position = self.entries.len();
-        self.entries.push(VectorEntry {
-            chunk_id: chunk_id.to_string(),
-            normalized_embedding,
-        });
+        let position = self.chunk_ids.len();
+        self.chunk_ids.push(chunk_id.to_string());
+        self.segments.push(&normalized_embedding);
         self.positions.insert(chunk_id.to_string(), position);
         self.mark_dirty();
         Ok(())
@@ -1464,6 +1550,7 @@ impl VectorIndex for HnswBaselineVectorIndex {
         }
         if self.dimension.is_none() {
             self.dimension = Some(items[0].1.len());
+            self.segments = VectorSegmentStore::with_dimension(items[0].1.len());
         }
 
         let prepared: Vec<(String, Vec<f32>)> = if items.len() >= BATCH_PARALLEL_PREP_THRESHOLD {
@@ -1482,17 +1569,16 @@ impl VectorIndex for HnswBaselineVectorIndex {
                 .collect()
         };
 
-        self.entries.reserve(prepared.len());
+        self.chunk_ids.reserve(prepared.len());
+        self.segments.reserve(prepared.len());
         self.positions.reserve(prepared.len());
         for (chunk_id, normalized_embedding) in prepared {
             if let Some(position) = self.positions.get(&chunk_id).copied() {
-                self.entries[position].normalized_embedding = normalized_embedding;
+                self.segments.set(position, &normalized_embedding);
             } else {
-                let position = self.entries.len();
-                self.entries.push(VectorEntry {
-                    chunk_id: chunk_id.clone(),
-                    normalized_embedding,
-                });
+                let position = self.chunk_ids.len();
+                self.chunk_ids.push(chunk_id.clone());
+                self.segments.push(&normalized_embedding);
                 self.positions.insert(chunk_id, position);
             }
         }
@@ -1505,14 +1591,16 @@ impl VectorIndex for HnswBaselineVectorIndex {
             return Ok(());
         };
 
-        self.entries.swap_remove(position);
-        if position < self.entries.len() {
-            let moved_id = self.entries[position].chunk_id.clone();
+        self.chunk_ids.swap_remove(position);
+        self.segments.swap_remove(position);
+        if position < self.chunk_ids.len() {
+            let moved_id = self.chunk_ids[position].clone();
             self.positions.insert(moved_id, position);
         }
 
-        if self.entries.is_empty() {
+        if self.chunk_ids.is_empty() {
             self.dimension = None;
+            self.segments = VectorSegmentStore::default();
             self.graph.borrow_mut().take();
             self.graph_dirty.set(false);
         } else {
@@ -1524,7 +1612,8 @@ impl VectorIndex for HnswBaselineVectorIndex {
 
     fn reset(&mut self) -> Result<()> {
         self.dimension = None;
-        self.entries.clear();
+        self.chunk_ids.clear();
+        self.segments = VectorSegmentStore::default();
         self.positions.clear();
         self.graph.borrow_mut().take();
         self.graph_dirty.set(false);
@@ -1532,7 +1621,7 @@ impl VectorIndex for HnswBaselineVectorIndex {
     }
 
     fn query(&self, query_embedding: &[f32], limit: usize) -> Result<Vec<VectorCandidate>> {
-        if limit == 0 || self.entries.is_empty() {
+        if limit == 0 || self.chunk_ids.is_empty() {
             return Ok(Vec::new());
         }
         self.validate_dimension(query_embedding)?;
@@ -1546,13 +1635,14 @@ impl VectorIndex for HnswBaselineVectorIndex {
         };
 
         let mut results: Vec<VectorCandidate> = graph
+            .as_ref()
             .search(&query_normalized, limit, ef_search)
             .into_iter()
             .filter_map(|neighbor| {
-                self.entries
+                self.chunk_ids
                     .get(neighbor.d_id)
-                    .map(|entry| VectorCandidate {
-                        chunk_id: entry.chunk_id.clone(),
+                    .map(|chunk_id| VectorCandidate {
+                        chunk_id: chunk_id.clone(),
                         score: (1.0 - neighbor.distance).clamp(-1.0, 1.0),
                     })
             })
@@ -1961,6 +2051,19 @@ mod tests {
     #[test]
     fn lsh_ann_remove_and_reinsert_is_consistent() -> Result<()> {
         let mut index = LshAnnVectorIndex::new();
+        index.upsert("c1", &[1.0, 0.0])?;
+        index.upsert("c2", &[0.0, 1.0])?;
+        index.remove("c1")?;
+        index.upsert("c3", &[1.0, 0.0])?;
+        let found = index.query(&[1.0, 0.0], 2)?;
+        assert_eq!(found[0].chunk_id, "c3");
+        Ok(())
+    }
+
+    #[test]
+    fn hnsw_baseline_remove_and_reinsert_is_consistent() -> Result<()> {
+        let mut index =
+            HnswBaselineVectorIndex::new_with_options(VectorStorageKind::F32, Default::default());
         index.upsert("c1", &[1.0, 0.0])?;
         index.upsert("c2", &[0.0, 1.0])?;
         index.remove("c1")?;

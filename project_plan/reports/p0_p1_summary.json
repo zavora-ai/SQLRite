@@ -1,0 +1,19 @@
+{
+  "suite": "p0_p1_performance",
+  "quality_gates_pass": true,
+  "sidecar_smoke_pass": true,
+  "brute_force": {
+    "qps": 327.23331029509023,
+    "p95_ms": 3.254916,
+    "top1_hit_rate": 1.0
+  },
+  "hnsw_baseline": {
+    "qps": 232.5039635880689,
+    "p95_ms": 4.550417,
+    "top1_hit_rate": 0.9866666666666667
+  },
+  "delta": {
+    "qps_gain_vs_bruteforce": -94.72934670702134,
+    "p95_ms_gain_vs_bruteforce": -1.2955010000000002
+  }
+}

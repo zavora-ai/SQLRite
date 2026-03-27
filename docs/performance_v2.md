@@ -63,11 +63,11 @@ Replace the current pseudo-HNSW path with a real ANN graph.
 - no public API breakage
 - filtered HNSW search in the planner
 - binary ANN entry sidecars for file-backed ANN modes, with binary-first reload and JSON fallback
+- on-disk HNSW graph snapshots with eager reload for file-backed reopen
 
 ### Deferred
 
 - filtered HNSW search integrated into the request planner
-- on-disk HNSW graph snapshots
 - quantized ANN storage
 
 ## Phase 2: Late Materialization Query Engine
@@ -178,6 +178,7 @@ Move vectors out of the SQLite BLOB hot path.
 - exact-search latency improved further after the segment-store refactor in the internal 5k/150 harness
 - file-backed brute-force mode now persists a binary exact-vector sidecar so startup can reload the exact-search segment store without decoding every embedding blob from SQLite rows
 - file-backed brute-force `f32` reopen now prefers an mmap-backed exact sidecar instead of eagerly decoding a copied snapshot
+- `hnsw_baseline` now stores normalized vectors in the same contiguous segment layout instead of one heap allocation per entry
 
 ## Phase 6: Quantization
 

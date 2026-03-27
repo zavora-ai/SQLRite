@@ -1147,6 +1147,16 @@ impl SqlRite {
                 self.runtime_config.vector_storage_kind,
                 &entries,
             )?;
+            if self.runtime_config.vector_index_mode == VectorIndexMode::HnswBaseline
+                && let Some(graph_paths) = ann_graph_dump_paths(
+                    db_path,
+                    self.runtime_config.vector_index_mode,
+                    self.runtime_config.vector_storage_kind,
+                )
+                && let BuiltinVectorIndex::HnswBaseline(hnsw) = &*index
+            {
+                hnsw.dump_graph_snapshot(&graph_paths.directory, &graph_paths.basename)?;
+            }
         }
         if self.runtime_config.vector_index_mode == VectorIndexMode::BruteForce
             && let Some(segment_path) =
@@ -1824,6 +1834,14 @@ struct AnnSnapshotEntry {
     vector: AnnSnapshotVector,
 }
 
+#[derive(Debug, Clone)]
+struct AnnGraphDumpPaths {
+    directory: PathBuf,
+    basename: String,
+    graph_path: PathBuf,
+    data_path: PathBuf,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "encoding", rename_all = "snake_case")]
 enum AnnSnapshotVector {
@@ -1896,11 +1914,34 @@ fn load_vector_index(
             None
         };
 
+    let ann_graph_paths = if runtime_config.enable_ann_persistence
+        && runtime_config.vector_index_mode == VectorIndexMode::HnswBaseline
+    {
+        db_path.and_then(|path| {
+            ann_graph_dump_paths(
+                path,
+                runtime_config.vector_index_mode,
+                runtime_config.vector_storage_kind,
+            )
+        })
+    } else {
+        None
+    };
+
     if let (Some(path), Some(db_file)) = (ann_entry_path.as_ref(), db_path)
         && artifact_is_fresh(path, db_file)
         && let Ok(entries) = load_ann_entry_sidecar(path, runtime_config.vector_storage_kind)
         && index.import_entries(&entries).is_ok()
     {
+        if let (Some(graph_paths), BuiltinVectorIndex::HnswBaseline(hnsw)) =
+            (ann_graph_paths.as_ref(), &index)
+            && graph_artifacts_are_fresh(graph_paths, db_file)
+            && hnsw
+                .load_graph_snapshot(&graph_paths.directory, &graph_paths.basename)
+                .is_ok()
+        {
+            return Ok(Some(index));
+        }
         return Ok(Some(index));
     }
 
@@ -1976,6 +2017,11 @@ fn load_vector_index(
             &entries,
         );
     }
+    if let (Some(graph_paths), BuiltinVectorIndex::HnswBaseline(hnsw)) =
+        (ann_graph_paths.as_ref(), &index)
+    {
+        let _ = hnsw.dump_graph_snapshot(&graph_paths.directory, &graph_paths.basename);
+    }
 
     Ok(Some(index))
 }
@@ -2014,6 +2060,34 @@ fn ann_entry_sidecar_path(
     )))
 }
 
+fn ann_graph_dump_paths(
+    db_path: &Path,
+    mode: VectorIndexMode,
+    storage_kind: VectorStorageKind,
+) -> Option<AnnGraphDumpPaths> {
+    let directory = db_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .to_path_buf();
+    let file_stem = db_path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("sqlrite");
+    let basename = format!(
+        ".{file_stem}.ann_graph.{}.{}",
+        mode.as_str(),
+        storage_kind.as_str()
+    );
+    let graph_path = directory.join(format!("{basename}.hnsw.graph"));
+    let data_path = directory.join(format!("{basename}.hnsw.data"));
+    Some(AnnGraphDumpPaths {
+        directory,
+        basename,
+        graph_path,
+        data_path,
+    })
+}
+
 fn exact_segment_path(db_path: &Path, storage_kind: VectorStorageKind) -> Option<PathBuf> {
     let parent = db_path.parent().unwrap_or_else(|| Path::new("."));
     let file_stem = db_path
@@ -2036,6 +2110,10 @@ fn artifact_is_fresh(artifact_path: &Path, db_path: &Path) -> bool {
         return false;
     };
     snapshot_mtime >= db_mtime
+}
+
+fn graph_artifacts_are_fresh(paths: &AnnGraphDumpPaths, db_path: &Path) -> bool {
+    artifact_is_fresh(&paths.graph_path, db_path) && artifact_is_fresh(&paths.data_path, db_path)
 }
 
 const EXACT_SEGMENT_MAGIC: &[u8; 8] = b"SQLRSEG1";
@@ -3152,6 +3230,12 @@ mod tests {
             VectorStorageKind::Int8,
         )
         .expect("expected snapshot path");
+        let graph_paths = ann_graph_dump_paths(
+            &db_path,
+            VectorIndexMode::HnswBaseline,
+            VectorStorageKind::Int8,
+        )
+        .expect("expected ann graph paths");
         let entry_sidecar_path = ann_entry_sidecar_path(
             &db_path,
             VectorIndexMode::HnswBaseline,
@@ -3162,6 +3246,14 @@ mod tests {
         assert!(
             entry_sidecar_path.exists(),
             "ann entry sidecar should be created"
+        );
+        assert!(
+            graph_paths.graph_path.exists(),
+            "ann graph file should be created"
+        );
+        assert!(
+            graph_paths.data_path.exists(),
+            "ann data file should be created"
         );
 
         let snapshot = load_ann_snapshot(&snapshot_path)?;
@@ -3226,8 +3318,22 @@ mod tests {
             VectorStorageKind::F32,
         )
         .expect("expected snapshot path");
+        let graph_paths = ann_graph_dump_paths(
+            &db_path,
+            VectorIndexMode::HnswBaseline,
+            VectorStorageKind::F32,
+        )
+        .expect("expected ann graph paths");
         assert!(entry_sidecar_path.exists(), "ann sidecar should be created");
         assert!(snapshot_path.exists(), "json snapshot should be created");
+        assert!(
+            graph_paths.graph_path.exists(),
+            "graph dump should be created"
+        );
+        assert!(
+            graph_paths.data_path.exists(),
+            "data dump should be created"
+        );
 
         let conn = Connection::open(&db_path)?;
         conn.execute(
@@ -3244,8 +3350,22 @@ mod tests {
                 ("c2".to_string(), vec![0.0, 1.0, 0.0]),
             ],
         )?;
+        let graph_bytes = fs::read(&graph_paths.graph_path)?;
+        fs::write(&graph_paths.graph_path, graph_bytes)?;
+        let data_bytes = fs::read(&graph_paths.data_path)?;
+        fs::write(&graph_paths.data_path, data_bytes)?;
 
         let reopened = SqlRite::open_with_config(&db_path, runtime)?;
+        let index = reopened
+            .vector_index
+            .as_ref()
+            .expect("expected vector index")
+            .borrow();
+        assert!(
+            index.graph_ready(),
+            "reopen should load the HNSW graph snapshot eagerly"
+        );
+        drop(index);
         let results = reopened.search(SearchRequest {
             query_embedding: Some(vec![1.0, 0.0, 0.0]),
             top_k: 1,
