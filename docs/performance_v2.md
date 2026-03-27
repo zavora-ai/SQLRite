@@ -273,7 +273,9 @@ Make hybrid retrieval efficient enough to be a headline differentiator.
   - FTS availability
   - vector-index availability
 - `vector-first` and `text-first` now use tighter candidate budgets instead of always expanding to the full SQL candidate limit
+- staged hybrid rerank now uses provisional hybrid scores from already-known vector/FTS signals before it fetches missing embeddings or lexical fallback content
 - partial FTS score lookups now fill only missing candidate ids instead of redoing the whole candidate set
+- lexical fallback content fetch now loads only candidates that are actually missing a usable FTS score
 - the Phase 7 planner suite is reproducible via:
   - `/Users/jameskaranja/Developer/projects/SQLRight/scripts/run-p7-hybrid-planner-suite.sh`
 
@@ -281,19 +283,20 @@ Make hybrid retrieval efficient enough to be a headline differentiator.
 
 On the internal 5k/150 weighted-hybrid benchmark with `f32` storage:
 
-- `brute_force`: `583.95 QPS`, `p95=1.9334 ms`, `top1=1.0`
-- `hnsw_baseline`: `573.43 QPS`, `p95=1.9503 ms`, `top1=1.0`
+- `brute_force`: `600.14 QPS`, `p95=1.8118 ms`, `top1=1.0`
+- `hnsw_baseline`: `589.01 QPS`, `p95=1.8907 ms`, `top1=1.0`
 
 Relative to the Phase 6 `f32` baseline:
 
-- `brute_force` improved by `+154.48 QPS`
-- `hnsw_baseline` improved by `+150.04 QPS`
+- `brute_force` improved by `+170.67 QPS`
+- `hnsw_baseline` improved by `+165.62 QPS`
 
 ### Conclusion
 
 - Phase 7 has already materially reduced hybrid-path overhead
 - the planner work is directionally correct
-- `hnsw_baseline` is still slightly behind `brute_force` on this workload, so Phase 7 is started, not finished
+- `hnsw_baseline` is now in the same performance band as `brute_force`, but it is still not decisively ahead on this workload
+- the next clean win is no longer broad hybrid-planner overhead; it is filtered workloads and ANN-specific specialization
 
 ## Phase 8: Benchmark Discipline
 

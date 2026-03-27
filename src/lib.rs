@@ -1000,6 +1000,18 @@ impl SqlRite {
             items
         };
 
+        let candidate_ids = if use_vector && use_text && !vector_fast_path {
+            select_hybrid_rerank_ids(
+                candidate_ids,
+                &vector_score_lookup,
+                &text_scores,
+                &request,
+                hybrid_planner_mode,
+            )
+        } else {
+            candidate_ids
+        };
+
         if let Some(text) = query_text
             && self.fts_enabled
             && candidate_ids
@@ -1028,12 +1040,17 @@ impl SqlRite {
         let mut scored = Vec::with_capacity(candidate_ids.len());
         let mut content_cache = HashMap::new();
         let mut embedding_cache = HashMap::new();
-        let missing_fts_scores = use_text
-            && candidate_ids
+        let missing_text_ids = if use_text {
+            candidate_ids
                 .iter()
-                .any(|chunk_id| text_scores.get(chunk_id).copied().unwrap_or(0.0) <= 0.0);
-        if missing_fts_scores {
-            content_cache = self.fetch_chunk_contents_by_ids(&candidate_ids)?;
+                .filter(|chunk_id| text_scores.get(*chunk_id).copied().unwrap_or(0.0) <= 0.0)
+                .cloned()
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+        if !missing_text_ids.is_empty() {
+            content_cache = self.fetch_chunk_contents_by_ids(&missing_text_ids)?;
         }
         if use_vector {
             let missing_vector_ids: Vec<String> = candidate_ids
@@ -1944,6 +1961,87 @@ fn hybrid_secondary_candidate_limit(request: &SearchRequest, mode: HybridPlanner
         .max(16)
         .min(request.candidate_limit)
         .max(request.top_k)
+}
+
+fn hybrid_rerank_candidate_limit(
+    request: &SearchRequest,
+    mode: Option<HybridPlannerMode>,
+) -> usize {
+    let multiplier = match (
+        mode.unwrap_or(HybridPlannerMode::BalancedHybrid),
+        request.query_profile,
+    ) {
+        (HybridPlannerMode::VectorFirst, QueryProfile::Latency) => 2,
+        (HybridPlannerMode::VectorFirst, QueryProfile::Balanced) => 4,
+        (HybridPlannerMode::VectorFirst, QueryProfile::Recall) => 8,
+        (HybridPlannerMode::TextFirst, QueryProfile::Latency) => 2,
+        (HybridPlannerMode::TextFirst, QueryProfile::Balanced) => 4,
+        (HybridPlannerMode::TextFirst, QueryProfile::Recall) => 8,
+        (HybridPlannerMode::BalancedHybrid, QueryProfile::Latency) => 4,
+        (HybridPlannerMode::BalancedHybrid, QueryProfile::Balanced) => 6,
+        (HybridPlannerMode::BalancedHybrid, QueryProfile::Recall) => 10,
+    };
+    request
+        .top_k
+        .saturating_mul(multiplier)
+        .max(request.top_k)
+        .min(request.candidate_limit)
+}
+
+fn select_hybrid_rerank_ids(
+    candidate_ids: Vec<String>,
+    vector_score_lookup: &HashMap<String, f32>,
+    text_scores: &HashMap<String, f32>,
+    request: &SearchRequest,
+    mode: Option<HybridPlannerMode>,
+) -> Vec<String> {
+    let rerank_limit = hybrid_rerank_candidate_limit(request, mode);
+    if candidate_ids.len() <= rerank_limit {
+        return candidate_ids;
+    }
+
+    let provisional = candidate_ids
+        .iter()
+        .map(|chunk_id| ScoredChunk {
+            chunk_id: chunk_id.clone(),
+            vector_score: vector_score_lookup.get(chunk_id).copied().unwrap_or(0.0),
+            text_score: text_scores.get(chunk_id).copied().unwrap_or(0.0),
+        })
+        .collect::<Vec<_>>();
+    let provisional_scores = compute_hybrid_scores(
+        &provisional,
+        true,
+        true,
+        request.alpha,
+        request.fusion_strategy,
+    );
+    let mut ranked = provisional
+        .into_iter()
+        .map(|entry| {
+            (
+                entry.chunk_id.clone(),
+                provisional_scores
+                    .get(&entry.chunk_id)
+                    .copied()
+                    .unwrap_or(0.0),
+                entry.vector_score,
+                entry.text_score,
+            )
+        })
+        .collect::<Vec<_>>();
+    ranked.sort_by(|left, right| {
+        right
+            .1
+            .total_cmp(&left.1)
+            .then_with(|| right.2.total_cmp(&left.2))
+            .then_with(|| right.3.total_cmp(&left.3))
+            .then_with(|| left.0.cmp(&right.0))
+    });
+    ranked.truncate(rerank_limit);
+    ranked
+        .into_iter()
+        .map(|(chunk_id, _, _, _)| chunk_id)
+        .collect()
 }
 
 fn should_skip_fts_score_lookup(
@@ -4115,6 +4213,31 @@ mod tests {
         assert_eq!(
             select_hybrid_planner_mode(&balanced_request, true, true),
             Some(HybridPlannerMode::BalancedHybrid)
+        );
+    }
+
+    #[test]
+    fn hybrid_rerank_limit_stays_smaller_than_candidate_window() {
+        let request = SearchRequest {
+            query_text: Some("agent memory".to_string()),
+            query_embedding: Some(vec![1.0, 0.0]),
+            top_k: 10,
+            candidate_limit: 200,
+            query_profile: QueryProfile::Balanced,
+            ..Default::default()
+        };
+
+        assert_eq!(
+            hybrid_rerank_candidate_limit(&request, Some(HybridPlannerMode::VectorFirst)),
+            40
+        );
+        assert_eq!(
+            hybrid_rerank_candidate_limit(&request, Some(HybridPlannerMode::TextFirst)),
+            40
+        );
+        assert_eq!(
+            hybrid_rerank_candidate_limit(&request, Some(HybridPlannerMode::BalancedHybrid)),
+            60
         );
     }
 }

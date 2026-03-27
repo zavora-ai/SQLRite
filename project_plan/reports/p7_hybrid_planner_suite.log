@@ -1,12 +1,12 @@
 
 $ cargo test hybrid_search_matches_text_and_vector -- --nocapture
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
      Running unittests src/lib.rs (target/debug/deps/sqlrite-13612ca32ee58f63)
 
 running 1 test
 test tests::hybrid_search_matches_text_and_vector ... ok
 
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 198 filtered out; finished in 0.00s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 199 filtered out; finished in 0.00s
 
      Running unittests src/main.rs (target/debug/deps/sqlrite-f88293c42b71bfc0)
 
@@ -106,13 +106,13 @@ test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 
 
 $ cargo test rrf_changes_hybrid_ordering -- --nocapture
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
      Running unittests src/lib.rs (target/debug/deps/sqlrite-13612ca32ee58f63)
 
 running 1 test
 test tests::rrf_changes_hybrid_ordering ... ok
 
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 198 filtered out; finished in 0.00s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 199 filtered out; finished in 0.00s
 
      Running unittests src/main.rs (target/debug/deps/sqlrite-f88293c42b71bfc0)
 
@@ -212,17 +212,18 @@ test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 
 
 $ env RUSTC_WRAPPER= cargo run --bin sqlrite-bench -- --corpus 5000 --queries 150 --warmup 30 --embedding-dim 64 --candidate-limit 200 --top-k 10 --index-mode brute_force --storage-kind f32 --output /Users/jameskaranja/Developer/projects/SQLRight/project_plan/reports/p7_benchmark_bruteforce_f32.json
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.09s
+   Compiling sqlrite v1.0.0 (/Users/jameskaranja/Developer/projects/SQLRight)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.72s
      Running `target/debug/sqlrite-bench --corpus 5000 --queries 150 --warmup 30 --embedding-dim 64 --candidate-limit 200 --top-k 10 --index-mode brute_force --storage-kind f32 --output /Users/jameskaranja/Developer/projects/SQLRight/project_plan/reports/p7_benchmark_bruteforce_f32.json`
 SQLRite benchmark: corpus=5000, queries=150, concurrency=1, index=brute_force, fusion=weighted, query_profile=balanced
-ingest_ms=182.97, query_ms=257.60, qps=582.30, top1_hit_rate=1.0000
-ingest_chunks_per_sec=27326.59, dataset_payload_bytes=1539515, index_estimated_bytes=1550000, approx_working_set_bytes=3089515
-latency_ms: avg=1.7113, p50=1.6802, p95=1.9061, p99=2.0824, min=1.5701, max=2.1583
+ingest_ms=187.60, query_ms=249.94, qps=600.14, top1_hit_rate=1.0000
+ingest_chunks_per_sec=26652.37, dataset_payload_bytes=1539515, index_estimated_bytes=1550000, approx_working_set_bytes=3089515
+latency_ms: avg=1.6601, p50=1.6407, p95=1.8118, p99=1.8978, min=1.5337, max=1.9194
 
 $ env RUSTC_WRAPPER= cargo run --bin sqlrite-bench -- --corpus 5000 --queries 150 --warmup 30 --embedding-dim 64 --candidate-limit 200 --top-k 10 --index-mode hnsw_baseline --storage-kind f32 --output /Users/jameskaranja/Developer/projects/SQLRight/project_plan/reports/p7_benchmark_hnsw_f32.json
     Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.09s
      Running `target/debug/sqlrite-bench --corpus 5000 --queries 150 --warmup 30 --embedding-dim 64 --candidate-limit 200 --top-k 10 --index-mode hnsw_baseline --storage-kind f32 --output /Users/jameskaranja/Developer/projects/SQLRight/project_plan/reports/p7_benchmark_hnsw_f32.json`
 SQLRite benchmark: corpus=5000, queries=150, concurrency=1, index=hnsw_baseline, fusion=weighted, query_profile=balanced
-ingest_ms=180.50, query_ms=261.53, qps=573.54, top1_hit_rate=1.0000
-ingest_chunks_per_sec=27701.27, dataset_payload_bytes=1539515, index_estimated_bytes=2830000, approx_working_set_bytes=4369515
-latency_ms: avg=1.7375, p50=1.7089, p95=1.9093, p99=2.1495, min=1.6072, max=2.1911
+ingest_ms=187.65, query_ms=254.66, qps=589.01, top1_hit_rate=1.0000
+ingest_chunks_per_sec=26645.41, dataset_payload_bytes=1539515, index_estimated_bytes=2830000, approx_working_set_bytes=4369515
+latency_ms: avg=1.6913, p50=1.6644, p95=1.8907, p99=2.1170, min=1.5530, max=2.1578
