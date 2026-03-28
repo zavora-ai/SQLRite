@@ -27,6 +27,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         top_k: args.top_k,
         alpha: args.alpha,
         candidate_limit: args.candidate_limit,
+        include_payloads: true,
         query_profile: args.query_profile,
         metadata_filters: args.metadata_filters,
         doc_id: args.doc_id,

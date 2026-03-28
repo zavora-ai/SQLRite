@@ -174,6 +174,7 @@ impl ObservabilityState {
             raw_path,
             "/v1/sql"
                 | "/v1/query"
+                | "/v1/query-compact"
                 | "/grpc/sqlrite.v1.QueryService/Query"
                 | "/grpc/sqlrite.v1.QueryService/Sql"
         ) {
@@ -1939,7 +1940,37 @@ fn build_response(
                     return Ok((400, "application/json", payload.to_string()));
                 }
             };
-            match execute_query_api(db, config, request, path, input) {
+            match execute_query_api(db, config, request, path, input, false) {
+                Ok(payload) => Ok((200, "application/json", payload.to_string())),
+                Err(error)
+                    if matches!(
+                        &error,
+                        crate::SqlRiteError::Io(io_error)
+                            if io_error.kind() == std::io::ErrorKind::PermissionDenied
+                    ) =>
+                {
+                    Ok((
+                        403,
+                        "application/json",
+                        json!({"error": error.to_string()}).to_string(),
+                    ))
+                }
+                Err(error) => Ok((
+                    400,
+                    "application/json",
+                    json!({"error": error.to_string()}).to_string(),
+                )),
+            }
+        }
+        ("POST", "/v1/query-compact") if config.enable_sql_endpoint => {
+            let input = match parse_json_body::<QueryApiRequest>(request) {
+                Ok(payload) => payload,
+                Err(error) => {
+                    let payload = json!({"error": error});
+                    return Ok((400, "application/json", payload.to_string()));
+                }
+            };
+            match execute_query_api(db, config, request, path, input, true) {
                 Ok(payload) => Ok((200, "application/json", payload.to_string())),
                 Err(error)
                     if matches!(
@@ -2009,7 +2040,7 @@ fn build_response(
                     return Ok((400, "application/json", payload.to_string()));
                 }
             };
-            match execute_query_api(db, config, request, path, input) {
+            match execute_query_api(db, config, request, path, input, false) {
                 Ok(payload) => Ok((200, "application/json", payload.to_string())),
                 Err(error)
                     if matches!(
@@ -2050,6 +2081,11 @@ fn build_response(
             405,
             "application/json",
             json!({"error": "method not allowed; use POST /v1/query"}).to_string(),
+        )),
+        (method, "/v1/query-compact") if method != "POST" => Ok((
+            405,
+            "application/json",
+            json!({"error": "method not allowed; use POST /v1/query-compact"}).to_string(),
         )),
         (method, "/v1/rerank-hook") if method != "POST" => Ok((
             405,
@@ -2115,6 +2151,7 @@ fn execute_query_api(
     request: &HttpRequest,
     path: &str,
     mut input: QueryApiRequest,
+    compact: bool,
 ) -> Result<Value> {
     let context = authorize_request(config, request, AccessOperation::Query, path).map_err(
         |(_, _, body)| {
@@ -2153,9 +2190,72 @@ fn execute_query_api(
         request,
         AccessOperation::Query,
         true,
-        json!({"path": path, "row_count": envelope.row_count}),
+        json!({"path": path, "row_count": envelope.row_count, "compact": compact}),
     )?;
-    Ok(serde_json::to_value(envelope)?)
+    if compact {
+        Ok(compact_query_envelope(envelope))
+    } else {
+        Ok(serde_json::to_value(envelope)?)
+    }
+}
+
+fn compact_query_envelope(envelope: sqlrite_sdk_core::QueryEnvelope<crate::SearchResult>) -> Value {
+    let mut chunk_ids = Vec::with_capacity(envelope.rows.len());
+    let mut hybrid_scores = Vec::with_capacity(envelope.rows.len());
+    let mut vector_scores = Vec::with_capacity(envelope.rows.len());
+    let mut text_scores = Vec::with_capacity(envelope.rows.len());
+    let include_doc_ids = envelope.rows.iter().any(|row| !row.doc_id.is_empty());
+    let include_contents = envelope.rows.iter().any(|row| !row.content.is_empty());
+    let include_metadata = envelope.rows.iter().any(|row| !row.metadata.is_null());
+    let mut doc_ids = if include_doc_ids {
+        Some(Vec::with_capacity(envelope.rows.len()))
+    } else {
+        None
+    };
+    let mut contents = if include_contents {
+        Some(Vec::with_capacity(envelope.rows.len()))
+    } else {
+        None
+    };
+    let mut metadata = if include_metadata {
+        Some(Vec::with_capacity(envelope.rows.len()))
+    } else {
+        None
+    };
+
+    for row in envelope.rows {
+        chunk_ids.push(row.chunk_id);
+        hybrid_scores.push(row.hybrid_score);
+        vector_scores.push(row.vector_score);
+        text_scores.push(row.text_score);
+        if let Some(doc_ids) = &mut doc_ids {
+            doc_ids.push(row.doc_id);
+        }
+        if let Some(contents) = &mut contents {
+            contents.push(row.content);
+        }
+        if let Some(metadata_rows) = &mut metadata {
+            metadata_rows.push(row.metadata);
+        }
+    }
+
+    let mut payload = serde_json::Map::new();
+    payload.insert("kind".to_string(), json!("query_compact"));
+    payload.insert("row_count".to_string(), json!(chunk_ids.len()));
+    payload.insert("chunk_ids".to_string(), json!(chunk_ids));
+    payload.insert("hybrid_scores".to_string(), json!(hybrid_scores));
+    payload.insert("vector_scores".to_string(), json!(vector_scores));
+    payload.insert("text_scores".to_string(), json!(text_scores));
+    if let Some(doc_ids) = doc_ids {
+        payload.insert("doc_ids".to_string(), json!(doc_ids));
+    }
+    if let Some(contents) = contents {
+        payload.insert("contents".to_string(), json!(contents));
+    }
+    if let Some(metadata_rows) = metadata {
+        payload.insert("metadata".to_string(), json!(metadata_rows));
+    }
+    Value::Object(payload)
 }
 
 fn execute_rerank_hook_api(
@@ -2285,6 +2385,26 @@ fn openapi_query_document(sql_enabled: bool) -> Value {
             }),
         );
         paths.insert(
+            "/v1/query-compact".to_string(),
+            json!({
+                "post": {
+                    "summary": "Run retrieval query with compact array-oriented response for agents and benchmarks",
+                    "requestBody": {
+                        "required": true,
+                        "content": {
+                            "application/json": {
+                                "schema": {"$ref": "#/components/schemas/QueryRequest"}
+                            }
+                        }
+                    },
+                    "responses": {
+                        "200": {"description": "Compact query results"},
+                        "400": {"description": "Invalid query request"}
+                    }
+                }
+            }),
+        );
+        paths.insert(
             "/v1/rerank-hook".to_string(),
             json!({
                 "post": {
@@ -2385,6 +2505,7 @@ fn openapi_query_document(sql_enabled: bool) -> Value {
                         "top_k": {"type": "integer", "minimum": 1},
                         "alpha": {"type": "number", "minimum": 0.0, "maximum": 1.0},
                         "candidate_limit": {"type": "integer", "minimum": 1},
+                        "include_payloads": {"type": "boolean"},
                         "query_profile": {
                             "type": "string",
                             "enum": ["balanced", "latency", "recall"]
@@ -3399,6 +3520,7 @@ mod tests {
         )?;
         assert_eq!(status, 200);
         assert!(body.contains("\"/v1/query\""));
+        assert!(body.contains("\"/v1/query-compact\""));
         assert!(body.contains("\"/grpc/sqlrite.v1.QueryService/Query\""));
         assert!(body.contains("\"/grpc/sqlrite.v1.QueryService/Sql\""));
         Ok(())
@@ -3775,6 +3897,24 @@ mod tests {
         assert!(body.contains("\"kind\":\"query\""));
         assert!(body.contains("\"row_count\":1"));
 
+        let compact_req = make_request(
+            "POST",
+            "/v1/query-compact",
+            Some(r#"{"query_text":"agent","top_k":1,"include_payloads":false}"#),
+            None,
+        );
+        let (status, _, body) = build_response(
+            &db,
+            Path::new(":memory:"),
+            DurabilityProfile::Balanced,
+            &config,
+            &state,
+            &compact_req,
+        )?;
+        assert_eq!(status, 200);
+        assert!(body.contains("\"kind\":\"query_compact\""));
+        assert!(body.contains("\"chunk_ids\":[\"query-1\"]"));
+
         let grpc_query_req = make_request(
             "POST",
             "/grpc/sqlrite.v1.QueryService/Query",
@@ -3813,6 +3953,18 @@ mod tests {
         )?;
         assert_eq!(status, 405);
         assert!(body.contains("POST /v1/query"));
+
+        let compact_get = make_request("GET", "/v1/query-compact", None, None);
+        let (status, _, body) = build_response(
+            &db,
+            Path::new(":memory:"),
+            DurabilityProfile::Balanced,
+            &config,
+            &state,
+            &compact_get,
+        )?;
+        assert_eq!(status, 405);
+        assert!(body.contains("POST /v1/query-compact"));
 
         let grpc_sql_get = make_request("GET", "/grpc/sqlrite.v1.QueryService/Sql", None, None);
         let (status, _, body) = build_response(

@@ -38,6 +38,7 @@ pub fn execute_query(
         top_k: input.top_k_or_default(),
         alpha: input.alpha_or_default(),
         candidate_limit: input.candidate_limit_or_default(),
+        include_payloads: input.include_payloads_or_default(),
         query_profile: match input
             .query_profile_or_default()
             .map_err(|error| SdkRuntimeError::Validation(error.to_string()))?
@@ -114,6 +115,36 @@ mod tests {
 
         assert_eq!(envelope.kind, "query");
         assert_eq!(envelope.row_count, 1);
+    }
+
+    #[test]
+    fn execute_query_can_skip_payloads() {
+        let db = SqlRite::open_in_memory_with_config(RuntimeConfig::default()).expect("open db");
+        db.ingest_chunk(&ChunkInput {
+            id: "sdk-1".to_string(),
+            doc_id: "doc-1".to_string(),
+            content: "agent runtime".to_string(),
+            embedding: vec![1.0, 0.0],
+            metadata: json!({"tenant": "demo"}),
+            source: None,
+        })
+        .expect("seed chunk");
+
+        let envelope = execute_query(
+            &db,
+            QueryRequest {
+                query_embedding: Some(vec![1.0, 0.0]),
+                top_k: Some(1),
+                include_payloads: Some(false),
+                ..QueryRequest::default()
+            },
+        )
+        .expect("query");
+
+        assert_eq!(envelope.row_count, 1);
+        assert_eq!(envelope.rows[0].doc_id, "");
+        assert_eq!(envelope.rows[0].content, "");
+        assert_eq!(envelope.rows[0].metadata, Value::Null);
     }
 
     #[test]

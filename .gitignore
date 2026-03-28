@@ -8,3 +8,8 @@ dist/
 *.db
 *.sqlite
 sprint1_bench_smoke.json
+*.sqlite3
+*_demo.db
+*_quickstart.db
+*_backup.db
+eval_report*.json

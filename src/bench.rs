@@ -473,6 +473,7 @@ fn synthetic_query(config: &BenchmarkConfig, query_index: usize) -> (SearchReque
             top_k: config.top_k,
             alpha: config.alpha,
             candidate_limit: config.candidate_limit.min(config.corpus_size),
+            include_payloads: true,
             query_profile: config.query_profile,
             metadata_filters,
             doc_id: None,

@@ -1,7 +1,0 @@
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.09s
-     Running `target/debug/sqlrite benchmark --corpus 12000 --queries 600 --warmup 120 --embedding-dim 128 --top-k 10 --candidate-limit 600 --batch-size 768 --fusion weighted --index-mode hnsw_baseline --durability balanced --output project_plan/reports/s11_benchmark.json`
-SQLRite benchmark: corpus=12000, queries=600, index=hnsw_baseline, fusion=weighted
-runtime: storage=f32, mmap_size_bytes=268435456, cache_size_kib=65536
-ingest_ms=1057.26, query_ms=7568.35, qps=79.28, top1_hit_rate=1.0000
-ingest_chunks_per_sec=11350.08, dataset_payload_bytes=6770390, index_estimated_bytes=8425208, approx_working_set_bytes=15195598
-latency_ms: avg=12.6007, p50=12.4746, p95=13.7303, p99=15.6144

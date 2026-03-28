@@ -18,6 +18,7 @@ rayon = "1.10"
 half = "2.4"
 hnsw_rs = "0.3.4"
 memmap2 = "0.9"
+roaring = "0.10"
 sqlrite-sdk-core = { path = "crates/sqlrite-sdk-core" }
 tokio = { version = "1.43", features = ["macros", "rt-multi-thread", "sync"] }
 tonic = { version = "0.12", features = ["transport"] }

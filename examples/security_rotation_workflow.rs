@@ -1,8 +1,8 @@
 // Run:
-// cargo run --example security_rotation_workflow -- <db-path> <registry-path>
+// cargo run --example security_rotation_workflow -- <db-path> <registry-path> <audit-path>
 //
-// Seeds an encrypted tenant chunk and two tenant keys so rotation/verification
-// workflows can be exercised against a file-backed database.
+// Seeds an encrypted tenant chunk and two tenant keys so rotation and
+// verification workflows can be exercised against a file-backed database.
 
 use serde_json::json;
 use sqlrite::{
@@ -16,15 +16,15 @@ fn main() -> Result<()> {
     let db_path = args
         .first()
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("project_plan/reports/s28_rotation_demo.db"));
+        .unwrap_or_else(|| PathBuf::from("sqlrite_rotation_demo.db"));
     let registry_path = args
         .get(1)
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("project_plan/reports/s28_rotation_keys.json"));
+        .unwrap_or_else(|| PathBuf::from("sqlrite_rotation_keys.json"));
     let audit_path = args
         .get(2)
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("project_plan/reports/s28_rotation_audit.jsonl"));
+        .unwrap_or_else(|| PathBuf::from("sqlrite_rotation_audit.jsonl"));
 
     let db = SqlRite::open_with_config(&db_path, RuntimeConfig::default())?;
     let audit = JsonlAuditLogger::new(audit_path, vec!["secret_payload".to_string()])?;

@@ -1,4 +1,0 @@
-$ cargo run -- benchmark --corpus 500 --queries 80 --warmup 10 --embedding-dim 64 --top-k 10 --candidate-limit 120 --batch-size 100 --alpha 0.6 --fusion weighted --profile balanced --index-mode lsh_ann --output project_plan/reports/s06_benchmark.json
-SQLRite benchmark: corpus=500, queries=80, index=lsh_ann, fusion=weighted
-ingest_ms=72.16, query_ms=168.64, qps=474.39, top1_hit_rate=1.0000
-latency_ms: avg=2.1014, p50=2.1618, p95=2.2937, p99=2.8020

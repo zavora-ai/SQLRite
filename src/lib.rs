@@ -59,13 +59,14 @@ pub use security::{
 };
 pub use server::{ServerConfig, ServerSecurityConfig, serve_health_endpoints};
 pub use sql_semantics::{execute_sql_statement_json, prepare_sql_connection};
-use vector_index::BuiltinVectorIndex;
 pub use vector_index::{
     AnnTuningConfig, BruteForceVectorIndex, LshAnnVectorIndex, VectorCandidate, VectorIndex,
     VectorIndexMode, VectorIndexOptions, VectorStorageKind,
 };
+use vector_index::{BuiltinVectorIndex, ChunkKey, VectorEntryRecord};
 
 use half::f16;
+use roaring::RoaringTreemap;
 use rusqlite::types::Value as SqlValue;
 use rusqlite::{Connection, params, params_from_iter};
 use serde::{Deserialize, Serialize};
@@ -225,6 +226,7 @@ pub struct SearchRequest {
     pub top_k: usize,
     pub alpha: f32,
     pub candidate_limit: usize,
+    pub include_payloads: bool,
     pub metadata_filters: HashMap<String, String>,
     pub doc_id: Option<String>,
     pub fusion_strategy: FusionStrategy,
@@ -239,6 +241,7 @@ impl Default for SearchRequest {
             top_k: 5,
             alpha: 0.65,
             candidate_limit: 1000,
+            include_payloads: true,
             metadata_filters: HashMap::new(),
             doc_id: None,
             fusion_strategy: FusionStrategy::default(),
@@ -374,6 +377,11 @@ impl SearchRequestBuilder {
 
     pub fn candidate_limit(mut self, value: usize) -> Self {
         self.inner.candidate_limit = value;
+        self
+    }
+
+    pub fn include_payloads(mut self, value: bool) -> Self {
+        self.inner.include_payloads = value;
         self
     }
 
@@ -580,15 +588,17 @@ struct CandidateChunkRecord {
 
 #[derive(Debug, Clone)]
 struct ChunkFilterIndexEntry {
+    chunk_id: String,
     doc_id: String,
     metadata_pairs: Vec<(String, String)>,
 }
 
 #[derive(Debug, Default)]
 struct ChunkFilterIndex {
-    by_doc_id: HashMap<String, HashSet<String>>,
-    by_metadata: HashMap<(String, String), HashSet<String>>,
-    by_chunk_id: HashMap<String, ChunkFilterIndexEntry>,
+    by_doc_id: HashMap<String, RoaringTreemap>,
+    by_metadata: HashMap<(String, String), RoaringTreemap>,
+    by_chunk_key: HashMap<ChunkKey, ChunkFilterIndexEntry>,
+    chunk_key_by_id: HashMap<String, ChunkKey>,
 }
 
 #[derive(Debug)]
@@ -613,61 +623,78 @@ enum HybridPlannerMode {
 
 impl ChunkFilterIndex {
     fn from_connection(conn: &Connection) -> Result<Self> {
-        let mut stmt = conn.prepare("SELECT id, doc_id, metadata FROM chunks")?;
+        let mut stmt = conn.prepare("SELECT rowid, id, doc_id, metadata FROM chunks")?;
         let rows = stmt.query_map([], |row| {
-            let chunk_id: String = row.get(0)?;
-            let doc_id: String = row.get(1)?;
-            let metadata_text: String = row.get(2)?;
+            let chunk_key: i64 = row.get(0)?;
+            let chunk_id: String = row.get(1)?;
+            let doc_id: String = row.get(2)?;
+            let metadata_text: String = row.get(3)?;
             let metadata = serde_json::from_str::<Value>(&metadata_text).map_err(|e| {
                 rusqlite::Error::FromSqlConversionFailure(
-                    2,
+                    3,
                     rusqlite::types::Type::Text,
                     Box::new(e),
                 )
             })?;
-            Ok((chunk_id, doc_id, metadata))
+            Ok((chunk_key as ChunkKey, chunk_id, doc_id, metadata))
         })?;
 
         let mut index = Self::default();
         for row in rows {
-            let (chunk_id, doc_id, metadata) = row?;
-            index.upsert_chunk(&chunk_id, &doc_id, &metadata);
+            let (chunk_key, chunk_id, doc_id, metadata) = row?;
+            index.upsert_chunk(chunk_key, &chunk_id, &doc_id, &metadata);
         }
         Ok(index)
     }
 
-    fn upsert_chunk(&mut self, chunk_id: &str, doc_id: &str, metadata: &Value) {
-        self.remove_chunk(chunk_id);
+    fn upsert_chunk(
+        &mut self,
+        chunk_key: ChunkKey,
+        chunk_id: &str,
+        doc_id: &str,
+        metadata: &Value,
+    ) {
+        self.remove_chunk_by_id(chunk_id);
 
         self.by_doc_id
             .entry(doc_id.to_string())
             .or_default()
-            .insert(chunk_id.to_string());
+            .insert(chunk_key);
 
         let metadata_pairs = extract_filterable_metadata_pairs(metadata);
         for (key, value) in &metadata_pairs {
             self.by_metadata
                 .entry((key.clone(), value.clone()))
                 .or_default()
-                .insert(chunk_id.to_string());
+                .insert(chunk_key);
         }
 
-        self.by_chunk_id.insert(
-            chunk_id.to_string(),
+        self.by_chunk_key.insert(
+            chunk_key,
             ChunkFilterIndexEntry {
+                chunk_id: chunk_id.to_string(),
                 doc_id: doc_id.to_string(),
                 metadata_pairs,
             },
         );
+        self.chunk_key_by_id.insert(chunk_id.to_string(), chunk_key);
     }
 
-    fn remove_chunk(&mut self, chunk_id: &str) {
-        let Some(existing) = self.by_chunk_id.remove(chunk_id) else {
+    fn remove_chunk_by_id(&mut self, chunk_id: &str) {
+        let Some(chunk_key) = self.chunk_key_by_id.remove(chunk_id) else {
             return;
         };
+        self.remove_chunk_key(chunk_key);
+    }
+
+    fn remove_chunk_key(&mut self, chunk_key: ChunkKey) {
+        let Some(existing) = self.by_chunk_key.remove(&chunk_key) else {
+            return;
+        };
+        self.chunk_key_by_id.remove(&existing.chunk_id);
 
         if let Some(ids) = self.by_doc_id.get_mut(&existing.doc_id) {
-            ids.remove(chunk_id);
+            ids.remove(chunk_key);
             if ids.is_empty() {
                 self.by_doc_id.remove(&existing.doc_id);
             }
@@ -676,7 +703,7 @@ impl ChunkFilterIndex {
         for (key, value) in existing.metadata_pairs {
             let map_key = (key, value);
             if let Some(ids) = self.by_metadata.get_mut(&map_key) {
-                ids.remove(chunk_id);
+                ids.remove(chunk_key);
                 if ids.is_empty() {
                     self.by_metadata.remove(&map_key);
                 }
@@ -684,27 +711,27 @@ impl ChunkFilterIndex {
         }
     }
 
-    fn filtered_chunk_ids(&self, request: &SearchRequest) -> Option<HashSet<String>> {
+    fn filtered_chunk_keys(&self, request: &SearchRequest) -> Option<RoaringTreemap> {
         if request.doc_id.is_none() && request.metadata_filters.is_empty() {
             return None;
         }
 
-        let mut working_set: Option<HashSet<String>> = None;
+        let mut working_set: Option<RoaringTreemap> = None;
 
         if let Some(doc_id) = &request.doc_id {
             let ids = self.by_doc_id.get(doc_id)?;
-            working_set = Some(ids.iter().cloned().collect());
+            working_set = Some(ids.clone());
         }
 
         for (key, value) in &request.metadata_filters {
             let ids = self.by_metadata.get(&(key.clone(), value.clone()))?;
             if let Some(current) = &mut working_set {
-                current.retain(|chunk_id| ids.contains(chunk_id));
+                *current &= ids.clone();
                 if current.is_empty() {
-                    return Some(HashSet::new());
+                    return Some(RoaringTreemap::new());
                 }
             } else {
-                working_set = Some(ids.iter().cloned().collect());
+                working_set = Some(ids.clone());
             }
         }
 
@@ -930,14 +957,14 @@ impl SqlRite {
             "UPDATE chunks SET metadata = ?1 WHERE id = ?2",
             params![metadata_json, chunk_id],
         )?;
-        if let Ok(doc_id) = self.conn.query_row(
-            "SELECT doc_id FROM chunks WHERE id = ?1",
+        if let Ok((chunk_key, doc_id)) = self.conn.query_row(
+            "SELECT rowid, doc_id FROM chunks WHERE id = ?1",
             params![chunk_id],
-            |row| row.get::<_, String>(0),
+            |row| Ok((row.get::<_, i64>(0)? as ChunkKey, row.get::<_, String>(1)?)),
         ) {
             self.filter_index
                 .borrow_mut()
-                .upsert_chunk(chunk_id, &doc_id, metadata);
+                .upsert_chunk(chunk_key, chunk_id, &doc_id, metadata);
         }
         Ok(())
     }
@@ -996,19 +1023,37 @@ impl SqlRite {
         }
         tx.commit()?;
 
+        let chunk_keys = self.fetch_chunk_keys_by_ids(
+            &chunks
+                .iter()
+                .map(|chunk| chunk.id.clone())
+                .collect::<Vec<_>>(),
+        )?;
+
         if let Some(index) = &self.vector_index {
             let mut index = index.borrow_mut();
-            let upserts: Vec<(&str, &[f32])> = chunks
+            let upserts: Vec<VectorEntryRecord> = chunks
                 .iter()
-                .map(|chunk| (chunk.id.as_str(), chunk.embedding.as_slice()))
+                .filter_map(|chunk| {
+                    chunk_keys
+                        .get(&chunk.id)
+                        .copied()
+                        .map(|chunk_key| VectorEntryRecord {
+                            chunk_key,
+                            chunk_id: chunk.id.clone(),
+                            embedding: chunk.embedding.clone(),
+                        })
+                })
                 .collect();
-            index.upsert_batch(&upserts)?;
+            index.upsert_records(&upserts)?;
         }
 
         {
             let mut filter_index = self.filter_index.borrow_mut();
             for chunk in chunks {
-                filter_index.upsert_chunk(&chunk.id, &chunk.doc_id, &chunk.metadata);
+                if let Some(chunk_key) = chunk_keys.get(&chunk.id).copied() {
+                    filter_index.upsert_chunk(chunk_key, &chunk.id, &chunk.doc_id, &chunk.metadata);
+                }
             }
         }
 
@@ -1030,10 +1075,18 @@ impl SqlRite {
         let hybrid_planner_mode =
             select_hybrid_planner_mode(&request, self.fts_enabled, self.vector_index.is_some());
 
+        if let Some(query_vector) = query_embedding
+            && !use_text
+        {
+            let mut vector_request = request.clone();
+            vector_request.candidate_limit = request.top_k;
+            let vector_candidates = self.vector_candidates(query_vector, &vector_request)?;
+            return self.build_vector_only_results(vector_candidates, &request);
+        }
+
         let mut vector_score_lookup = HashMap::new();
         let mut vector_candidate_ids = Vec::new();
-        let vector_fast_path =
-            !use_text && request.doc_id.is_none() && request.metadata_filters.is_empty();
+        let vector_fast_path = false;
 
         let mut text_scores = HashMap::new();
         let mut text_candidate_ids = Vec::new();
@@ -1299,6 +1352,48 @@ impl SqlRite {
                 .then_with(|| left.chunk_id.cmp(&right.chunk_id))
         });
         results.truncate(request.top_k);
+        if request.include_payloads {
+            self.hydrate_search_result_payloads(&mut results, &mut content_cache)?;
+        }
+        Ok(results)
+    }
+
+    fn build_vector_only_results(
+        &self,
+        candidates: Vec<VectorCandidate>,
+        request: &SearchRequest,
+    ) -> Result<Vec<SearchResult>> {
+        if candidates.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut results: Vec<SearchResult> = candidates
+            .into_iter()
+            .take(request.top_k)
+            .map(|candidate| SearchResult {
+                chunk_id: candidate.chunk_id,
+                doc_id: String::new(),
+                content: String::new(),
+                metadata: Value::Null,
+                vector_score: candidate.score,
+                text_score: 0.0,
+                hybrid_score: candidate.score,
+            })
+            .collect();
+
+        if request.include_payloads {
+            let mut content_cache = HashMap::new();
+            self.hydrate_search_result_payloads(&mut results, &mut content_cache)?;
+        }
+
+        Ok(results)
+    }
+
+    fn hydrate_search_result_payloads(
+        &self,
+        results: &mut Vec<SearchResult>,
+        content_cache: &mut HashMap<String, String>,
+    ) -> Result<()> {
         let final_ids: Vec<String> = results
             .iter()
             .map(|result| result.chunk_id.clone())
@@ -1310,7 +1405,7 @@ impl SqlRite {
                 .map(|chunk| (chunk.id.clone(), chunk))
                 .collect();
             results.retain(|result| final_chunk_lookup.contains_key(&result.chunk_id));
-            for result in &mut results {
+            for result in results.iter_mut() {
                 if let Some(chunk) = final_chunk_lookup.get(&result.chunk_id) {
                     result.doc_id = chunk.doc_id.clone();
                     result.metadata = chunk.metadata.clone();
@@ -1325,12 +1420,12 @@ impl SqlRite {
         if !missing_content_ids.is_empty() {
             content_cache.extend(self.fetch_chunk_contents_by_ids(&missing_content_ids)?);
         }
-        for result in &mut results {
+        for result in results.iter_mut() {
             if let Some(content) = content_cache.get(&result.chunk_id) {
                 result.content = content.clone();
             }
         }
-        Ok(results)
+        Ok(())
     }
 
     fn from_connection_with_config(
@@ -1373,7 +1468,7 @@ impl SqlRite {
         };
 
         let index = index.borrow();
-        let entries = index.export_entries();
+        let entries = index.export_records();
         if self.runtime_config.vector_index_mode.is_ann() {
             let Some(entry_sidecar_path) = ann_entry_sidecar_path(
                 db_path,
@@ -1575,6 +1670,10 @@ impl SqlRite {
         Ok(by_id)
     }
 
+    fn fetch_chunk_keys_by_ids(&self, ids: &[String]) -> Result<HashMap<String, ChunkKey>> {
+        fetch_chunk_keys_by_ids_from_connection(&self.conn, ids)
+    }
+
     fn vector_candidates(
         &self,
         query_embedding: &[f32],
@@ -1588,11 +1687,19 @@ impl SqlRite {
                 let filtered_query =
                     request.doc_id.is_some() || !request.metadata_filters.is_empty();
                 let query_result = if filtered_query {
-                    let allowed_ids = self.filtered_chunk_ids(request)?;
-                    if allowed_ids.is_empty() {
+                    let allowed_keys = self.filtered_chunk_keys(request)?;
+                    if allowed_keys.is_empty() {
                         return Ok(Vec::new());
                     }
-                    index.query_filtered(query_embedding, request.candidate_limit, &allowed_ids)
+                    let allowed_positions = index.allowed_positions_for_keys(&allowed_keys);
+                    if allowed_positions.is_empty() {
+                        return Ok(Vec::new());
+                    }
+                    index.query_filtered_positions(
+                        query_embedding,
+                        request.candidate_limit,
+                        &allowed_positions,
+                    )
                 } else {
                     index.query(query_embedding, request.candidate_limit)
                 };
@@ -1614,12 +1721,12 @@ impl SqlRite {
         self.brute_force_vector_candidates(query_embedding, request)
     }
 
-    fn filtered_chunk_ids(&self, request: &SearchRequest) -> Result<HashSet<String>> {
-        if let Some(ids) = self.filter_index.borrow().filtered_chunk_ids(request) {
-            return Ok(ids);
+    fn filtered_chunk_keys(&self, request: &SearchRequest) -> Result<Vec<ChunkKey>> {
+        if let Some(ids) = self.filter_index.borrow().filtered_chunk_keys(request) {
+            return Ok(ids.iter().collect());
         }
 
-        let mut sql = String::from("SELECT id FROM chunks");
+        let mut sql = String::from("SELECT rowid FROM chunks");
         let mut clauses = Vec::new();
         let mut params = Vec::new();
 
@@ -1640,11 +1747,11 @@ impl SqlRite {
         }
 
         let mut stmt = self.conn.prepare(&sql)?;
-        let rows = stmt.query_map(params_from_iter(params), |row| row.get::<_, String>(0))?;
+        let rows = stmt.query_map(params_from_iter(params), |row| row.get::<_, i64>(0))?;
 
-        let mut ids = HashSet::new();
+        let mut ids = Vec::new();
         for row in rows {
-            ids.insert(row?);
+            ids.push(row? as ChunkKey);
         }
         Ok(ids)
     }
@@ -1939,45 +2046,41 @@ impl SqlRite {
         index.reset()?;
 
         let mut stmt = self.conn.prepare(
-            "SELECT id, embedding, embedding_dim
+            "SELECT rowid, id, embedding, embedding_dim
              FROM chunks
              ORDER BY rowid ASC",
         )?;
         let rows = stmt.query_map([], |row| {
-            let id: String = row.get(0)?;
-            let embedding_blob: Vec<u8> = row.get(1)?;
-            let embedding_dim: i64 = row.get(2)?;
+            let chunk_key: i64 = row.get(0)?;
+            let id: String = row.get(1)?;
+            let embedding_blob: Vec<u8> = row.get(2)?;
+            let embedding_dim: i64 = row.get(3)?;
             let embedding =
                 decode_embedding(&embedding_blob, embedding_dim as usize).map_err(|e| {
                     rusqlite::Error::FromSqlConversionFailure(
-                        1,
+                        2,
                         rusqlite::types::Type::Blob,
                         Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
                     )
                 })?;
-            Ok((id, embedding))
+            Ok(VectorEntryRecord {
+                chunk_key: chunk_key as ChunkKey,
+                chunk_id: id,
+                embedding,
+            })
         })?;
 
-        let mut batch: Vec<(String, Vec<f32>)> = Vec::with_capacity(1024);
+        let mut batch: Vec<VectorEntryRecord> = Vec::with_capacity(1024);
         for row in rows {
-            let (id, embedding) = row?;
-            batch.push((id, embedding));
+            batch.push(row?);
             if batch.len() >= 1024 {
-                let refs: Vec<(&str, &[f32])> = batch
-                    .iter()
-                    .map(|(chunk_id, embedding)| (chunk_id.as_str(), embedding.as_slice()))
-                    .collect();
-                index.upsert_batch(&refs)?;
+                index.upsert_records(&batch)?;
                 batch.clear();
             }
         }
 
         if !batch.is_empty() {
-            let refs: Vec<(&str, &[f32])> = batch
-                .iter()
-                .map(|(chunk_id, embedding)| (chunk_id.as_str(), embedding.as_slice()))
-                .collect();
-            index.upsert_batch(&refs)?;
+            index.upsert_records(&batch)?;
         }
 
         Ok(())
@@ -2232,6 +2335,8 @@ struct AnnSnapshotFile {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct AnnSnapshotEntry {
+    #[serde(default)]
+    chunk_key: Option<ChunkKey>,
     chunk_id: String,
     vector: AnnSnapshotVector,
 }
@@ -2284,7 +2389,7 @@ fn load_vector_index(
             return Ok(Some(BuiltinVectorIndex::BruteForce(mapped_index)));
         }
         if let Ok(entries) = load_exact_segment_snapshot(path, runtime_config.vector_storage_kind)
-            && index.import_entries(&entries).is_ok()
+            && index.import_records(&entries).is_ok()
         {
             return Ok(Some(index));
         }
@@ -2333,7 +2438,7 @@ fn load_vector_index(
     if let (Some(path), Some(db_file)) = (ann_entry_path.as_ref(), db_path)
         && artifact_is_fresh(path, db_file)
         && let Ok(entries) = load_ann_entry_sidecar(path, runtime_config.vector_storage_kind)
-        && index.import_entries(&entries).is_ok()
+        && index.import_records(&entries).is_ok()
     {
         if let (Some(graph_paths), BuiltinVectorIndex::HnswBaseline(hnsw)) =
             (ann_graph_paths.as_ref(), &index)
@@ -2353,58 +2458,61 @@ fn load_vector_index(
         && snapshot.mode == runtime_config.vector_index_mode.as_str()
         && snapshot.storage_kind == runtime_config.vector_storage_kind.as_str()
     {
-        let entries = snapshot
+        let mut entries = snapshot
             .entries
             .into_iter()
-            .map(|entry| (entry.chunk_id, decode_snapshot_vector(entry.vector)))
+            .map(|entry| VectorEntryRecord {
+                chunk_key: entry.chunk_key.unwrap_or_default(),
+                chunk_id: entry.chunk_id,
+                embedding: decode_snapshot_vector(entry.vector),
+            })
             .collect::<Vec<_>>();
-        if index.import_entries(&entries).is_ok() {
+        if entries.iter().any(|entry| entry.chunk_key == 0) {
+            backfill_vector_entry_keys(conn, &mut entries)?;
+        }
+        if index.import_records(&entries).is_ok() {
             return Ok(Some(index));
         }
     }
 
     let mut stmt = conn.prepare(
-        "SELECT id, embedding, embedding_dim
+        "SELECT rowid, id, embedding, embedding_dim
          FROM chunks
          ORDER BY rowid ASC",
     )?;
     let rows = stmt.query_map([], |row| {
-        let id: String = row.get(0)?;
-        let embedding_blob: Vec<u8> = row.get(1)?;
-        let embedding_dim: i64 = row.get(2)?;
+        let chunk_key: i64 = row.get(0)?;
+        let id: String = row.get(1)?;
+        let embedding_blob: Vec<u8> = row.get(2)?;
+        let embedding_dim: i64 = row.get(3)?;
         let embedding = decode_embedding(&embedding_blob, embedding_dim as usize).map_err(|e| {
             rusqlite::Error::FromSqlConversionFailure(
-                1,
+                2,
                 rusqlite::types::Type::Blob,
                 Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
             )
         })?;
-        Ok((id, embedding))
+        Ok(VectorEntryRecord {
+            chunk_key: chunk_key as ChunkKey,
+            chunk_id: id,
+            embedding,
+        })
     })?;
 
-    let mut batch: Vec<(String, Vec<f32>)> = Vec::with_capacity(1024);
+    let mut batch: Vec<VectorEntryRecord> = Vec::with_capacity(1024);
     for row in rows {
-        let (id, embedding) = row?;
-        batch.push((id, embedding));
+        batch.push(row?);
         if batch.len() >= 1024 {
-            let refs: Vec<(&str, &[f32])> = batch
-                .iter()
-                .map(|(chunk_id, embedding)| (chunk_id.as_str(), embedding.as_slice()))
-                .collect();
-            index.upsert_batch(&refs)?;
+            index.upsert_records(&batch)?;
             batch.clear();
         }
     }
 
     if !batch.is_empty() {
-        let refs: Vec<(&str, &[f32])> = batch
-            .iter()
-            .map(|(chunk_id, embedding)| (chunk_id.as_str(), embedding.as_slice()))
-            .collect();
-        index.upsert_batch(&refs)?;
+        index.upsert_records(&batch)?;
     }
 
-    let entries = index.export_entries();
+    let entries = index.export_records();
     if let Some(path) = exact_segment_snapshot_path.as_ref() {
         let _ = save_exact_segment_snapshot(path, runtime_config.vector_storage_kind, &entries);
     }
@@ -2426,6 +2534,66 @@ fn load_vector_index(
     }
 
     Ok(Some(index))
+}
+
+fn backfill_vector_entry_keys(conn: &Connection, entries: &mut [VectorEntryRecord]) -> Result<()> {
+    let chunk_ids = entries
+        .iter()
+        .filter(|entry| entry.chunk_key == 0)
+        .map(|entry| entry.chunk_id.clone())
+        .collect::<Vec<_>>();
+    if chunk_ids.is_empty() {
+        return Ok(());
+    }
+
+    let chunk_key_lookup = fetch_chunk_keys_by_ids_from_connection(conn, &chunk_ids)?;
+    for entry in entries.iter_mut() {
+        if entry.chunk_key == 0
+            && let Some(chunk_key) = chunk_key_lookup.get(&entry.chunk_id).copied()
+        {
+            entry.chunk_key = chunk_key;
+        }
+    }
+
+    Ok(())
+}
+
+fn fetch_chunk_keys_by_ids_from_connection(
+    conn: &Connection,
+    ids: &[String],
+) -> Result<HashMap<String, ChunkKey>> {
+    if ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let mut by_id = HashMap::with_capacity(ids.len());
+    for chunk_ids in ids.chunks(900) {
+        let placeholders = std::iter::repeat_n("?", chunk_ids.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "SELECT id, rowid
+             FROM chunks
+             WHERE id IN ({})",
+            placeholders
+        );
+        let params: Vec<SqlValue> = chunk_ids
+            .iter()
+            .map(|id| SqlValue::from(id.clone()))
+            .collect();
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(params_from_iter(params), |row| {
+            let id: String = row.get(0)?;
+            let chunk_key: i64 = row.get(1)?;
+            Ok((id, chunk_key as ChunkKey))
+        })?;
+        for row in rows {
+            let (id, chunk_key) = row?;
+            by_id.insert(id, chunk_key);
+        }
+    }
+
+    Ok(by_id)
 }
 
 fn ann_snapshot_path(
@@ -2519,12 +2687,12 @@ fn graph_artifacts_are_fresh(paths: &AnnGraphDumpPaths, db_path: &Path) -> bool 
 }
 
 const EXACT_SEGMENT_MAGIC: &[u8; 8] = b"SQLRSEG1";
-const EXACT_SEGMENT_VERSION: u32 = 1;
+const EXACT_SEGMENT_VERSION: u32 = 2;
 
 fn save_exact_segment_snapshot(
     path: &Path,
     storage_kind: VectorStorageKind,
-    entries: &[(String, Vec<f32>)],
+    entries: &[VectorEntryRecord],
 ) -> Result<()> {
     let mut file = File::create(path)?;
     file.write_all(EXACT_SEGMENT_MAGIC)?;
@@ -2532,29 +2700,31 @@ fn save_exact_segment_snapshot(
     file.write_all(&[storage_kind_code(storage_kind)])?;
     file.write_all(&(entries.len() as u32).to_le_bytes())?;
 
-    for (chunk_id, embedding) in entries {
-        let chunk_id_bytes = chunk_id.as_bytes();
+    for entry in entries {
+        let chunk_id_bytes = entry.chunk_id.as_bytes();
+        file.write_all(&entry.chunk_key.to_le_bytes())?;
         file.write_all(&(chunk_id_bytes.len() as u32).to_le_bytes())?;
         file.write_all(chunk_id_bytes)?;
-        file.write_all(&(embedding.len() as u32).to_le_bytes())?;
+        file.write_all(&(entry.embedding.len() as u32).to_le_bytes())?;
         match storage_kind {
             VectorStorageKind::F32 => {
-                for value in embedding {
+                for value in &entry.embedding {
                     file.write_all(&value.to_le_bytes())?;
                 }
             }
             VectorStorageKind::F16 => {
-                for value in embedding {
+                for value in &entry.embedding {
                     file.write_all(&f16::from_f32(*value).to_bits().to_le_bytes())?;
                 }
             }
             VectorStorageKind::Int8 => {
-                let max_abs = embedding
+                let max_abs = entry
+                    .embedding
                     .iter()
                     .fold(0.0f32, |acc, value| acc.max(value.abs()));
                 let scale = if max_abs == 0.0 { 1.0 } else { max_abs / 127.0 };
                 file.write_all(&scale.to_le_bytes())?;
-                for value in embedding {
+                for value in &entry.embedding {
                     let quantized = (value / scale).round().clamp(-127.0, 127.0) as i8;
                     file.write_all(&(quantized as u8).to_le_bytes())?;
                 }
@@ -2568,7 +2738,7 @@ fn save_exact_segment_snapshot(
 fn save_ann_entry_sidecar(
     path: &Path,
     storage_kind: VectorStorageKind,
-    entries: &[(String, Vec<f32>)],
+    entries: &[VectorEntryRecord],
 ) -> Result<()> {
     save_exact_segment_snapshot(path, storage_kind, entries)
 }
@@ -2576,7 +2746,7 @@ fn save_ann_entry_sidecar(
 fn load_exact_segment_snapshot(
     path: &Path,
     storage_kind: VectorStorageKind,
-) -> Result<Vec<(String, Vec<f32>)>> {
+) -> Result<Vec<VectorEntryRecord>> {
     let mut file = File::open(path)?;
     let mut magic = [0u8; 8];
     file.read_exact(&mut magic)?;
@@ -2606,6 +2776,7 @@ fn load_exact_segment_snapshot(
     let entry_count = read_u32_le(&mut file)? as usize;
     let mut entries = Vec::with_capacity(entry_count);
     for _ in 0..entry_count {
+        let chunk_key = read_u64_le(&mut file)?;
         let chunk_id_len = read_u32_le(&mut file)? as usize;
         let mut chunk_id_bytes = vec![0u8; chunk_id_len];
         file.read_exact(&mut chunk_id_bytes)?;
@@ -2642,7 +2813,11 @@ fn load_exact_segment_snapshot(
                 values
             }
         };
-        entries.push((chunk_id, embedding));
+        entries.push(VectorEntryRecord {
+            chunk_key,
+            chunk_id,
+            embedding,
+        });
     }
 
     Ok(entries)
@@ -2651,7 +2826,7 @@ fn load_exact_segment_snapshot(
 fn load_ann_entry_sidecar(
     path: &Path,
     storage_kind: VectorStorageKind,
-) -> Result<Vec<(String, Vec<f32>)>> {
+) -> Result<Vec<VectorEntryRecord>> {
     load_exact_segment_snapshot(path, storage_kind)
 }
 
@@ -2681,6 +2856,12 @@ fn read_u32_le(reader: &mut impl Read) -> Result<u32> {
     Ok(u32::from_le_bytes(value))
 }
 
+fn read_u64_le(reader: &mut impl Read) -> Result<u64> {
+    let mut value = [0u8; 8];
+    reader.read_exact(&mut value)?;
+    Ok(u64::from_le_bytes(value))
+}
+
 fn read_f32_le(reader: &mut impl Read) -> Result<f32> {
     let mut value = [0u8; 4];
     reader.read_exact(&mut value)?;
@@ -2697,7 +2878,7 @@ fn save_ann_snapshot(
     path: &Path,
     mode: VectorIndexMode,
     storage_kind: VectorStorageKind,
-    entries: &[(String, Vec<f32>)],
+    entries: &[VectorEntryRecord],
 ) -> Result<()> {
     let payload = AnnSnapshotFile {
         version: 1,
@@ -2705,9 +2886,10 @@ fn save_ann_snapshot(
         storage_kind: storage_kind.as_str().to_string(),
         entries: entries
             .iter()
-            .map(|(chunk_id, embedding)| AnnSnapshotEntry {
-                chunk_id: chunk_id.clone(),
-                vector: encode_snapshot_vector(embedding, storage_kind),
+            .map(|entry| AnnSnapshotEntry {
+                chunk_key: Some(entry.chunk_key),
+                chunk_id: entry.chunk_id.clone(),
+                vector: encode_snapshot_vector(&entry.embedding, storage_kind),
             })
             .collect(),
     };
@@ -3672,8 +3854,8 @@ mod tests {
         );
         let sidecar_entries = load_ann_entry_sidecar(&entry_sidecar_path, VectorStorageKind::Int8)?;
         assert_eq!(sidecar_entries.len(), 2);
-        assert_eq!(sidecar_entries[0].0, "c1");
-        assert_eq!(sidecar_entries[1].0, "c2");
+        assert_eq!(sidecar_entries[0].chunk_id, "c1");
+        assert_eq!(sidecar_entries[1].chunk_id, "c2");
         Ok(())
     }
 
@@ -3748,8 +3930,16 @@ mod tests {
             &entry_sidecar_path,
             VectorStorageKind::F32,
             &[
-                ("c1".to_string(), vec![1.0, 0.0, 0.0]),
-                ("c2".to_string(), vec![0.0, 1.0, 0.0]),
+                VectorEntryRecord {
+                    chunk_key: 1,
+                    chunk_id: "c1".to_string(),
+                    embedding: vec![1.0, 0.0, 0.0],
+                },
+                VectorEntryRecord {
+                    chunk_key: 2,
+                    chunk_id: "c2".to_string(),
+                    embedding: vec![0.0, 1.0, 0.0],
+                },
             ],
         )?;
         let graph_bytes = fs::read(&graph_paths.graph_path)?;
@@ -3784,18 +3974,25 @@ mod tests {
         let dir = tempdir()?;
         let path = dir.path().join("exact_segment_round_trip.bin");
         let original = vec![
-            ("c1".to_string(), vec![1.0, -1.0, 0.25, -0.125]),
-            ("c2".to_string(), vec![0.0, 0.5, -0.75, 0.9]),
+            VectorEntryRecord {
+                chunk_key: 1,
+                chunk_id: "c1".to_string(),
+                embedding: vec![1.0, -1.0, 0.25, -0.125],
+            },
+            VectorEntryRecord {
+                chunk_key: 2,
+                chunk_id: "c2".to_string(),
+                embedding: vec![0.0, 0.5, -0.75, 0.9],
+            },
         ];
         save_exact_segment_snapshot(&path, VectorStorageKind::Int8, &original)?;
         let decoded = load_exact_segment_snapshot(&path, VectorStorageKind::Int8)?;
         assert_eq!(decoded.len(), original.len());
-        for ((expected_id, expected_embedding), (actual_id, actual_embedding)) in
-            original.iter().zip(decoded.iter())
-        {
-            assert_eq!(actual_id, expected_id);
-            assert_eq!(actual_embedding.len(), expected_embedding.len());
-            for (left, right) in actual_embedding.iter().zip(expected_embedding.iter()) {
+        for (expected, actual) in original.iter().zip(decoded.iter()) {
+            assert_eq!(actual.chunk_key, expected.chunk_key);
+            assert_eq!(actual.chunk_id, expected.chunk_id);
+            assert_eq!(actual.embedding.len(), expected.embedding.len());
+            for (left, right) in actual.embedding.iter().zip(expected.embedding.iter()) {
                 assert!(
                     (left - right).abs() < 0.02,
                     "exact segment int8 round-trip drift too high"
@@ -3845,8 +4042,8 @@ mod tests {
 
         let entries = load_exact_segment_snapshot(&segment_path, VectorStorageKind::Int8)?;
         assert_eq!(entries.len(), 2);
-        assert_eq!(entries[0].0, "c1");
-        assert_eq!(entries[1].0, "c2");
+        assert_eq!(entries[0].chunk_id, "c1");
+        assert_eq!(entries[1].chunk_id, "c2");
         Ok(())
     }
 
@@ -3898,8 +4095,16 @@ mod tests {
             &segment_path,
             VectorStorageKind::F32,
             &[
-                ("c1".to_string(), vec![1.0, 0.0, 0.0]),
-                ("c2".to_string(), vec![0.0, 1.0, 0.0]),
+                VectorEntryRecord {
+                    chunk_key: 1,
+                    chunk_id: "c1".to_string(),
+                    embedding: vec![1.0, 0.0, 0.0],
+                },
+                VectorEntryRecord {
+                    chunk_key: 2,
+                    chunk_id: "c2".to_string(),
+                    embedding: vec![0.0, 1.0, 0.0],
+                },
             ],
         )?;
 
@@ -4247,6 +4452,38 @@ mod tests {
     }
 
     #[test]
+    fn filtered_vector_search_can_skip_payload_materialization() -> Result<()> {
+        let db = SqlRite::open_in_memory_with_config(
+            RuntimeConfig::default().with_vector_index_mode(VectorIndexMode::HnswBaseline),
+        )?;
+
+        db.ingest_chunk(&ChunkInput {
+            id: "beta-top".to_string(),
+            doc_id: "doc-beta".to_string(),
+            content: "beta vector".to_string(),
+            embedding: vec![1.0, 0.0],
+            metadata: json!({"tenant": "beta"}),
+            source: None,
+        })?;
+
+        let results = db.search(
+            SearchRequest::builder()
+                .query_embedding(vec![1.0, 0.0])
+                .metadata_filter("tenant", "beta")
+                .candidate_limit(64)
+                .top_k(1)
+                .include_payloads(false)
+                .build()?,
+        )?;
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].chunk_id, "beta-top");
+        assert_eq!(results[0].doc_id, "");
+        assert_eq!(results[0].content, "");
+        assert_eq!(results[0].metadata, Value::Null);
+        Ok(())
+    }
+
+    #[test]
     fn rrf_changes_hybrid_ordering() -> Result<()> {
         let db = SqlRite::open_in_memory()?;
         db.ingest_chunks(&[
@@ -4434,9 +4671,14 @@ mod tests {
             ..Default::default()
         };
 
-        let filtered = db.filtered_chunk_ids(&request)?;
+        let filtered = db.filtered_chunk_keys(&request)?;
         assert_eq!(filtered.len(), 1);
-        assert!(filtered.contains("chunk-a"));
+        let chunk_key =
+            db.conn
+                .query_row("SELECT rowid FROM chunks WHERE id = 'chunk-a'", [], |row| {
+                    row.get::<_, i64>(0)
+                })? as ChunkKey;
+        assert!(filtered.contains(&chunk_key));
         Ok(())
     }
 
@@ -4458,15 +4700,20 @@ mod tests {
             metadata_filters: HashMap::from([("tenant".to_string(), "alpha".to_string())]),
             ..Default::default()
         };
-        assert!(db.filtered_chunk_ids(&alpha_request)?.is_empty());
+        assert!(db.filtered_chunk_keys(&alpha_request)?.is_empty());
 
         let beta_request = SearchRequest {
             metadata_filters: HashMap::from([("tenant".to_string(), "beta".to_string())]),
             ..Default::default()
         };
-        let filtered = db.filtered_chunk_ids(&beta_request)?;
+        let filtered = db.filtered_chunk_keys(&beta_request)?;
         assert_eq!(filtered.len(), 1);
-        assert!(filtered.contains("chunk-a"));
+        let chunk_key =
+            db.conn
+                .query_row("SELECT rowid FROM chunks WHERE id = 'chunk-a'", [], |row| {
+                    row.get::<_, i64>(0)
+                })? as ChunkKey;
+        assert!(filtered.contains(&chunk_key));
         Ok(())
     }
 }

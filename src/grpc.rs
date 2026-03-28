@@ -131,6 +131,7 @@ fn query_request_from_grpc(input: QueryRequest) -> CoreQueryRequest {
         top_k: input.top_k.map(|value| value as usize),
         alpha: input.alpha,
         candidate_limit: input.candidate_limit.map(|value| value as usize),
+        include_payloads: None,
         query_profile: input.query_profile,
         metadata_filters: if input.metadata_filters.is_empty() {
             None

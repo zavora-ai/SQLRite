@@ -1,24 +1,42 @@
-# SQLRite Documentation Compatibility Layer
+# SQLRite Documentation
 
-This directory contains the current compatibility documentation tree that existing scripts, release tooling, and historical references still use.
+SQLRite is an embedded retrieval engine first. Start here if you want one current documentation set without the older sprint-era material.
 
-## Start Here
+## Read This First
 
-| Need | Document |
+| Goal | Document |
 |---|---|
-| Curated official product guide | `official_docs/README.md` |
-| Example-by-example guide | `example_docs/README.md` |
-| Compatibility copy of the current docs tree | `project_docs/README.md` |
-| SQL retrieval syntax and examples | `docs/sql_cookbook.md` |
-| Migration details | `docs/migrations/` |
-| Operations and deployment runbooks | `docs/runbooks/` |
-| Security model and compliance posture | `docs/security/` |
-| HA and replication architecture | `docs/architecture/` |
-| Release notes and policy | `docs/releases/`, `docs/release_policy.md` |
+| Understand the whole project | `/Users/jameskaranja/Developer/projects/SQLRight/PROJECT_README.md` |
+| Install and verify SQLRite | `/Users/jameskaranja/Developer/projects/SQLRight/docs/getting-started.md` |
+| Build an embedded app | `/Users/jameskaranja/Developer/projects/SQLRight/docs/embedded.md` |
+| Run CLI retrieval queries | `/Users/jameskaranja/Developer/projects/SQLRight/docs/querying.md` |
+| Use SQL-native retrieval | `/Users/jameskaranja/Developer/projects/SQLRight/docs/sql.md` |
+| Expose HTTP, gRPC, or MCP | `/Users/jameskaranja/Developer/projects/SQLRight/docs/server-api.md` |
+| Operate, benchmark, and package | `/Users/jameskaranja/Developer/projects/SQLRight/docs/operations.md`, `/Users/jameskaranja/Developer/projects/SQLRight/docs/distribution.md` |
 
-## Documentation Layers
+## Recommended Reading Order
 
-- `official_docs/` is the new curated product guide.
-- `example_docs/` explains every runnable example in the repository.
-- `project_docs/` mirrors the current docs structure in a stable, browsable way.
-- `docs/` remains in place as the current compatibility layer.
+1. `/Users/jameskaranja/Developer/projects/SQLRight/docs/getting-started.md`
+2. `/Users/jameskaranja/Developer/projects/SQLRight/docs/embedded.md`
+3. `/Users/jameskaranja/Developer/projects/SQLRight/docs/querying.md`
+4. `/Users/jameskaranja/Developer/projects/SQLRight/docs/sql.md`
+5. `/Users/jameskaranja/Developer/projects/SQLRight/docs/examples.md`
+
+## Full Index
+
+| Topic | Path |
+|---|---|
+| Detailed project guide | `/Users/jameskaranja/Developer/projects/SQLRight/PROJECT_README.md` |
+| Getting started | `/Users/jameskaranja/Developer/projects/SQLRight/docs/getting-started.md` |
+| Embedded Rust usage | `/Users/jameskaranja/Developer/projects/SQLRight/docs/embedded.md` |
+| CLI query patterns | `/Users/jameskaranja/Developer/projects/SQLRight/docs/querying.md` |
+| SQL retrieval | `/Users/jameskaranja/Developer/projects/SQLRight/docs/sql.md` |
+| Ingestion and reindexing | `/Users/jameskaranja/Developer/projects/SQLRight/docs/ingestion.md` |
+| HTTP, gRPC, MCP | `/Users/jameskaranja/Developer/projects/SQLRight/docs/server-api.md` |
+| Security | `/Users/jameskaranja/Developer/projects/SQLRight/docs/security.md` |
+| Migrations | `/Users/jameskaranja/Developer/projects/SQLRight/docs/migrations.md` |
+| Operations | `/Users/jameskaranja/Developer/projects/SQLRight/docs/operations.md` |
+| Performance | `/Users/jameskaranja/Developer/projects/SQLRight/docs/performance.md` |
+| Examples | `/Users/jameskaranja/Developer/projects/SQLRight/docs/examples.md` |
+| Distribution | `/Users/jameskaranja/Developer/projects/SQLRight/docs/distribution.md` |
+| Release policy | `/Users/jameskaranja/Developer/projects/SQLRight/docs/release_policy.md` |

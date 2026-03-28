@@ -14,6 +14,15 @@ use memmap2::{Mmap, MmapOptions};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
+pub(crate) type ChunkKey = u64;
+
+#[derive(Debug, Clone)]
+pub(crate) struct VectorEntryRecord {
+    pub chunk_key: ChunkKey,
+    pub chunk_id: String,
+    pub embedding: Vec<f32>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VectorIndexMode {
     Disabled,
@@ -149,53 +158,77 @@ impl BuiltinVectorIndex {
         }
     }
 
-    pub(crate) fn export_entries(&self) -> Vec<(String, Vec<f32>)> {
+    pub(crate) fn export_records(&self) -> Vec<VectorEntryRecord> {
         match self {
             Self::BruteForce(index) => index
                 .chunk_ids
                 .iter()
                 .enumerate()
-                .map(|(position, chunk_id)| {
-                    let embedding = index.segments.embedding_vec(position);
-                    (chunk_id.clone(), embedding)
+                .map(|(position, chunk_id)| VectorEntryRecord {
+                    chunk_key: index.chunk_keys[position],
+                    chunk_id: chunk_id.clone(),
+                    embedding: index.segments.embedding_vec(position),
                 })
                 .collect(),
             Self::LshAnn(index) => index
                 .entries
                 .iter()
-                .map(|entry| (entry.chunk_id.clone(), entry.normalized_embedding.to_vec()))
+                .map(|entry| VectorEntryRecord {
+                    chunk_key: entry.chunk_key,
+                    chunk_id: entry.chunk_id.clone(),
+                    embedding: entry.normalized_embedding.to_vec(),
+                })
                 .collect(),
             Self::HnswBaseline(index) => index
                 .chunk_ids
                 .iter()
                 .enumerate()
-                .map(|(position, chunk_id)| {
-                    let embedding = index.segments.embedding_vec(position);
-                    (chunk_id.clone(), embedding)
+                .map(|(position, chunk_id)| VectorEntryRecord {
+                    chunk_key: index.chunk_keys[position],
+                    chunk_id: chunk_id.clone(),
+                    embedding: index.segments.embedding_vec(position),
                 })
                 .collect(),
         }
     }
 
-    pub(crate) fn import_entries(&mut self, entries: &[(String, Vec<f32>)]) -> Result<()> {
+    pub(crate) fn import_records(&mut self, entries: &[VectorEntryRecord]) -> Result<()> {
         self.reset()?;
-        let refs: Vec<(&str, &[f32])> = entries
-            .iter()
-            .map(|(chunk_id, embedding)| (chunk_id.as_str(), embedding.as_slice()))
-            .collect();
-        self.upsert_batch(&refs)
+        self.upsert_records(entries)
     }
 
-    pub(crate) fn query_filtered(
+    pub(crate) fn upsert_records(&mut self, entries: &[VectorEntryRecord]) -> Result<()> {
+        match self {
+            Self::BruteForce(index) => index.upsert_records(entries),
+            Self::LshAnn(index) => index.upsert_records(entries),
+            Self::HnswBaseline(index) => index.upsert_records(entries),
+        }
+    }
+
+    pub(crate) fn allowed_positions_for_keys(&self, allowed_keys: &[ChunkKey]) -> Vec<usize> {
+        match self {
+            Self::BruteForce(index) => index.allowed_positions(allowed_keys),
+            Self::LshAnn(index) => index.allowed_positions(allowed_keys),
+            Self::HnswBaseline(index) => index.allowed_positions(allowed_keys),
+        }
+    }
+
+    pub(crate) fn query_filtered_positions(
         &self,
         query_embedding: &[f32],
         limit: usize,
-        allowed_ids: &HashSet<String>,
+        allowed_positions: &[usize],
     ) -> Result<Vec<VectorCandidate>> {
         match self {
-            Self::BruteForce(index) => index.query_filtered(query_embedding, limit, allowed_ids),
-            Self::LshAnn(index) => index.query_filtered(query_embedding, limit, allowed_ids),
-            Self::HnswBaseline(index) => index.query_filtered(query_embedding, limit, allowed_ids),
+            Self::BruteForce(index) => {
+                index.query_filtered_positions(query_embedding, limit, allowed_positions)
+            }
+            Self::LshAnn(index) => {
+                index.query_filtered_positions(query_embedding, limit, allowed_positions)
+            }
+            Self::HnswBaseline(index) => {
+                index.query_filtered_positions(query_embedding, limit, allowed_positions)
+            }
         }
     }
 
@@ -522,7 +555,7 @@ struct MmapVectorSegmentStore {
 }
 
 impl MmapVectorSegmentStore {
-    fn load_f32_sidecar(path: &Path) -> Result<(Vec<String>, usize, Self)> {
+    fn load_f32_sidecar(path: &Path) -> Result<(Vec<ChunkKey>, Vec<String>, usize, Self)> {
         let file = std::fs::File::open(path)?;
         let mmap = unsafe { MmapOptions::new().map(&file)? };
         let bytes = &mmap[..];
@@ -539,7 +572,7 @@ impl MmapVectorSegmentStore {
             )));
         }
         let version = u32::from_le_bytes(bytes[8..12].try_into().expect("slice has length"));
-        if version != 1 {
+        if version != 2 {
             return Err(SqlRiteError::Io(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 format!("unsupported exact segment snapshot version {version}"),
@@ -555,10 +588,12 @@ impl MmapVectorSegmentStore {
         let entry_count =
             u32::from_le_bytes(bytes[13..17].try_into().expect("slice has length")) as usize;
         let mut cursor = 17usize;
+        let mut chunk_keys = Vec::with_capacity(entry_count);
         let mut chunk_ids = Vec::with_capacity(entry_count);
         let mut vector_offsets = Vec::with_capacity(entry_count);
         let mut dimension = None;
         for _ in 0..entry_count {
+            let chunk_key = read_u64_at(bytes, &mut cursor)?;
             let id_len = read_u32_at(bytes, &mut cursor)? as usize;
             let id_bytes = read_bytes_at(bytes, &mut cursor, id_len)?;
             let chunk_id = String::from_utf8(id_bytes.to_vec()).map_err(|error| {
@@ -585,12 +620,14 @@ impl MmapVectorSegmentStore {
                     "unexpected EOF while parsing mmap exact sidecar",
                 )));
             }
+            chunk_keys.push(chunk_key);
             chunk_ids.push(chunk_id);
             vector_offsets.push(cursor);
             cursor += vector_bytes;
         }
 
         Ok((
+            chunk_keys,
             chunk_ids,
             dimension.unwrap_or(0),
             Self {
@@ -690,15 +727,19 @@ impl SegmentStorage {
 pub struct BruteForceVectorIndex {
     storage_kind: VectorStorageKind,
     dimension: Option<usize>,
+    chunk_keys: Vec<ChunkKey>,
     chunk_ids: Vec<String>,
     segments: SegmentStorage,
     positions: HashMap<String, usize>,
+    positions_by_key: HashMap<ChunkKey, usize>,
+    next_transient_key: ChunkKey,
 }
 
 const PARALLEL_SCAN_THRESHOLD: usize = 4_096;
 const HNSW_GRAPH_LAYER_COUNT: usize = 16;
+const HNSW_DEFAULT_EF_SEARCH: usize = 64;
 const HNSW_EXACT_CROSSOVER_MIN: usize = 2_048;
-const HNSW_FILTER_EXACT_CROSSOVER_MIN: usize = 512;
+const HNSW_FILTER_EXACT_CROSSOVER_MIN: usize = 256;
 const LSH_DEFAULT_BITS_PER_TABLE: usize = 14;
 const LSH_DEFAULT_TABLE_COUNT: usize = 6;
 const LSH_DEFAULT_MIN_CANDIDATES: usize = 192;
@@ -720,12 +761,24 @@ impl BruteForceVectorIndex {
     }
 
     pub fn load_mmap_f32_sidecar(path: &Path) -> Result<Self> {
-        let (chunk_ids, dimension, mapped_store) = MmapVectorSegmentStore::load_f32_sidecar(path)?;
+        let (chunk_keys, chunk_ids, dimension, mapped_store) =
+            MmapVectorSegmentStore::load_f32_sidecar(path)?;
         let positions = chunk_ids
             .iter()
             .enumerate()
             .map(|(position, chunk_id)| (chunk_id.clone(), position))
             .collect();
+        let positions_by_key = chunk_keys
+            .iter()
+            .enumerate()
+            .map(|(position, chunk_key)| (*chunk_key, position))
+            .collect();
+        let next_transient_key = chunk_keys
+            .iter()
+            .copied()
+            .max()
+            .unwrap_or(0)
+            .saturating_add(1);
         Ok(Self {
             storage_kind: VectorStorageKind::F32,
             dimension: if dimension == 0 {
@@ -733,9 +786,12 @@ impl BruteForceVectorIndex {
             } else {
                 Some(dimension)
             },
+            chunk_keys,
             chunk_ids,
             segments: SegmentStorage::Mapped(mapped_store),
             positions,
+            positions_by_key,
+            next_transient_key,
         })
     }
 
@@ -751,28 +807,188 @@ impl BruteForceVectorIndex {
         Ok(())
     }
 
-    fn query_filtered(
+    fn allocate_transient_key(&mut self) -> ChunkKey {
+        let key = self.next_transient_key.max(1);
+        self.next_transient_key = key.saturating_add(1);
+        key
+    }
+
+    fn observe_chunk_key(&mut self, chunk_key: ChunkKey) {
+        self.next_transient_key = self.next_transient_key.max(chunk_key.saturating_add(1));
+    }
+
+    fn allowed_positions(&self, allowed_keys: &[ChunkKey]) -> Vec<usize> {
+        let mut positions = allowed_keys
+            .iter()
+            .filter_map(|chunk_key| self.positions_by_key.get(chunk_key).copied())
+            .collect::<Vec<_>>();
+        positions.sort_unstable();
+        positions
+    }
+
+    fn upsert_record(&mut self, record: &VectorEntryRecord) -> Result<()> {
+        self.validate_dimension(&record.embedding)?;
+        self.ensure_owned_segments()?;
+        if self.dimension.is_none() {
+            self.dimension = Some(record.embedding.len());
+            self.segments = SegmentStorage::Owned(VectorSegmentStore::with_dimension_and_storage(
+                record.embedding.len(),
+                self.storage_kind,
+            ));
+        }
+
+        let normalized_embedding = normalize_embedding(&record.embedding);
+        self.observe_chunk_key(record.chunk_key);
+        if let Some(position) = self.positions_by_key.get(&record.chunk_key).copied() {
+            let old_chunk_id = self.chunk_ids[position].clone();
+            self.chunk_ids[position] = record.chunk_id.clone();
+            self.chunk_keys[position] = record.chunk_key;
+            self.positions.remove(&old_chunk_id);
+            self.positions.insert(record.chunk_id.clone(), position);
+            if let SegmentStorage::Owned(store) = &mut self.segments {
+                store.set(position, &normalized_embedding);
+            }
+            return Ok(());
+        }
+
+        let position = self.chunk_ids.len();
+        self.chunk_keys.push(record.chunk_key);
+        self.chunk_ids.push(record.chunk_id.clone());
+        if let SegmentStorage::Owned(store) = &mut self.segments {
+            store.push(&normalized_embedding);
+        }
+        self.positions.insert(record.chunk_id.clone(), position);
+        self.positions_by_key.insert(record.chunk_key, position);
+        Ok(())
+    }
+
+    fn upsert_records(&mut self, records: &[VectorEntryRecord]) -> Result<()> {
+        if records.is_empty() {
+            return Ok(());
+        }
+        for record in records {
+            self.validate_dimension(&record.embedding)?;
+        }
+        self.ensure_owned_segments()?;
+        if self.dimension.is_none() {
+            self.dimension = Some(records[0].embedding.len());
+            self.segments = SegmentStorage::Owned(VectorSegmentStore::with_dimension_and_storage(
+                records[0].embedding.len(),
+                self.storage_kind,
+            ));
+        }
+
+        let prepared: Vec<(ChunkKey, String, Vec<f32>)> =
+            if records.len() >= BATCH_PARALLEL_PREP_THRESHOLD {
+                records
+                    .par_iter()
+                    .map(|record| {
+                        (
+                            record.chunk_key,
+                            record.chunk_id.clone(),
+                            normalize_embedding(&record.embedding),
+                        )
+                    })
+                    .collect()
+            } else {
+                records
+                    .iter()
+                    .map(|record| {
+                        (
+                            record.chunk_key,
+                            record.chunk_id.clone(),
+                            normalize_embedding(&record.embedding),
+                        )
+                    })
+                    .collect()
+            };
+
+        self.chunk_keys.reserve(prepared.len());
+        self.chunk_ids.reserve(prepared.len());
+        if let SegmentStorage::Owned(store) = &mut self.segments {
+            store.reserve(prepared.len());
+        }
+        self.positions.reserve(prepared.len());
+        self.positions_by_key.reserve(prepared.len());
+        for (chunk_key, chunk_id, normalized_embedding) in prepared {
+            self.observe_chunk_key(chunk_key);
+            if let Some(position) = self.positions_by_key.get(&chunk_key).copied() {
+                let old_chunk_id = self.chunk_ids[position].clone();
+                self.chunk_ids[position] = chunk_id.clone();
+                self.positions.remove(&old_chunk_id);
+                self.positions.insert(chunk_id, position);
+                if let SegmentStorage::Owned(store) = &mut self.segments {
+                    store.set(position, &normalized_embedding);
+                }
+            } else {
+                let position = self.chunk_ids.len();
+                self.chunk_keys.push(chunk_key);
+                self.chunk_ids.push(chunk_id.clone());
+                if let SegmentStorage::Owned(store) = &mut self.segments {
+                    store.push(&normalized_embedding);
+                }
+                self.positions.insert(chunk_id, position);
+                self.positions_by_key.insert(chunk_key, position);
+            }
+        }
+
+        Ok(())
+    }
+
+    fn remove_position(&mut self, position: usize) -> Result<()> {
+        self.ensure_owned_segments()?;
+        let removed_chunk_id = self.chunk_ids.swap_remove(position);
+        let removed_chunk_key = self.chunk_keys.swap_remove(position);
+        if let SegmentStorage::Owned(store) = &mut self.segments {
+            store.swap_remove(position);
+        }
+        self.positions.remove(&removed_chunk_id);
+        self.positions_by_key.remove(&removed_chunk_key);
+        if position < self.chunk_ids.len() {
+            let moved_id = self.chunk_ids[position].clone();
+            let moved_key = self.chunk_keys[position];
+            self.positions.insert(moved_id, position);
+            self.positions_by_key.insert(moved_key, position);
+        }
+
+        if self.chunk_ids.is_empty() {
+            self.dimension = None;
+            self.segments = SegmentStorage::Owned(VectorSegmentStore::default());
+        }
+
+        Ok(())
+    }
+
+    fn query_filtered_positions(
         &self,
         query_embedding: &[f32],
         limit: usize,
-        allowed_ids: &HashSet<String>,
+        allowed_positions: &[usize],
     ) -> Result<Vec<VectorCandidate>> {
-        if limit == 0 || self.chunk_ids.is_empty() || allowed_ids.is_empty() {
+        if limit == 0 || self.chunk_ids.is_empty() || allowed_positions.is_empty() {
             return Ok(Vec::new());
         }
         self.validate_dimension(query_embedding)?;
 
         let query_normalized = normalize_embedding(query_embedding);
-        let mut results: Vec<VectorCandidate> = self
-            .chunk_ids
-            .iter()
-            .enumerate()
-            .filter(|(_, chunk_id)| allowed_ids.contains(*chunk_id))
-            .map(|(position, chunk_id)| VectorCandidate {
-                chunk_id: chunk_id.clone(),
-                score: self.segments.dot_product(position, &query_normalized),
-            })
-            .collect();
+        let mut results: Vec<VectorCandidate> =
+            if allowed_positions.len() >= PARALLEL_SCAN_THRESHOLD {
+                allowed_positions
+                    .par_iter()
+                    .map(|position| VectorCandidate {
+                        chunk_id: self.chunk_ids[*position].clone(),
+                        score: self.segments.dot_product(*position, &query_normalized),
+                    })
+                    .collect()
+            } else {
+                allowed_positions
+                    .iter()
+                    .map(|position| VectorCandidate {
+                        chunk_id: self.chunk_ids[*position].clone(),
+                        score: self.segments.dot_product(*position, &query_normalized),
+                    })
+                    .collect()
+            };
 
         if results.len() > limit {
             let nth = limit - 1;
@@ -781,6 +997,28 @@ impl BruteForceVectorIndex {
         }
         results.sort_by(compare_candidates_desc);
         Ok(results)
+    }
+
+    #[cfg(test)]
+    #[allow(dead_code)]
+    fn query_filtered(
+        &self,
+        query_embedding: &[f32],
+        limit: usize,
+        allowed_ids: &HashSet<String>,
+    ) -> Result<Vec<VectorCandidate>> {
+        let allowed_positions = self.allowed_positions(
+            &allowed_ids
+                .iter()
+                .filter_map(|chunk_id| {
+                    self.positions
+                        .get(chunk_id)
+                        .and_then(|position| self.chunk_keys.get(*position))
+                        .copied()
+                })
+                .collect::<Vec<_>>(),
+        );
+        self.query_filtered_positions(query_embedding, limit, &allowed_positions)
     }
 }
 
@@ -801,6 +1039,7 @@ impl VectorIndex for BruteForceVectorIndex {
         let embedding_bytes =
             self.segments
                 .estimated_bytes(self.storage_kind, self.chunk_ids.len(), self.dimension);
+        let key_bytes = self.chunk_keys.len() * size_of::<ChunkKey>();
         let id_bytes = self
             .chunk_ids
             .iter()
@@ -808,91 +1047,40 @@ impl VectorIndex for BruteForceVectorIndex {
             .sum::<usize>();
         let positions_overhead =
             self.positions.len() * (size_of::<usize>() + size_of::<String>() + size_of::<usize>());
-        embedding_bytes + id_bytes + positions_overhead
+        let key_positions_overhead =
+            self.positions_by_key.len() * (size_of::<ChunkKey>() + size_of::<usize>());
+        embedding_bytes + key_bytes + id_bytes + positions_overhead + key_positions_overhead
     }
 
     fn upsert(&mut self, chunk_id: &str, embedding: &[f32]) -> Result<()> {
-        self.validate_dimension(embedding)?;
-        self.ensure_owned_segments()?;
-        if self.dimension.is_none() {
-            self.dimension = Some(embedding.len());
-            self.segments = SegmentStorage::Owned(VectorSegmentStore::with_dimension_and_storage(
-                embedding.len(),
-                self.storage_kind,
-            ));
-        }
-
-        let normalized_embedding = normalize_embedding(embedding);
-        if let Some(position) = self.positions.get(chunk_id).copied() {
-            if let SegmentStorage::Owned(store) = &mut self.segments {
-                store.set(position, &normalized_embedding);
-            }
-            return Ok(());
-        }
-
-        let position = self.chunk_ids.len();
-        self.chunk_ids.push(chunk_id.to_string());
-        if let SegmentStorage::Owned(store) = &mut self.segments {
-            store.push(&normalized_embedding);
-        }
-        self.positions.insert(chunk_id.to_string(), position);
-        Ok(())
+        let chunk_key = self
+            .positions
+            .get(chunk_id)
+            .and_then(|position| self.chunk_keys.get(*position))
+            .copied()
+            .unwrap_or_else(|| self.allocate_transient_key());
+        self.upsert_record(&VectorEntryRecord {
+            chunk_key,
+            chunk_id: chunk_id.to_string(),
+            embedding: embedding.to_vec(),
+        })
     }
 
     fn upsert_batch(&mut self, items: &[(&str, &[f32])]) -> Result<()> {
-        if items.is_empty() {
-            return Ok(());
-        }
-
-        for (_, embedding) in items {
-            self.validate_dimension(embedding)?;
-        }
-        self.ensure_owned_segments()?;
-        if self.dimension.is_none() {
-            self.dimension = Some(items[0].1.len());
-            self.segments = SegmentStorage::Owned(VectorSegmentStore::with_dimension_and_storage(
-                items[0].1.len(),
-                self.storage_kind,
-            ));
-        }
-
-        let prepared: Vec<(String, Vec<f32>)> = if items.len() >= BATCH_PARALLEL_PREP_THRESHOLD {
-            items
-                .par_iter()
-                .map(|(chunk_id, embedding)| {
-                    ((*chunk_id).to_string(), normalize_embedding(embedding))
-                })
-                .collect()
-        } else {
-            items
-                .iter()
-                .map(|(chunk_id, embedding)| {
-                    ((*chunk_id).to_string(), normalize_embedding(embedding))
-                })
-                .collect()
-        };
-
-        self.chunk_ids.reserve(prepared.len());
-        if let SegmentStorage::Owned(store) = &mut self.segments {
-            store.reserve(prepared.len());
-        }
-        self.positions.reserve(prepared.len());
-        for (chunk_id, normalized_embedding) in prepared {
-            if let Some(position) = self.positions.get(&chunk_id).copied() {
-                if let SegmentStorage::Owned(store) = &mut self.segments {
-                    store.set(position, &normalized_embedding);
-                }
-            } else {
-                let position = self.chunk_ids.len();
-                self.chunk_ids.push(chunk_id.clone());
-                if let SegmentStorage::Owned(store) = &mut self.segments {
-                    store.push(&normalized_embedding);
-                }
-                self.positions.insert(chunk_id, position);
-            }
-        }
-
-        Ok(())
+        let records = items
+            .iter()
+            .map(|(chunk_id, embedding)| VectorEntryRecord {
+                chunk_key: self
+                    .positions
+                    .get(*chunk_id)
+                    .and_then(|position| self.chunk_keys.get(*position))
+                    .copied()
+                    .unwrap_or_else(|| self.allocate_transient_key()),
+                chunk_id: (*chunk_id).to_string(),
+                embedding: embedding.to_vec(),
+            })
+            .collect::<Vec<_>>();
+        self.upsert_records(&records)
     }
 
     fn remove(&mut self, chunk_id: &str) -> Result<()> {
@@ -900,29 +1088,17 @@ impl VectorIndex for BruteForceVectorIndex {
         let Some(position) = self.positions.remove(chunk_id) else {
             return Ok(());
         };
-
-        self.chunk_ids.swap_remove(position);
-        if let SegmentStorage::Owned(store) = &mut self.segments {
-            store.swap_remove(position);
-        }
-        if position < self.chunk_ids.len() {
-            let moved_id = self.chunk_ids[position].clone();
-            self.positions.insert(moved_id, position);
-        }
-
-        if self.chunk_ids.is_empty() {
-            self.dimension = None;
-            self.segments = SegmentStorage::Owned(VectorSegmentStore::default());
-        }
-
-        Ok(())
+        self.remove_position(position)
     }
 
     fn reset(&mut self) -> Result<()> {
+        self.chunk_keys.clear();
         self.chunk_ids.clear();
         self.positions.clear();
+        self.positions_by_key.clear();
         self.dimension = None;
         self.segments = SegmentStorage::Owned(VectorSegmentStore::default());
+        self.next_transient_key = 0;
         Ok(())
     }
 
@@ -970,6 +1146,7 @@ struct LshTable {
 
 #[derive(Debug, Clone)]
 struct LshEntry {
+    chunk_key: ChunkKey,
     chunk_id: String,
     normalized_embedding: EncodedVector,
     table_keys: Vec<u64>,
@@ -981,12 +1158,14 @@ pub struct LshAnnVectorIndex {
     dimension: Option<usize>,
     entries: Vec<LshEntry>,
     positions: HashMap<String, usize>,
+    positions_by_key: HashMap<ChunkKey, usize>,
     tables: Vec<LshTable>,
     bits_per_table: usize,
     table_count: usize,
     min_candidates: usize,
     max_hamming_radius: usize,
     max_candidate_multiplier: usize,
+    next_transient_key: ChunkKey,
 }
 
 impl Default for LshAnnVectorIndex {
@@ -996,12 +1175,14 @@ impl Default for LshAnnVectorIndex {
             dimension: None,
             entries: Vec::new(),
             positions: HashMap::new(),
+            positions_by_key: HashMap::new(),
             tables: Vec::new(),
             bits_per_table: LSH_DEFAULT_BITS_PER_TABLE,
             table_count: LSH_DEFAULT_TABLE_COUNT,
             min_candidates: LSH_DEFAULT_MIN_CANDIDATES,
             max_hamming_radius: LSH_DEFAULT_MAX_HAMMING_RADIUS,
             max_candidate_multiplier: LSH_DEFAULT_MAX_CANDIDATE_MULTIPLIER,
+            next_transient_key: 0,
         }
     }
 }
@@ -1023,6 +1204,16 @@ impl LshAnnVectorIndex {
 
     fn validate_dimension(&self, embedding: &[f32]) -> Result<()> {
         validate_dimension(self.dimension, embedding)
+    }
+
+    fn allocate_transient_key(&mut self) -> ChunkKey {
+        let key = self.next_transient_key.max(1);
+        self.next_transient_key = key.saturating_add(1);
+        key
+    }
+
+    fn observe_chunk_key(&mut self, chunk_key: ChunkKey) {
+        self.next_transient_key = self.next_transient_key.max(chunk_key.saturating_add(1));
     }
 
     fn initialize_tables_if_needed(&mut self, dim: usize) {
@@ -1168,26 +1359,150 @@ impl LshAnnVectorIndex {
         }
     }
 
-    fn query_filtered(
+    fn allowed_positions(&self, allowed_keys: &[ChunkKey]) -> Vec<usize> {
+        allowed_keys
+            .iter()
+            .filter_map(|chunk_key| self.positions_by_key.get(chunk_key).copied())
+            .collect()
+    }
+
+    fn upsert_record(&mut self, record: &VectorEntryRecord) -> Result<()> {
+        self.validate_dimension(&record.embedding)?;
+        if self.dimension.is_none() {
+            self.dimension = Some(record.embedding.len());
+            self.initialize_tables_if_needed(record.embedding.len());
+        }
+
+        let normalized_embedding = normalize_embedding(&record.embedding);
+        let table_keys = self.bucket_keys_for_embedding(&normalized_embedding);
+        let stored_embedding =
+            EncodedVector::from_normalized(&normalized_embedding, self.storage_kind);
+        self.observe_chunk_key(record.chunk_key);
+
+        if let Some(position) = self.positions_by_key.get(&record.chunk_key).copied() {
+            let old_chunk_id = self.entries[position].chunk_id.clone();
+            let old_keys = std::mem::replace(&mut self.entries[position].table_keys, table_keys);
+            self.remove_position_from_tables(position, &old_keys);
+            self.entries[position].chunk_id = record.chunk_id.clone();
+            self.entries[position].normalized_embedding = stored_embedding;
+            let new_keys = self.entries[position].table_keys.clone();
+            self.insert_position_into_tables(position, &new_keys);
+            self.positions.remove(&old_chunk_id);
+            self.positions.insert(record.chunk_id.clone(), position);
+            return Ok(());
+        }
+
+        let position = self.entries.len();
+        self.entries.push(LshEntry {
+            chunk_key: record.chunk_key,
+            chunk_id: record.chunk_id.clone(),
+            normalized_embedding: stored_embedding,
+            table_keys: table_keys.clone(),
+        });
+        self.positions.insert(record.chunk_id.clone(), position);
+        self.positions_by_key.insert(record.chunk_key, position);
+        self.insert_position_into_tables(position, &table_keys);
+        Ok(())
+    }
+
+    fn upsert_records(&mut self, records: &[VectorEntryRecord]) -> Result<()> {
+        if records.is_empty() {
+            return Ok(());
+        }
+
+        for record in records {
+            self.validate_dimension(&record.embedding)?;
+        }
+        if self.dimension.is_none() {
+            self.dimension = Some(records[0].embedding.len());
+            self.initialize_tables_if_needed(records[0].embedding.len());
+        }
+
+        let tables = &self.tables;
+        let storage_kind = self.storage_kind;
+        let prepared: Vec<(ChunkKey, String, EncodedVector, Vec<u64>)> = if records.len()
+            >= BATCH_PARALLEL_PREP_THRESHOLD
+        {
+            records
+                .par_iter()
+                .map(|record| {
+                    let normalized_embedding = normalize_embedding(&record.embedding);
+                    let table_keys = tables
+                        .iter()
+                        .map(|table| Self::bucket_key(&table.hyperplanes, &normalized_embedding))
+                        .collect::<Vec<_>>();
+                    (
+                        record.chunk_key,
+                        record.chunk_id.clone(),
+                        EncodedVector::from_normalized(&normalized_embedding, storage_kind),
+                        table_keys,
+                    )
+                })
+                .collect()
+        } else {
+            records
+                .iter()
+                .map(|record| {
+                    let normalized_embedding = normalize_embedding(&record.embedding);
+                    let table_keys = tables
+                        .iter()
+                        .map(|table| Self::bucket_key(&table.hyperplanes, &normalized_embedding))
+                        .collect::<Vec<_>>();
+                    (
+                        record.chunk_key,
+                        record.chunk_id.clone(),
+                        EncodedVector::from_normalized(&normalized_embedding, storage_kind),
+                        table_keys,
+                    )
+                })
+                .collect()
+        };
+
+        self.entries.reserve(prepared.len());
+        self.positions.reserve(prepared.len());
+        self.positions_by_key.reserve(prepared.len());
+        for (chunk_key, chunk_id, normalized_embedding, table_keys) in prepared {
+            self.observe_chunk_key(chunk_key);
+            if let Some(position) = self.positions_by_key.get(&chunk_key).copied() {
+                let old_chunk_id = self.entries[position].chunk_id.clone();
+                let old_keys =
+                    std::mem::replace(&mut self.entries[position].table_keys, table_keys);
+                self.remove_position_from_tables(position, &old_keys);
+                self.entries[position].chunk_id = chunk_id.clone();
+                self.entries[position].normalized_embedding = normalized_embedding;
+                let new_keys = self.entries[position].table_keys.clone();
+                self.insert_position_into_tables(position, &new_keys);
+                self.positions.remove(&old_chunk_id);
+                self.positions.insert(chunk_id, position);
+            } else {
+                let position = self.entries.len();
+                self.entries.push(LshEntry {
+                    chunk_key,
+                    chunk_id: chunk_id.clone(),
+                    normalized_embedding,
+                    table_keys: table_keys.clone(),
+                });
+                self.positions.insert(chunk_id, position);
+                self.positions_by_key.insert(chunk_key, position);
+                self.insert_position_into_tables(position, &table_keys);
+            }
+        }
+
+        Ok(())
+    }
+
+    fn query_filtered_positions(
         &self,
         query_embedding: &[f32],
         limit: usize,
-        allowed_ids: &HashSet<String>,
+        allowed_positions: &[usize],
     ) -> Result<Vec<VectorCandidate>> {
-        if limit == 0 || self.entries.is_empty() || allowed_ids.is_empty() {
+        if limit == 0 || self.entries.is_empty() || allowed_positions.is_empty() {
             return Ok(Vec::new());
         }
         validate_dimension(self.dimension, query_embedding)?;
         let query_normalized = normalize_embedding(query_embedding);
-        let mut results: Vec<VectorCandidate> = self
-            .entries
-            .iter()
-            .filter(|entry| allowed_ids.contains(&entry.chunk_id))
-            .map(|entry| VectorCandidate {
-                chunk_id: entry.chunk_id.clone(),
-                score: entry.normalized_embedding.dot_product(&query_normalized),
-            })
-            .collect();
+        let mut results = self.score_candidates(&query_normalized, allowed_positions.to_vec());
 
         if results.len() > limit {
             let nth = limit - 1;
@@ -1196,6 +1511,28 @@ impl LshAnnVectorIndex {
         }
         results.sort_by(compare_candidates_desc);
         Ok(results)
+    }
+
+    #[cfg(test)]
+    #[allow(dead_code)]
+    fn query_filtered(
+        &self,
+        query_embedding: &[f32],
+        limit: usize,
+        allowed_ids: &HashSet<String>,
+    ) -> Result<Vec<VectorCandidate>> {
+        let allowed_positions = self.allowed_positions(
+            &allowed_ids
+                .iter()
+                .filter_map(|chunk_id| {
+                    self.positions
+                        .get(chunk_id)
+                        .and_then(|position| self.entries.get(*position))
+                        .map(|entry| entry.chunk_key)
+                })
+                .collect::<Vec<_>>(),
+        );
+        self.query_filtered_positions(query_embedding, limit, &allowed_positions)
     }
 }
 
@@ -1227,6 +1564,8 @@ impl VectorIndex for LshAnnVectorIndex {
             .sum::<usize>();
         let positions_overhead =
             self.positions.len() * (size_of::<usize>() + size_of::<String>() + size_of::<usize>());
+        let key_positions_overhead =
+            self.positions_by_key.len() * (size_of::<ChunkKey>() + size_of::<usize>());
 
         let hyperplane_bytes = self
             .tables
@@ -1252,115 +1591,38 @@ impl VectorIndex for LshAnnVectorIndex {
             })
             .sum::<usize>();
 
-        entry_bytes + positions_overhead + hyperplane_bytes + bucket_bytes
+        entry_bytes + positions_overhead + key_positions_overhead + hyperplane_bytes + bucket_bytes
     }
 
     fn upsert(&mut self, chunk_id: &str, embedding: &[f32]) -> Result<()> {
-        self.validate_dimension(embedding)?;
-        if self.dimension.is_none() {
-            self.dimension = Some(embedding.len());
-            self.initialize_tables_if_needed(embedding.len());
-        }
-
-        let normalized_embedding = normalize_embedding(embedding);
-        let table_keys = self.bucket_keys_for_embedding(&normalized_embedding);
-        let stored_embedding =
-            EncodedVector::from_normalized(&normalized_embedding, self.storage_kind);
-
-        if let Some(position) = self.positions.get(chunk_id).copied() {
-            let old_keys = std::mem::replace(&mut self.entries[position].table_keys, table_keys);
-            self.remove_position_from_tables(position, &old_keys);
-            self.entries[position].normalized_embedding = stored_embedding;
-            let new_keys = self.entries[position].table_keys.clone();
-            self.insert_position_into_tables(position, &new_keys);
-            return Ok(());
-        }
-
-        let position = self.entries.len();
-        self.entries.push(LshEntry {
+        let chunk_key = self
+            .positions
+            .get(chunk_id)
+            .and_then(|position| self.entries.get(*position))
+            .map(|entry| entry.chunk_key)
+            .unwrap_or_else(|| self.allocate_transient_key());
+        self.upsert_record(&VectorEntryRecord {
+            chunk_key,
             chunk_id: chunk_id.to_string(),
-            normalized_embedding: stored_embedding,
-            table_keys: table_keys.clone(),
-        });
-        self.positions.insert(chunk_id.to_string(), position);
-        self.insert_position_into_tables(position, &table_keys);
-        Ok(())
+            embedding: embedding.to_vec(),
+        })
     }
 
     fn upsert_batch(&mut self, items: &[(&str, &[f32])]) -> Result<()> {
-        if items.is_empty() {
-            return Ok(());
-        }
-
-        for (_, embedding) in items {
-            self.validate_dimension(embedding)?;
-        }
-        if self.dimension.is_none() {
-            self.dimension = Some(items[0].1.len());
-            self.initialize_tables_if_needed(items[0].1.len());
-        }
-
-        let tables = &self.tables;
-        let storage_kind = self.storage_kind;
-        let prepared: Vec<(String, EncodedVector, Vec<u64>)> = if items.len()
-            >= BATCH_PARALLEL_PREP_THRESHOLD
-        {
-            items
-                .par_iter()
-                .map(|(chunk_id, embedding)| {
-                    let normalized_embedding = normalize_embedding(embedding);
-                    let table_keys = tables
-                        .iter()
-                        .map(|table| Self::bucket_key(&table.hyperplanes, &normalized_embedding))
-                        .collect::<Vec<_>>();
-                    (
-                        (*chunk_id).to_string(),
-                        EncodedVector::from_normalized(&normalized_embedding, storage_kind),
-                        table_keys,
-                    )
-                })
-                .collect()
-        } else {
-            items
-                .iter()
-                .map(|(chunk_id, embedding)| {
-                    let normalized_embedding = normalize_embedding(embedding);
-                    let table_keys = tables
-                        .iter()
-                        .map(|table| Self::bucket_key(&table.hyperplanes, &normalized_embedding))
-                        .collect::<Vec<_>>();
-                    (
-                        (*chunk_id).to_string(),
-                        EncodedVector::from_normalized(&normalized_embedding, storage_kind),
-                        table_keys,
-                    )
-                })
-                .collect()
-        };
-
-        self.entries.reserve(prepared.len());
-        self.positions.reserve(prepared.len());
-        for (chunk_id, normalized_embedding, table_keys) in prepared {
-            if let Some(position) = self.positions.get(&chunk_id).copied() {
-                let old_keys =
-                    std::mem::replace(&mut self.entries[position].table_keys, table_keys);
-                self.remove_position_from_tables(position, &old_keys);
-                self.entries[position].normalized_embedding = normalized_embedding;
-                let new_keys = self.entries[position].table_keys.clone();
-                self.insert_position_into_tables(position, &new_keys);
-            } else {
-                let position = self.entries.len();
-                self.entries.push(LshEntry {
-                    chunk_id: chunk_id.clone(),
-                    normalized_embedding,
-                    table_keys: table_keys.clone(),
-                });
-                self.positions.insert(chunk_id, position);
-                self.insert_position_into_tables(position, &table_keys);
-            }
-        }
-
-        Ok(())
+        let records = items
+            .iter()
+            .map(|(chunk_id, embedding)| VectorEntryRecord {
+                chunk_key: self
+                    .positions
+                    .get(*chunk_id)
+                    .and_then(|position| self.entries.get(*position))
+                    .map(|entry| entry.chunk_key)
+                    .unwrap_or_else(|| self.allocate_transient_key()),
+                chunk_id: (*chunk_id).to_string(),
+                embedding: embedding.to_vec(),
+            })
+            .collect::<Vec<_>>();
+        self.upsert_records(&records)
     }
 
     fn remove(&mut self, chunk_id: &str) -> Result<()> {
@@ -1374,14 +1636,18 @@ impl VectorIndex for LshAnnVectorIndex {
         if position < self.entries.len() {
             let old_position = self.entries.len();
             let moved_id = self.entries[position].chunk_id.clone();
+            let moved_key = self.entries[position].chunk_key;
             let moved_keys = self.entries[position].table_keys.clone();
             self.rebind_position_in_tables(old_position, position, &moved_keys);
             self.positions.insert(moved_id, position);
+            self.positions_by_key.insert(moved_key, position);
         }
+        self.positions_by_key.remove(&removed.chunk_key);
 
         if self.entries.is_empty() {
             self.dimension = None;
             self.positions.clear();
+            self.positions_by_key.clear();
             self.tables.clear();
         }
 
@@ -1392,7 +1658,9 @@ impl VectorIndex for LshAnnVectorIndex {
         self.dimension = None;
         self.entries.clear();
         self.positions.clear();
+        self.positions_by_key.clear();
         self.tables.clear();
+        self.next_transient_key = 0;
         Ok(())
     }
 
@@ -1465,14 +1733,17 @@ impl VectorIndex for LshAnnVectorIndex {
 pub struct HnswBaselineVectorIndex {
     storage_kind: VectorStorageKind,
     dimension: Option<usize>,
+    chunk_keys: Vec<ChunkKey>,
     chunk_ids: Vec<String>,
     segments: VectorSegmentStore,
     positions: HashMap<String, usize>,
+    positions_by_key: HashMap<ChunkKey, usize>,
     m: usize,
     ef_construction: usize,
     ef_search: usize,
     graph: RefCell<Option<PersistedHnswGraph>>,
     graph_dirty: Cell<bool>,
+    next_transient_key: ChunkKey,
 }
 
 impl std::fmt::Debug for HnswBaselineVectorIndex {
@@ -1534,21 +1805,24 @@ impl PersistedHnswGraph {
 }
 
 impl HnswBaselineVectorIndex {
-    pub fn new_with_options(storage_kind: VectorStorageKind, tuning: AnnTuningConfig) -> Self {
+    pub fn new_with_options(storage_kind: VectorStorageKind, _tuning: AnnTuningConfig) -> Self {
         let m = 16usize;
         let ef_construction = 64usize;
-        let ef_search = tuning.min_candidates.max(64);
+        let ef_search = HNSW_DEFAULT_EF_SEARCH;
         Self {
             storage_kind,
             dimension: None,
+            chunk_keys: Vec::new(),
             chunk_ids: Vec::new(),
             segments: VectorSegmentStore::default(),
             positions: HashMap::new(),
+            positions_by_key: HashMap::new(),
             m,
             ef_construction,
             ef_search,
             graph: RefCell::new(None),
             graph_dirty: Cell::new(true),
+            next_transient_key: 0,
         }
     }
 
@@ -1558,6 +1832,16 @@ impl HnswBaselineVectorIndex {
 
     fn validate_dimension(&self, embedding: &[f32]) -> Result<()> {
         validate_dimension(self.dimension, embedding)
+    }
+
+    fn allocate_transient_key(&mut self) -> ChunkKey {
+        let key = self.next_transient_key.max(1);
+        self.next_transient_key = key.saturating_add(1);
+        key
+    }
+
+    fn observe_chunk_key(&mut self, chunk_key: ChunkKey) {
+        self.next_transient_key = self.next_transient_key.max(chunk_key.saturating_add(1));
     }
 
     fn mark_dirty(&self) {
@@ -1680,29 +1964,129 @@ impl HnswBaselineVectorIndex {
         results
     }
 
-    fn query_filtered(
+    fn allowed_positions(&self, allowed_keys: &[ChunkKey]) -> Vec<usize> {
+        let mut allowed_positions = allowed_keys
+            .iter()
+            .filter_map(|chunk_key| self.positions_by_key.get(chunk_key).copied())
+            .collect::<Vec<_>>();
+        allowed_positions.sort_unstable();
+        allowed_positions
+    }
+
+    fn upsert_record(&mut self, record: &VectorEntryRecord) -> Result<()> {
+        self.validate_dimension(&record.embedding)?;
+        if self.dimension.is_none() {
+            self.dimension = Some(record.embedding.len());
+            self.segments = VectorSegmentStore::with_dimension_and_storage(
+                record.embedding.len(),
+                self.storage_kind,
+            );
+        }
+
+        let normalized_embedding = normalize_embedding(&record.embedding);
+        self.observe_chunk_key(record.chunk_key);
+        if let Some(position) = self.positions_by_key.get(&record.chunk_key).copied() {
+            let old_chunk_id = self.chunk_ids[position].clone();
+            self.chunk_ids[position] = record.chunk_id.clone();
+            self.chunk_keys[position] = record.chunk_key;
+            self.positions.remove(&old_chunk_id);
+            self.positions.insert(record.chunk_id.clone(), position);
+            self.segments.set(position, &normalized_embedding);
+            self.mark_dirty();
+            return Ok(());
+        }
+
+        let position = self.chunk_ids.len();
+        self.chunk_keys.push(record.chunk_key);
+        self.chunk_ids.push(record.chunk_id.clone());
+        self.segments.push(&normalized_embedding);
+        self.positions.insert(record.chunk_id.clone(), position);
+        self.positions_by_key.insert(record.chunk_key, position);
+        self.mark_dirty();
+        Ok(())
+    }
+
+    fn upsert_records(&mut self, records: &[VectorEntryRecord]) -> Result<()> {
+        if records.is_empty() {
+            return Ok(());
+        }
+
+        for record in records {
+            self.validate_dimension(&record.embedding)?;
+        }
+        if self.dimension.is_none() {
+            self.dimension = Some(records[0].embedding.len());
+            self.segments = VectorSegmentStore::with_dimension_and_storage(
+                records[0].embedding.len(),
+                self.storage_kind,
+            );
+        }
+
+        let prepared: Vec<(ChunkKey, String, Vec<f32>)> =
+            if records.len() >= BATCH_PARALLEL_PREP_THRESHOLD {
+                records
+                    .par_iter()
+                    .map(|record| {
+                        (
+                            record.chunk_key,
+                            record.chunk_id.clone(),
+                            normalize_embedding(&record.embedding),
+                        )
+                    })
+                    .collect()
+            } else {
+                records
+                    .iter()
+                    .map(|record| {
+                        (
+                            record.chunk_key,
+                            record.chunk_id.clone(),
+                            normalize_embedding(&record.embedding),
+                        )
+                    })
+                    .collect()
+            };
+
+        self.chunk_keys.reserve(prepared.len());
+        self.chunk_ids.reserve(prepared.len());
+        self.segments.reserve(prepared.len());
+        self.positions.reserve(prepared.len());
+        self.positions_by_key.reserve(prepared.len());
+        for (chunk_key, chunk_id, normalized_embedding) in prepared {
+            self.observe_chunk_key(chunk_key);
+            if let Some(position) = self.positions_by_key.get(&chunk_key).copied() {
+                let old_chunk_id = self.chunk_ids[position].clone();
+                self.chunk_ids[position] = chunk_id.clone();
+                self.positions.remove(&old_chunk_id);
+                self.positions.insert(chunk_id, position);
+                self.segments.set(position, &normalized_embedding);
+            } else {
+                let position = self.chunk_ids.len();
+                self.chunk_keys.push(chunk_key);
+                self.chunk_ids.push(chunk_id.clone());
+                self.segments.push(&normalized_embedding);
+                self.positions.insert(chunk_id, position);
+                self.positions_by_key.insert(chunk_key, position);
+            }
+        }
+        self.mark_dirty();
+        Ok(())
+    }
+
+    fn query_filtered_positions(
         &self,
         query_embedding: &[f32],
         limit: usize,
-        allowed_ids: &HashSet<String>,
+        allowed_positions: &[usize],
     ) -> Result<Vec<VectorCandidate>> {
-        if limit == 0 || self.chunk_ids.is_empty() || allowed_ids.is_empty() {
+        if limit == 0 || self.chunk_ids.is_empty() || allowed_positions.is_empty() {
             return Ok(Vec::new());
         }
         self.validate_dimension(query_embedding)?;
 
-        let mut allowed_positions = allowed_ids
-            .iter()
-            .filter_map(|chunk_id| self.positions.get(chunk_id).copied())
-            .collect::<Vec<_>>();
-        if allowed_positions.is_empty() {
-            return Ok(Vec::new());
-        }
-        allowed_positions.sort_unstable();
-
         let query_normalized = normalize_embedding(query_embedding);
         if self.should_prefer_filtered_exact_scan(allowed_positions.len()) {
-            return Ok(self.exact_scan_positions(&query_normalized, &allowed_positions, limit));
+            return Ok(self.exact_scan_positions(&query_normalized, allowed_positions, limit));
         }
 
         self.ensure_graph()?;
@@ -1711,15 +2095,11 @@ impl HnswBaselineVectorIndex {
         let Some(graph) = graph.as_ref() else {
             return Ok(Vec::new());
         };
+        let allowed_filter = allowed_positions.to_vec();
 
         let mut results: Vec<VectorCandidate> = graph
             .as_ref()
-            .search_filter(
-                &query_normalized,
-                limit,
-                ef_search,
-                Some(&allowed_positions),
-            )
+            .search_filter(&query_normalized, limit, ef_search, Some(&allowed_filter))
             .into_iter()
             .filter_map(|neighbor| {
                 self.chunk_ids
@@ -1736,6 +2116,28 @@ impl HnswBaselineVectorIndex {
             results.truncate(limit);
         }
         Ok(results)
+    }
+
+    #[cfg(test)]
+    #[allow(dead_code)]
+    fn query_filtered(
+        &self,
+        query_embedding: &[f32],
+        limit: usize,
+        allowed_ids: &HashSet<String>,
+    ) -> Result<Vec<VectorCandidate>> {
+        let allowed_positions = self.allowed_positions(
+            &allowed_ids
+                .iter()
+                .filter_map(|chunk_id| {
+                    self.positions
+                        .get(chunk_id)
+                        .and_then(|position| self.chunk_keys.get(*position))
+                        .copied()
+                })
+                .collect::<Vec<_>>(),
+        );
+        self.query_filtered_positions(query_embedding, limit, &allowed_positions)
     }
 }
 
@@ -1757,6 +2159,7 @@ impl VectorIndex for HnswBaselineVectorIndex {
             .dimension
             .map(|dim| self.chunk_ids.len() * vector_storage_bytes(dim, self.storage_kind))
             .unwrap_or(0);
+        let key_bytes = self.chunk_keys.len() * size_of::<ChunkKey>();
         let id_bytes = self
             .chunk_ids
             .iter()
@@ -1764,78 +2167,46 @@ impl VectorIndex for HnswBaselineVectorIndex {
             .sum::<usize>();
         let positions_overhead =
             self.positions.len() * (size_of::<usize>() + size_of::<String>() + size_of::<usize>());
+        let key_positions_overhead =
+            self.positions_by_key.len() * (size_of::<ChunkKey>() + size_of::<usize>());
         let graph_link_budget = self.chunk_ids.len() * self.m * size_of::<usize>() * 2;
-        embedding_bytes + id_bytes + positions_overhead + graph_link_budget
+        embedding_bytes
+            + key_bytes
+            + id_bytes
+            + positions_overhead
+            + key_positions_overhead
+            + graph_link_budget
     }
 
     fn upsert(&mut self, chunk_id: &str, embedding: &[f32]) -> Result<()> {
-        self.validate_dimension(embedding)?;
-        if self.dimension.is_none() {
-            self.dimension = Some(embedding.len());
-            self.segments =
-                VectorSegmentStore::with_dimension_and_storage(embedding.len(), self.storage_kind);
-        }
-
-        let normalized_embedding = normalize_embedding(embedding);
-        if let Some(position) = self.positions.get(chunk_id).copied() {
-            self.segments.set(position, &normalized_embedding);
-            self.mark_dirty();
-            return Ok(());
-        }
-
-        let position = self.chunk_ids.len();
-        self.chunk_ids.push(chunk_id.to_string());
-        self.segments.push(&normalized_embedding);
-        self.positions.insert(chunk_id.to_string(), position);
-        self.mark_dirty();
-        Ok(())
+        let chunk_key = self
+            .positions
+            .get(chunk_id)
+            .and_then(|position| self.chunk_keys.get(*position))
+            .copied()
+            .unwrap_or_else(|| self.allocate_transient_key());
+        self.upsert_record(&VectorEntryRecord {
+            chunk_key,
+            chunk_id: chunk_id.to_string(),
+            embedding: embedding.to_vec(),
+        })
     }
 
     fn upsert_batch(&mut self, items: &[(&str, &[f32])]) -> Result<()> {
-        if items.is_empty() {
-            return Ok(());
-        }
-
-        for (_, embedding) in items {
-            self.validate_dimension(embedding)?;
-        }
-        if self.dimension.is_none() {
-            self.dimension = Some(items[0].1.len());
-            self.segments =
-                VectorSegmentStore::with_dimension_and_storage(items[0].1.len(), self.storage_kind);
-        }
-
-        let prepared: Vec<(String, Vec<f32>)> = if items.len() >= BATCH_PARALLEL_PREP_THRESHOLD {
-            items
-                .par_iter()
-                .map(|(chunk_id, embedding)| {
-                    ((*chunk_id).to_string(), normalize_embedding(embedding))
-                })
-                .collect()
-        } else {
-            items
-                .iter()
-                .map(|(chunk_id, embedding)| {
-                    ((*chunk_id).to_string(), normalize_embedding(embedding))
-                })
-                .collect()
-        };
-
-        self.chunk_ids.reserve(prepared.len());
-        self.segments.reserve(prepared.len());
-        self.positions.reserve(prepared.len());
-        for (chunk_id, normalized_embedding) in prepared {
-            if let Some(position) = self.positions.get(&chunk_id).copied() {
-                self.segments.set(position, &normalized_embedding);
-            } else {
-                let position = self.chunk_ids.len();
-                self.chunk_ids.push(chunk_id.clone());
-                self.segments.push(&normalized_embedding);
-                self.positions.insert(chunk_id, position);
-            }
-        }
-        self.mark_dirty();
-        Ok(())
+        let records = items
+            .iter()
+            .map(|(chunk_id, embedding)| VectorEntryRecord {
+                chunk_key: self
+                    .positions
+                    .get(*chunk_id)
+                    .and_then(|position| self.chunk_keys.get(*position))
+                    .copied()
+                    .unwrap_or_else(|| self.allocate_transient_key()),
+                chunk_id: (*chunk_id).to_string(),
+                embedding: embedding.to_vec(),
+            })
+            .collect::<Vec<_>>();
+        self.upsert_records(&records)
     }
 
     fn remove(&mut self, chunk_id: &str) -> Result<()> {
@@ -1843,15 +2214,20 @@ impl VectorIndex for HnswBaselineVectorIndex {
             return Ok(());
         };
 
+        let removed_key = self.chunk_keys.swap_remove(position);
+        self.positions_by_key.remove(&removed_key);
         self.chunk_ids.swap_remove(position);
         self.segments.swap_remove(position);
         if position < self.chunk_ids.len() {
             let moved_id = self.chunk_ids[position].clone();
+            let moved_key = self.chunk_keys[position];
             self.positions.insert(moved_id, position);
+            self.positions_by_key.insert(moved_key, position);
         }
 
         if self.chunk_ids.is_empty() {
             self.dimension = None;
+            self.chunk_keys.clear();
             self.segments = VectorSegmentStore::default();
             self.graph.borrow_mut().take();
             self.graph_dirty.set(false);
@@ -1864,11 +2240,14 @@ impl VectorIndex for HnswBaselineVectorIndex {
 
     fn reset(&mut self) -> Result<()> {
         self.dimension = None;
+        self.chunk_keys.clear();
         self.chunk_ids.clear();
         self.segments = VectorSegmentStore::default();
         self.positions.clear();
+        self.positions_by_key.clear();
         self.graph.borrow_mut().take();
         self.graph_dirty.set(false);
+        self.next_transient_key = 0;
         Ok(())
     }
 
@@ -1958,6 +2337,22 @@ fn read_u32_at(bytes: &[u8], cursor: &mut usize) -> Result<u32> {
             .expect("slice has u32 length"),
     );
     *cursor += size_of::<u32>();
+    Ok(value)
+}
+
+fn read_u64_at(bytes: &[u8], cursor: &mut usize) -> Result<u64> {
+    if *cursor + size_of::<u64>() > bytes.len() {
+        return Err(SqlRiteError::Io(std::io::Error::new(
+            std::io::ErrorKind::UnexpectedEof,
+            "unexpected EOF while reading u64",
+        )));
+    }
+    let value = u64::from_le_bytes(
+        bytes[*cursor..*cursor + size_of::<u64>()]
+            .try_into()
+            .expect("slice has u64 length"),
+    );
+    *cursor += size_of::<u64>();
     Ok(value)
 }
 
@@ -2475,10 +2870,11 @@ mod tests {
 
         let mut bytes = Vec::new();
         bytes.extend_from_slice(b"SQLRSEG1");
-        bytes.extend_from_slice(&1u32.to_le_bytes());
+        bytes.extend_from_slice(&2u32.to_le_bytes());
         bytes.push(1u8);
         bytes.extend_from_slice(&(entries.len() as u32).to_le_bytes());
-        for (chunk_id, embedding) in entries {
+        for (idx, (chunk_id, embedding)) in entries.into_iter().enumerate() {
+            bytes.extend_from_slice(&((idx as u64) + 1).to_le_bytes());
             bytes.extend_from_slice(&(chunk_id.len() as u32).to_le_bytes());
             bytes.extend_from_slice(chunk_id.as_bytes());
             bytes.extend_from_slice(&(embedding.len() as u32).to_le_bytes());

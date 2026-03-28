@@ -36,6 +36,7 @@ pub struct QueryRequest {
     pub top_k: Option<usize>,
     pub alpha: Option<f32>,
     pub candidate_limit: Option<usize>,
+    pub include_payloads: Option<bool>,
     pub query_profile: Option<String>,
     pub metadata_filters: Option<HashMap<String, String>>,
     pub doc_id: Option<String>,
@@ -52,6 +53,10 @@ impl QueryRequest {
 
     pub fn candidate_limit_or_default(&self) -> usize {
         self.candidate_limit.unwrap_or(DEFAULT_CANDIDATE_LIMIT)
+    }
+
+    pub fn include_payloads_or_default(&self) -> bool {
+        self.include_payloads.unwrap_or(true)
     }
 
     pub fn query_profile_or_default(&self) -> Result<QueryProfile, ValidationError> {

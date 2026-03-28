@@ -1,2 +1,0 @@
-starting SQLRite server on 127.0.0.1:8099
-ha profile: enabled=false role=Standalone cluster=local-cluster node=node-1 peers=0 sql_endpoint=true security_enabled=false
