@@ -10,8 +10,8 @@ The paper exposed the current reality clearly:
 
 | Area | Current state | Main issue |
 |---|---|---|
-| Exact vector retrieval | materially improved, still behind the leaders | hot path now avoids most row materialization, but exact search still lacks a persisted/mmapped vector data plane |
-| ANN retrieval | improved, but still behind the leaders | `hnsw_baseline` is now real HNSW, but graph storage and query kernels are still not specialized enough |
+| Exact vector retrieval | materially improved, still behind the leaders | exact search now has a persisted/mmapped vector data plane, but filtered exact throughput still trails Qdrant and pgvector in external comparisons |
+| ANN retrieval | improved, but still behind the leaders | `hnsw_baseline` is now real HNSW and clearly ahead of SQLRite exact search on filtered internal workloads, but it still trails Qdrant and pgvector on external comparisons |
 | Hybrid retrieval | Stronger quality on public data | Latency is too high because the execution path materializes and scores too much too early |
 | Filtering | Correct | Filters are not yet a first-class vector index primitive |
 | Deployment model | Strong | SQLite is acting as both control plane and hot-path data plane |
@@ -321,10 +321,14 @@ Make performance work measurable and defensible.
   - `/Users/jameskaranja/Developer/projects/SQLRight/scripts/run-p8-filtered-benchmark-suite.sh`
 - the filtered concurrency suite is reproducible via:
   - `/Users/jameskaranja/Developer/projects/SQLRight/scripts/run-p8-filtered-concurrency-suite.sh`
+- the external competitor suite is reproducible via:
+  - `/Users/jameskaranja/Developer/projects/SQLRight/scripts/run-p8-competitor-suite.sh`
 - CI coverage for the filtered suite now exists in:
   - `/Users/jameskaranja/Developer/projects/SQLRight/.github/workflows/performance-phase8-filtered-benchmarks.yml`
 - CI coverage for the filtered concurrency suite now exists in:
   - `/Users/jameskaranja/Developer/projects/SQLRight/.github/workflows/performance-phase8-filtered-concurrency.yml`
+- CI coverage for the external competitor suite now exists in:
+  - `/Users/jameskaranja/Developer/projects/SQLRight/.github/workflows/performance-phase8-competitor-comparison.yml`
 
 ### Initial measured result
 
@@ -370,6 +374,24 @@ These concurrency runs are reproducible via:
 
 - `/Users/jameskaranja/Developer/projects/SQLRight/scripts/run-p8-filtered-concurrency-suite.sh`
 
+### External comparator result
+
+On the deterministic 5k/120 tenant-filtered external comparison with `8` tenants:
+
+- exact filtered cosine:
+  - `SQLRite brute_force`: `178.93 QPS`, `p95=5.9314 ms`, `top1=1.0`, `recall@10=1.0`
+  - `Qdrant exact`: `3014.26 QPS`, `p95=0.4111 ms`, `top1=1.0`, `recall@10=1.0`
+  - `pgvector exact`: `1558.78 QPS`, `p95=1.8615 ms`, `top1=1.0`, `recall@10=1.0`
+- approximate filtered cosine:
+  - `SQLRite hnsw_baseline`: `510.38 QPS`, `p95=2.7932 ms`, `top1=1.0`, `recall@10=1.0`
+  - `Qdrant HNSW`: `2560.09 QPS`, `p95=0.6945 ms`, `top1=1.0`, `recall@10=1.0`
+  - `pgvector HNSW`: `1566.68 QPS`, `p95=1.3789 ms`, `top1=1.0`, `recall@10=0.5702`
+
+These runs are captured in:
+
+- `/Users/jameskaranja/Developer/projects/SQLRight/project_plan/reports/P8_competitor_comparison.md`
+- `/Users/jameskaranja/Developer/projects/SQLRight/project_plan/reports/p8_competitor_comparison.json`
+
 ### Conclusion
 
 - the filtered-workload path is now measured directly instead of inferred from unfiltered results
@@ -377,7 +399,8 @@ These concurrency runs are reproducible via:
 - the current crossover region is clearly at the low-selectivity end of the tenant sweep, around the 50% filter case
 - the engine now exploits that by preferring exact filtered scan before graph build on high-selectivity filtered requests
 - after correcting the concurrency timing model, HNSW also holds the advantage under filtered parallel load
-- the next work is broader comparator discipline and runtime analysis of ANN ingest/open cost, not another blind exact-vs-ANN threshold rewrite
+- the external benchmark discipline is now in place for Qdrant and pgvector, and it confirms that SQLRite has closed meaningful internal gaps without yet matching the service-oriented leaders on raw filtered throughput
+- the next work is runtime analysis of ANN ingest/open cost plus broader comparator coverage, not another blind exact-vs-ANN threshold rewrite
 
 ### Required benchmark matrix
 
@@ -392,10 +415,12 @@ These concurrency runs are reproducible via:
 
 ### Comparator set
 
-- sqlite-vec
-- pgvector
-- Qdrant
-- LanceDB
+- completed:
+  - pgvector
+  - Qdrant
+- next:
+  - sqlite-vec
+  - LanceDB
 
 ### Public datasets
 
@@ -409,7 +434,7 @@ If only three things happen next, they should be:
 
 1. expand filtered benchmarks across tenant counts, metadata shapes, and concurrency levels
 2. ANN graph storage and query-path specialization
-3. external comparator/public-dataset benchmark discipline
+3. extend the external comparator suite to sqlite-vec and LanceDB, then separate ingest/open costs from steady-state throughput
 
 That is the shortest path to a meaningful leaderboard change.
 

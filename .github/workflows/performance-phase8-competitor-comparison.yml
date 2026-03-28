@@ -1,0 +1,14 @@
+name: performance-phase8-competitor-comparison
+
+on:
+  workflow_dispatch:
+
+jobs:
+  competitor-comparison:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Run competitor comparison suite
+        run: bash scripts/run-p8-competitor-suite.sh
