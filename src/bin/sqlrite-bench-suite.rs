@@ -467,6 +467,8 @@ fn profile_to_config(profile: &str) -> Result<BenchmarkConfig, String> {
             alpha: 0.65,
             fusion_strategy: FusionStrategy::Weighted,
             batch_size: 256,
+            use_tenant_filters: false,
+            tenant_count: 1,
         },
         "10k" => BenchmarkConfig {
             corpus_size: 10_000,
@@ -480,6 +482,8 @@ fn profile_to_config(profile: &str) -> Result<BenchmarkConfig, String> {
             alpha: 0.65,
             fusion_strategy: FusionStrategy::Weighted,
             batch_size: 500,
+            use_tenant_filters: false,
+            tenant_count: 1,
         },
         "100k" => BenchmarkConfig {
             corpus_size: 100_000,
@@ -493,6 +497,8 @@ fn profile_to_config(profile: &str) -> Result<BenchmarkConfig, String> {
             alpha: 0.65,
             fusion_strategy: FusionStrategy::Weighted,
             batch_size: 1000,
+            use_tenant_filters: false,
+            tenant_count: 1,
         },
         "1m" => BenchmarkConfig {
             corpus_size: 1_000_000,
@@ -506,6 +512,8 @@ fn profile_to_config(profile: &str) -> Result<BenchmarkConfig, String> {
             alpha: 0.65,
             fusion_strategy: FusionStrategy::Weighted,
             batch_size: 2000,
+            use_tenant_filters: false,
+            tenant_count: 1,
         },
         "10m" => BenchmarkConfig {
             corpus_size: 10_000_000,
@@ -519,6 +527,8 @@ fn profile_to_config(profile: &str) -> Result<BenchmarkConfig, String> {
             alpha: 0.65,
             fusion_strategy: FusionStrategy::Weighted,
             batch_size: 4000,
+            use_tenant_filters: false,
+            tenant_count: 1,
         },
         other => {
             return Err(format!(

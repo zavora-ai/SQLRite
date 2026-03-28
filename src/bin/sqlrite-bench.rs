@@ -34,6 +34,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         alpha: args.alpha,
         fusion_strategy,
         batch_size: args.batch_size,
+        use_tenant_filters: args.use_tenant_filters,
+        tenant_count: args.tenant_count,
     };
 
     let mut runtime = RuntimeConfig::default()
@@ -66,6 +68,8 @@ struct BenchCliArgs {
     query_profile: QueryProfile,
     alpha: f32,
     batch_size: usize,
+    use_tenant_filters: bool,
+    tenant_count: usize,
     fusion_mode: String,
     rrf_rank_constant: f32,
     output_path: Option<PathBuf>,
@@ -87,6 +91,8 @@ impl Default for BenchCliArgs {
             query_profile: QueryProfile::Balanced,
             alpha: 0.65,
             batch_size: 500,
+            use_tenant_filters: false,
+            tenant_count: 1,
             fusion_mode: "weighted".to_string(),
             rrf_rank_constant: 60.0,
             output_path: None,
@@ -138,6 +144,13 @@ fn parse_args(args: Vec<String>) -> Result<BenchCliArgs, String> {
             "--batch-size" => {
                 i += 1;
                 cfg.batch_size = parse_usize(&args, i, "--batch-size")?;
+            }
+            "--tenant-filters" => {
+                cfg.use_tenant_filters = true;
+            }
+            "--tenant-count" => {
+                i += 1;
+                cfg.tenant_count = parse_usize(&args, i, "--tenant-count")?;
             }
             "--alpha" => {
                 i += 1;
@@ -238,18 +251,20 @@ fn parse_query_profile(raw: &str) -> Result<QueryProfile, String> {
 }
 
 fn usage() -> String {
-    "usage: cargo run --bin sqlrite-bench -- [--corpus N] [--queries N] [--warmup N] [--concurrency N] [--embedding-dim N] [--top-k N] [--candidate-limit N] [--query-profile balanced|latency|recall] [--batch-size N] [--alpha F] [--fusion weighted|rrf] [--rrf-k F] [--index-mode brute_force|lsh_ann|hnsw_baseline|disabled] [--storage-kind f32|f16|int8] [--durability balanced|durable|fast_unsafe] [--output PATH]".to_string()
+    "usage: cargo run --bin sqlrite-bench -- [--corpus N] [--queries N] [--warmup N] [--concurrency N] [--embedding-dim N] [--top-k N] [--candidate-limit N] [--query-profile balanced|latency|recall] [--batch-size N] [--tenant-filters] [--tenant-count N] [--alpha F] [--fusion weighted|rrf] [--rrf-k F] [--index-mode brute_force|lsh_ann|hnsw_baseline|disabled] [--storage-kind f32|f16|int8] [--durability balanced|durable|fast_unsafe] [--output PATH]".to_string()
 }
 
 fn print_summary(report: &sqlrite::BenchmarkReport) {
     println!(
-        "SQLRite benchmark: corpus={}, queries={}, concurrency={}, index={}, fusion={}, query_profile={}",
+        "SQLRite benchmark: corpus={}, queries={}, concurrency={}, index={}, fusion={}, query_profile={}, tenant_filters={}, tenant_count={}",
         report.corpus_size,
         report.query_count,
         report.concurrency,
         report.vector_index_mode,
         report.fusion_strategy,
-        report.query_profile
+        report.query_profile,
+        report.use_tenant_filters,
+        report.tenant_count
     );
     println!(
         "ingest_ms={:.2}, query_ms={:.2}, qps={:.2}, top1_hit_rate={:.4}",

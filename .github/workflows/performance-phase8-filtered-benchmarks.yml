@@ -1,0 +1,22 @@
+name: performance-phase8-filtered-benchmarks
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "src/lib.rs"
+      - "src/bench.rs"
+      - "src/main.rs"
+      - "src/bin/sqlrite-bench.rs"
+      - "scripts/run-p8-filtered-benchmark-suite.sh"
+      - ".github/workflows/performance-phase8-filtered-benchmarks.yml"
+
+jobs:
+  filtered-benchmark:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Run filtered benchmark suite
+        run: bash scripts/run-p8-filtered-benchmark-suite.sh

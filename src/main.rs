@@ -2455,13 +2455,15 @@ fn cmd_benchmark(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     let report = run_benchmark(args.config, runtime)?;
 
     println!(
-        "SQLRite benchmark: corpus={}, queries={}, concurrency={}, index={}, fusion={}, query_profile={}",
+        "SQLRite benchmark: corpus={}, queries={}, concurrency={}, index={}, fusion={}, query_profile={}, tenant_filters={}, tenant_count={}",
         report.corpus_size,
         report.query_count,
         report.concurrency,
         report.vector_index_mode,
         report.fusion_strategy,
-        report.query_profile
+        report.query_profile,
+        report.use_tenant_filters,
+        report.tenant_count
     );
     println!(
         "runtime: storage={}, mmap_size_bytes={}, cache_size_kib={}",
@@ -2536,6 +2538,13 @@ fn parse_benchmark_args(args: &[String]) -> Result<BenchmarkArgs, String> {
                 i += 1;
                 config.batch_size = parse_usize(args, i, "--batch-size")?;
             }
+            "--tenant-filters" => {
+                config.use_tenant_filters = true;
+            }
+            "--tenant-count" => {
+                i += 1;
+                config.tenant_count = parse_usize(args, i, "--tenant-count")?;
+            }
             "--alpha" => {
                 i += 1;
                 config.alpha = parse_f32(args, i, "--alpha")?;
@@ -2565,11 +2574,11 @@ fn parse_benchmark_args(args: &[String]) -> Result<BenchmarkArgs, String> {
                 output_path = Some(PathBuf::from(parse_string(args, i, "--output")?));
             }
             "--help" | "-h" => {
-                return Err("usage: sqlrite benchmark [--corpus N] [--queries N] [--warmup N] [--concurrency N] [--embedding-dim N] [--top-k N] [--candidate-limit N] [--query-profile balanced|latency|recall] [--batch-size N] [--alpha F] [--fusion weighted|rrf] [--rrf-k F] [--profile balanced|durable|fast_unsafe] [--durability balanced|durable|fast_unsafe] [--index-mode brute_force|lsh_ann|hnsw_baseline|disabled] [--output PATH]".to_string())
+                return Err("usage: sqlrite benchmark [--corpus N] [--queries N] [--warmup N] [--concurrency N] [--embedding-dim N] [--top-k N] [--candidate-limit N] [--query-profile balanced|latency|recall] [--batch-size N] [--tenant-filters] [--tenant-count N] [--alpha F] [--fusion weighted|rrf] [--rrf-k F] [--profile balanced|durable|fast_unsafe] [--durability balanced|durable|fast_unsafe] [--index-mode brute_force|lsh_ann|hnsw_baseline|disabled] [--output PATH]".to_string())
             }
             other => {
                 return Err(format!(
-                    "unknown argument `{other}`\nusage: sqlrite benchmark [--corpus N] [--queries N] [--warmup N] [--concurrency N] [--embedding-dim N] [--top-k N] [--candidate-limit N] [--query-profile balanced|latency|recall] [--batch-size N] [--alpha F] [--fusion weighted|rrf] [--rrf-k F] [--profile balanced|durable|fast_unsafe] [--durability balanced|durable|fast_unsafe] [--index-mode brute_force|lsh_ann|hnsw_baseline|disabled] [--output PATH]"
+                    "unknown argument `{other}`\nusage: sqlrite benchmark [--corpus N] [--queries N] [--warmup N] [--concurrency N] [--embedding-dim N] [--top-k N] [--candidate-limit N] [--query-profile balanced|latency|recall] [--batch-size N] [--tenant-filters] [--tenant-count N] [--alpha F] [--fusion weighted|rrf] [--rrf-k F] [--profile balanced|durable|fast_unsafe] [--durability balanced|durable|fast_unsafe] [--index-mode brute_force|lsh_ann|hnsw_baseline|disabled] [--output PATH]"
                 ))
             }
         }
@@ -5656,6 +5665,19 @@ ORDER BY hybrid_score DESC, chunk_id ASC;",
         let args = vec!["--query-profile".to_string(), "recall".to_string()];
         let parsed = parse_benchmark_args(&args).map_err(std::io::Error::other)?;
         assert_eq!(parsed.config.query_profile, QueryProfile::Recall);
+        Ok(())
+    }
+
+    #[test]
+    fn benchmark_args_parse_tenant_filter_flags() -> Result<(), Box<dyn std::error::Error>> {
+        let args = vec![
+            "--tenant-filters".to_string(),
+            "--tenant-count".to_string(),
+            "16".to_string(),
+        ];
+        let parsed = parse_benchmark_args(&args).map_err(std::io::Error::other)?;
+        assert!(parsed.config.use_tenant_filters);
+        assert_eq!(parsed.config.tenant_count, 16);
         Ok(())
     }
 

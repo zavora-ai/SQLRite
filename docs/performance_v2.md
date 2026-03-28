@@ -305,6 +305,30 @@ Relative to the Phase 6 `f32` baseline:
 
 Make performance work measurable and defensible.
 
+### Delivered so far
+
+- tenant-filtered synthetic benchmark support now exists in:
+  - `/Users/jameskaranja/Developer/projects/SQLRight/src/bench.rs`
+  - `/Users/jameskaranja/Developer/projects/SQLRight/src/main.rs`
+  - `/Users/jameskaranja/Developer/projects/SQLRight/src/bin/sqlrite-bench.rs`
+- the filtered benchmark suite is reproducible via:
+  - `/Users/jameskaranja/Developer/projects/SQLRight/scripts/run-p8-filtered-benchmark-suite.sh`
+- CI coverage for the filtered suite now exists in:
+  - `/Users/jameskaranja/Developer/projects/SQLRight/.github/workflows/performance-phase8-filtered-benchmarks.yml`
+
+### Initial measured result
+
+On the internal 5k/150 tenant-filtered benchmark with `4` tenants and `f32` storage:
+
+- `brute_force`: `171.31 QPS`, `p95=16.0142 ms`, `top1=1.0`
+- `hnsw_baseline`: `304.08 QPS`, `p95=6.0075 ms`, `top1=1.0`
+
+### Conclusion
+
+- the filtered-workload path is now measured directly instead of inferred from unfiltered results
+- `hnsw_baseline` is already materially better than `brute_force` on this filtered workload
+- the next work is broader comparator discipline and more filtered workload shapes, not blind crossover guessing
+
 ### Required benchmark matrix
 
 | Category | Workloads |
@@ -333,9 +357,9 @@ Make performance work measurable and defensible.
 
 If only three things happen next, they should be:
 
-1. persisted/mmapped vector segment store
-2. real SIMD kernels
-3. ANN graph storage and query-path specialization
+1. expand filtered benchmarks across tenant counts, metadata shapes, and concurrency levels
+2. ANN graph storage and query-path specialization
+3. external comparator/public-dataset benchmark discipline
 
 That is the shortest path to a meaningful leaderboard change.
 

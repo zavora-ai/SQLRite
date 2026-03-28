@@ -34,6 +34,8 @@ pub struct BenchmarkConfig {
     pub alpha: f32,
     pub fusion_strategy: FusionStrategy,
     pub batch_size: usize,
+    pub use_tenant_filters: bool,
+    pub tenant_count: usize,
 }
 
 impl Default for BenchmarkConfig {
@@ -50,6 +52,8 @@ impl Default for BenchmarkConfig {
             alpha: 0.65,
             fusion_strategy: FusionStrategy::Weighted,
             batch_size: 500,
+            use_tenant_filters: false,
+            tenant_count: 1,
         }
     }
 }
@@ -77,6 +81,8 @@ pub struct BenchmarkReport {
     pub query_profile: String,
     pub alpha: f32,
     pub fusion_strategy: String,
+    pub use_tenant_filters: bool,
+    pub tenant_count: usize,
     pub vector_index_mode: String,
     pub vector_storage_kind: String,
     pub sqlite_mmap_size_bytes: i64,
@@ -200,6 +206,8 @@ pub fn run_benchmark(
             },
             alpha: config.alpha,
             fusion_strategy: fusion_label(config.fusion_strategy),
+            use_tenant_filters: config.use_tenant_filters,
+            tenant_count: config.tenant_count,
             vector_index_mode: vector_index_mode_label(runtime_config.vector_index_mode),
             vector_storage_kind,
             sqlite_mmap_size_bytes: runtime_config.sqlite_mmap_size_bytes,
@@ -354,6 +362,11 @@ fn validate_config(config: &BenchmarkConfig) -> Result<()> {
             "batch_size must be at least 1".to_string(),
         ));
     }
+    if config.tenant_count == 0 {
+        return Err(SqlRiteError::InvalidBenchmarkConfig(
+            "tenant_count must be at least 1".to_string(),
+        ));
+    }
     if !(0.0..=1.0).contains(&config.alpha) {
         return Err(SqlRiteError::InvalidBenchmarkConfig(
             "alpha must be between 0.0 and 1.0".to_string(),
@@ -380,7 +393,7 @@ fn ingest_corpus(db: &SqlRite, config: &BenchmarkConfig) -> Result<IngestStats> 
     let mut batch = Vec::with_capacity(config.batch_size);
     let mut stats = IngestStats::default();
     for i in 0..config.corpus_size {
-        let chunk = synthetic_chunk(i, config.embedding_dim);
+        let chunk = synthetic_chunk_with_tenants(i, config.embedding_dim, config.tenant_count);
         stats.embedding_bytes += chunk.embedding.len() * std::mem::size_of::<f32>();
         stats.content_bytes += chunk.content.len();
         batch.push(chunk);
@@ -395,7 +408,11 @@ fn ingest_corpus(db: &SqlRite, config: &BenchmarkConfig) -> Result<IngestStats> 
     Ok(stats)
 }
 
-fn synthetic_chunk(index: usize, embedding_dim: usize) -> ChunkInput {
+fn synthetic_chunk_with_tenants(
+    index: usize,
+    embedding_dim: usize,
+    tenant_count: usize,
+) -> ChunkInput {
     let topic = topic_for(index);
     let words = TOPIC_KEYWORDS[topic];
     ChunkInput {
@@ -407,7 +424,7 @@ fn synthetic_chunk(index: usize, embedding_dim: usize) -> ChunkInput {
         ),
         embedding: topic_embedding(topic, index, embedding_dim),
         metadata: json!({
-            "tenant": "bench",
+            "tenant": tenant_for(index, tenant_count),
             "topic": format!("topic_{topic}"),
         }),
         source: Some(format!("synthetic/{index}.md")),
@@ -424,6 +441,15 @@ fn synthetic_query(config: &BenchmarkConfig, query_index: usize) -> (SearchReque
         query_index as u64 + 1337,
     );
 
+    let metadata_filters = if config.use_tenant_filters {
+        HashMap::from([(
+            "tenant".to_string(),
+            tenant_for(target_index, config.tenant_count),
+        )])
+    } else {
+        HashMap::new()
+    };
+
     (
         SearchRequest {
             query_text: Some(format!("{} {} {}", words[0], words[1], words[2])),
@@ -432,7 +458,7 @@ fn synthetic_query(config: &BenchmarkConfig, query_index: usize) -> (SearchReque
             alpha: config.alpha,
             candidate_limit: config.candidate_limit.min(config.corpus_size),
             query_profile: config.query_profile,
-            metadata_filters: HashMap::new(),
+            metadata_filters,
             doc_id: None,
             fusion_strategy: config.fusion_strategy,
         },
@@ -446,6 +472,14 @@ fn topic_for(index: usize) -> usize {
 
 fn chunk_id(index: usize) -> String {
     format!("chunk-{index:08}")
+}
+
+fn tenant_for(index: usize, tenant_count: usize) -> String {
+    if tenant_count <= 1 {
+        "bench".to_string()
+    } else {
+        format!("bench-{:02}", index % tenant_count)
+    }
 }
 
 fn topic_embedding(topic: usize, index: usize, dim: usize) -> Vec<f32> {
@@ -556,6 +590,8 @@ mod tests {
                 alpha: 0.6,
                 fusion_strategy: FusionStrategy::Weighted,
                 batch_size: 64,
+                use_tenant_filters: false,
+                tenant_count: 1,
             },
             RuntimeConfig::default(),
         )?;
