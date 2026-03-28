@@ -1,13 +1,13 @@
 
-$ python3 /Users/jameskaranja/Developer/projects/SQLRight/scripts/run-p8-competitor-suite.py --output /Users/jameskaranja/Developer/projects/SQLRight/project_plan/reports/p8_competitor_comparison.json --output-md /Users/jameskaranja/Developer/projects/SQLRight/project_plan/reports/P8_competitor_comparison.md
+$ /tmp/sqlrite-p8-venv/bin/python /Users/jameskaranja/Developer/projects/SQLRight/scripts/run-p8-competitor-suite.py --output /Users/jameskaranja/Developer/projects/SQLRight/project_plan/reports/p8_competitor_comparison.json --output-md /Users/jameskaranja/Developer/projects/SQLRight/project_plan/reports/P8_competitor_comparison.md
 initialized SQLRite database
 - path=/tmp/sqlrite_p8_competitor/sqlrite_p8_competitor.db
 - schema_version=3
 - chunk_count=0
 - profile=balanced
 - index_mode=brute_force
-dd38bef0a6b0b736ced14f6fa9b6bb1b8e2c167943588008fc26ab72467c4636
-b88b93b766d96414efe674e5333431d09788789f7513d828e846f54d8f9cfa5c
+2afb7bb0ad0898b7a0abcc8fd3a96e5145e6ea0ab43f0f75f9a03f38638e9928
+fc2b1385461247ce0577035b469c2fcec22043c0b630634443f2d780ebe3327c
 CREATE EXTENSION
 NOTICE:  table "items" does not exist, skipping
 DROP TABLE
@@ -16,7 +16,7 @@ COPY 5000
 CREATE INDEX
 ANALYZE
 {
-  "generated_at_unix": 1774683439,
+  "generated_at_unix": 1774686104,
   "workload": {
     "corpus_size": 5000,
     "query_count": 120,
@@ -33,30 +33,48 @@ ANALYZE
       "results": [
         {
           "system": "SQLRite brute_force",
-          "qps": 178.9281047281574,
-          "p50_ms": 5.5648750021646265,
-          "p95_ms": 5.9314187477866644,
+          "qps": 176.68391047332648,
+          "p50_ms": 5.609562496829312,
+          "p95_ms": 6.4068267533002645,
           "top1_hit_rate": 1.0,
           "recall_at_k": 1.0,
-          "setup_seconds": 0.10987579199718311
+          "setup_seconds": 0.13562950000050478
+        },
+        {
+          "system": "sqlite-vec exact",
+          "qps": 3431.1211666680656,
+          "p50_ms": 0.2881045038520824,
+          "p95_ms": 0.3087706027145032,
+          "top1_hit_rate": 1.0,
+          "recall_at_k": 1.0,
+          "setup_seconds": 0.02835541700187605
+        },
+        {
+          "system": "LanceDB exact",
+          "qps": 1212.0811908855403,
+          "p50_ms": 0.7847920023777988,
+          "p95_ms": 1.0512125008972362,
+          "top1_hit_rate": 1.0,
+          "recall_at_k": 1.0,
+          "setup_seconds": 0.012672125005337875
         },
         {
           "system": "Qdrant exact",
-          "qps": 3014.2597379049002,
-          "p50_ms": 0.3183330009051133,
-          "p95_ms": 0.41112239814538043,
+          "qps": 2641.999536058069,
+          "p50_ms": 0.3286039973318111,
+          "p95_ms": 0.7400250451610176,
           "top1_hit_rate": 1.0,
           "recall_at_k": 1.0,
-          "setup_seconds": 0.1611292079978739
+          "setup_seconds": 0.18977137500041863
         },
         {
           "system": "pgvector exact",
-          "qps": 1558.7763606756787,
-          "p50_ms": 0.47820799954934046,
-          "p95_ms": 1.8615437493281197,
+          "qps": 2018.622099439219,
+          "p50_ms": 0.48108299961313605,
+          "p95_ms": 0.5982517479424132,
           "top1_hit_rate": 1.0,
           "recall_at_k": 1.0,
-          "setup_seconds": 0.2022205000030226
+          "setup_seconds": 0.1940401660031057
         }
       ]
     },
@@ -64,30 +82,39 @@ ANALYZE
       "results": [
         {
           "system": "SQLRite hnsw_baseline",
-          "qps": 510.3832090047557,
-          "p50_ms": 1.8270830005349126,
-          "p95_ms": 2.7932267985306676,
+          "qps": 396.4741130206831,
+          "p50_ms": 1.983978996577207,
+          "p95_ms": 5.319289294857298,
           "top1_hit_rate": 1.0,
           "recall_at_k": 1.0,
-          "setup_seconds": 0.10987579199718311
+          "setup_seconds": 0.13562950000050478
+        },
+        {
+          "system": "LanceDB IVF_FLAT",
+          "qps": 855.8165178492463,
+          "p50_ms": 0.7551874987257179,
+          "p95_ms": 2.2067088491894533,
+          "top1_hit_rate": 1.0,
+          "recall_at_k": 0.9432692307692307,
+          "setup_seconds": 0.03905349999695318
         },
         {
           "system": "Qdrant HNSW",
-          "qps": 2560.0892958242794,
-          "p50_ms": 0.34179149952251464,
-          "p95_ms": 0.694508149535977,
+          "qps": 2431.40486698532,
+          "p50_ms": 0.356167001882568,
+          "p95_ms": 0.6989686957240336,
           "top1_hit_rate": 1.0,
           "recall_at_k": 1.0,
-          "setup_seconds": 0.1611292079978739
+          "setup_seconds": 0.18977137500041863
         },
         {
           "system": "pgvector HNSW",
-          "qps": 1566.6828738950517,
-          "p50_ms": 0.5420005036285147,
-          "p95_ms": 1.3788651460345134,
+          "qps": 1962.0481777992186,
+          "p50_ms": 0.45189549564383924,
+          "p95_ms": 0.6955526005185675,
           "top1_hit_rate": 1.0,
-          "recall_at_k": 0.5701923076923076,
-          "setup_seconds": 0.2022205000030226
+          "recall_at_k": 0.5730769230769229,
+          "setup_seconds": 0.1940401660031057
         }
       ]
     }

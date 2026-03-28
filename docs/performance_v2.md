@@ -10,8 +10,8 @@ The paper exposed the current reality clearly:
 
 | Area | Current state | Main issue |
 |---|---|---|
-| Exact vector retrieval | materially improved, still behind the leaders | exact search now has a persisted/mmapped vector data plane, but filtered exact throughput still trails Qdrant and pgvector in external comparisons |
-| ANN retrieval | improved, but still behind the leaders | `hnsw_baseline` is now real HNSW and clearly ahead of SQLRite exact search on filtered internal workloads, but it still trails Qdrant and pgvector on external comparisons |
+| Exact vector retrieval | materially improved, still behind the leaders | exact search now has a persisted/mmapped vector data plane, but filtered exact throughput still trails sqlite-vec, LanceDB, Qdrant, and pgvector in external comparisons |
+| ANN retrieval | improved, but still behind the leaders | `hnsw_baseline` is now real HNSW and clearly ahead of SQLRite exact search on filtered internal workloads, but it still trails LanceDB, Qdrant, and pgvector on external comparisons |
 | Hybrid retrieval | Stronger quality on public data | Latency is too high because the execution path materializes and scores too much too early |
 | Filtering | Correct | Filters are not yet a first-class vector index primitive |
 | Deployment model | Strong | SQLite is acting as both control plane and hot-path data plane |
@@ -379,13 +379,16 @@ These concurrency runs are reproducible via:
 On the deterministic 5k/120 tenant-filtered external comparison with `8` tenants:
 
 - exact filtered cosine:
-  - `SQLRite brute_force`: `178.93 QPS`, `p95=5.9314 ms`, `top1=1.0`, `recall@10=1.0`
-  - `Qdrant exact`: `3014.26 QPS`, `p95=0.4111 ms`, `top1=1.0`, `recall@10=1.0`
-  - `pgvector exact`: `1558.78 QPS`, `p95=1.8615 ms`, `top1=1.0`, `recall@10=1.0`
+  - `SQLRite brute_force`: `176.68 QPS`, `p95=6.4068 ms`, `top1=1.0`, `recall@10=1.0`
+  - `sqlite-vec exact`: `3431.12 QPS`, `p95=0.3088 ms`, `top1=1.0`, `recall@10=1.0`
+  - `LanceDB exact`: `1212.08 QPS`, `p95=1.0512 ms`, `top1=1.0`, `recall@10=1.0`
+  - `Qdrant exact`: `2642.00 QPS`, `p95=0.7400 ms`, `top1=1.0`, `recall@10=1.0`
+  - `pgvector exact`: `2018.62 QPS`, `p95=0.5983 ms`, `top1=1.0`, `recall@10=1.0`
 - approximate filtered cosine:
-  - `SQLRite hnsw_baseline`: `510.38 QPS`, `p95=2.7932 ms`, `top1=1.0`, `recall@10=1.0`
-  - `Qdrant HNSW`: `2560.09 QPS`, `p95=0.6945 ms`, `top1=1.0`, `recall@10=1.0`
-  - `pgvector HNSW`: `1566.68 QPS`, `p95=1.3789 ms`, `top1=1.0`, `recall@10=0.5702`
+  - `SQLRite hnsw_baseline`: `396.47 QPS`, `p95=5.3193 ms`, `top1=1.0`, `recall@10=1.0`
+  - `LanceDB IVF_FLAT`: `855.82 QPS`, `p95=2.2067 ms`, `top1=1.0`, `recall@10=0.9433`
+  - `Qdrant HNSW`: `2431.40 QPS`, `p95=0.6990 ms`, `top1=1.0`, `recall@10=1.0`
+  - `pgvector HNSW`: `1962.05 QPS`, `p95=0.6956 ms`, `top1=1.0`, `recall@10=0.5731`
 
 These runs are captured in:
 
@@ -399,8 +402,8 @@ These runs are captured in:
 - the current crossover region is clearly at the low-selectivity end of the tenant sweep, around the 50% filter case
 - the engine now exploits that by preferring exact filtered scan before graph build on high-selectivity filtered requests
 - after correcting the concurrency timing model, HNSW also holds the advantage under filtered parallel load
-- the external benchmark discipline is now in place for Qdrant and pgvector, and it confirms that SQLRite has closed meaningful internal gaps without yet matching the service-oriented leaders on raw filtered throughput
-- the next work is runtime analysis of ANN ingest/open cost plus broader comparator coverage, not another blind exact-vs-ANN threshold rewrite
+- the external benchmark discipline is now in place for sqlite-vec, LanceDB, Qdrant, and pgvector, and it confirms that SQLRite has closed meaningful internal gaps without yet matching the leaders on raw filtered throughput
+- the next work is runtime analysis of ANN ingest/open cost plus public-dataset comparator coverage, not another blind exact-vs-ANN threshold rewrite
 
 ### Required benchmark matrix
 
@@ -416,11 +419,10 @@ These runs are captured in:
 ### Comparator set
 
 - completed:
-  - pgvector
-  - Qdrant
-- next:
   - sqlite-vec
   - LanceDB
+  - pgvector
+  - Qdrant
 
 ### Public datasets
 
@@ -434,7 +436,7 @@ If only three things happen next, they should be:
 
 1. expand filtered benchmarks across tenant counts, metadata shapes, and concurrency levels
 2. ANN graph storage and query-path specialization
-3. extend the external comparator suite to sqlite-vec and LanceDB, then separate ingest/open costs from steady-state throughput
+3. separate ingest/open costs from steady-state throughput, then add public-dataset comparator runs on the same engine set
 
 That is the shortest path to a meaningful leaderboard change.
 

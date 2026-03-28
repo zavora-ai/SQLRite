@@ -67,6 +67,28 @@ def ensure_docker_available() -> None:
     )
 
 
+def require_sqlite_vec():
+    try:
+        import sqlite_vec
+    except ImportError as exc:
+        raise RuntimeError(
+            "sqlite-vec is not installed in the selected Python environment; run the suite through "
+            "scripts/run-p8-competitor-suite.sh or install sqlite-vec first"
+        ) from exc
+    return sqlite_vec
+
+
+def require_lancedb():
+    try:
+        import lancedb
+    except ImportError as exc:
+        raise RuntimeError(
+            "lancedb is not installed in the selected Python environment; run the suite through "
+            "scripts/run-p8-competitor-suite.sh or install lancedb first"
+        ) from exc
+    return lancedb
+
+
 def wait_for_http(url: str, timeout_s: float = 60.0) -> None:
     deadline = time.time() + timeout_s
     while time.time() < deadline:
@@ -305,6 +327,93 @@ def sqlrite_query(
         elif chunk_id is not None:
             output.append(int(chunk_id))
     return output
+
+
+class SQLiteVecSession:
+    def __init__(self, connection: sqlite3.Connection, serializer):
+        self.connection = connection
+        self.serializer = serializer
+
+    def query_ids(self, query: QuerySpec, top_k: int) -> list[int]:
+        rows = self.connection.execute(
+            "SELECT rowid FROM vec_items "
+            "WHERE embedding MATCH ? AND k = ? "
+            "AND rowid IN (SELECT id FROM items WHERE tenant = ?) "
+            "ORDER BY distance",
+            (self.serializer(query.vector), top_k, query.tenant),
+        ).fetchall()
+        return [int(row[0]) for row in rows]
+
+    def close(self) -> None:
+        self.connection.close()
+
+
+def setup_sqlite_vec(db_path: Path, records: list[dict], embedding_dim: int) -> tuple[SQLiteVecSession, float]:
+    sqlite_vec = require_sqlite_vec()
+    if db_path.exists():
+        db_path.unlink()
+
+    started = time.perf_counter()
+    connection = sqlite3.connect(db_path)
+    connection.enable_load_extension(True)
+    sqlite_vec.load(connection)
+    connection.execute("CREATE TABLE items (id INTEGER PRIMARY KEY, tenant TEXT NOT NULL)")
+    connection.execute("CREATE INDEX idx_items_tenant ON items(tenant)")
+    connection.execute(f"CREATE VIRTUAL TABLE vec_items USING vec0(embedding float[{embedding_dim}])")
+    connection.executemany(
+        "INSERT INTO items (id, tenant) VALUES (?, ?)",
+        [(record["id"], record["tenant"]) for record in records],
+    )
+    connection.executemany(
+        "INSERT INTO vec_items (rowid, embedding) VALUES (?, ?)",
+        [
+            (record["id"], sqlite_vec.serialize_float32(record["embedding"]))
+            for record in records
+        ],
+    )
+    connection.commit()
+    return SQLiteVecSession(connection, sqlite_vec.serialize_float32), time.perf_counter() - started
+
+
+class LanceDBSession:
+    def __init__(self, table):
+        self.table = table
+
+    def query_ids(self, query: QuerySpec, top_k: int) -> list[int]:
+        rows = (
+            self.table.search(query.vector)
+            .where(f"tenant = {sql_quote(query.tenant)}", prefilter=True)
+            .select(["id", "_distance"])
+            .limit(top_k)
+            .to_list()
+        )
+        return [int(row["id"]) for row in rows]
+
+    def close(self) -> None:
+        return None
+
+
+def setup_lancedb(base_dir: Path, records: list[dict], *, indexed: bool) -> tuple[LanceDBSession, float]:
+    lancedb = require_lancedb()
+    shutil.rmtree(base_dir, ignore_errors=True)
+
+    started = time.perf_counter()
+    db = lancedb.connect(base_dir)
+    table = db.create_table(
+        "items",
+        [
+            {"id": record["id"], "tenant": record["tenant"], "vector": record["embedding"]}
+            for record in records
+        ],
+    )
+    table.create_scalar_index("tenant")
+    if indexed:
+        table.create_index(
+            metric="cosine",
+            index_type="IVF_FLAT",
+            num_partitions=max(2, min(64, len(records) // 200)),
+        )
+    return LanceDBSession(table), time.perf_counter() - started
 
 
 def docker_rm(name: str) -> None:
@@ -690,11 +799,26 @@ def main() -> int:
     shutil.rmtree(temp_dir, ignore_errors=True)
     temp_dir.mkdir(parents=True, exist_ok=True)
     db_path = temp_dir / "sqlrite_p8_competitor.db"
+    sqlite_vec_path = temp_dir / "sqlite_vec.db"
+    lancedb_exact_dir = temp_dir / "lancedb_exact"
+    lancedb_indexed_dir = temp_dir / "lancedb_indexed"
 
     sqlrite_process = None
+    sqlite_vec_session = None
+    lancedb_exact_session = None
+    lancedb_indexed_session = None
     try:
         init_sqlrite_db(sqlrite_cmd, db_path)
         sqlrite_setup_seconds = populate_sqlrite_db(db_path, records)
+        sqlite_vec_session, sqlite_vec_setup_seconds = setup_sqlite_vec(
+            sqlite_vec_path, records, args.embedding_dim
+        )
+        lancedb_exact_session, lancedb_exact_setup_seconds = setup_lancedb(
+            lancedb_exact_dir, records, indexed=False
+        )
+        lancedb_indexed_session, lancedb_indexed_setup_seconds = setup_lancedb(
+            lancedb_indexed_dir, records, indexed=True
+        )
 
         start_qdrant()
         atexit.register(lambda: docker_rm(QDRANT_CONTAINER))
@@ -743,6 +867,20 @@ def main() -> int:
                 args.top_k,
             ),
             benchmark(
+                "sqlite-vec exact",
+                lambda query: sqlite_vec_session.query_ids(query, args.top_k),
+                queries,
+                args.warmup,
+                args.top_k,
+            ),
+            benchmark(
+                "LanceDB exact",
+                lambda query: lancedb_exact_session.query_ids(query, args.top_k),
+                queries,
+                args.warmup,
+                args.top_k,
+            ),
+            benchmark(
                 "Qdrant exact",
                 lambda query: qdrant_query(qdrant_client, query, args.top_k, True),
                 queries,
@@ -763,8 +901,10 @@ def main() -> int:
         stop_process(sqlrite_process)
         sqlrite_process = None
         exact_results[0]["setup_seconds"] = sqlrite_setup_seconds
-        exact_results[1]["setup_seconds"] = qdrant_setup_seconds
-        exact_results[2]["setup_seconds"] = pg_setup_seconds
+        exact_results[1]["setup_seconds"] = sqlite_vec_setup_seconds
+        exact_results[2]["setup_seconds"] = lancedb_exact_setup_seconds
+        exact_results[3]["setup_seconds"] = qdrant_setup_seconds
+        exact_results[4]["setup_seconds"] = pg_setup_seconds
         report["scenarios"]["exact_filtered_cosine"] = {"results": exact_results}
 
         pg_create_hnsw_index()
@@ -792,6 +932,13 @@ def main() -> int:
                 args.top_k,
             ),
             benchmark(
+                "LanceDB IVF_FLAT",
+                lambda query: lancedb_indexed_session.query_ids(query, args.top_k),
+                queries,
+                args.warmup,
+                args.top_k,
+            ),
+            benchmark(
                 "Qdrant HNSW",
                 lambda query: qdrant_query(qdrant_client, query, args.top_k, False),
                 queries,
@@ -812,8 +959,9 @@ def main() -> int:
         stop_process(sqlrite_process)
         sqlrite_process = None
         approx_results[0]["setup_seconds"] = sqlrite_setup_seconds
-        approx_results[1]["setup_seconds"] = qdrant_setup_seconds
-        approx_results[2]["setup_seconds"] = pg_setup_seconds
+        approx_results[1]["setup_seconds"] = lancedb_indexed_setup_seconds
+        approx_results[2]["setup_seconds"] = qdrant_setup_seconds
+        approx_results[3]["setup_seconds"] = pg_setup_seconds
         report["scenarios"]["approx_filtered_cosine"] = {"results": approx_results}
 
         args.output.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
@@ -821,6 +969,12 @@ def main() -> int:
         print(json.dumps(report, indent=2))
         return 0
     finally:
+        if sqlite_vec_session is not None:
+            sqlite_vec_session.close()
+        if lancedb_exact_session is not None:
+            lancedb_exact_session.close()
+        if lancedb_indexed_session is not None:
+            lancedb_indexed_session.close()
         stop_process(sqlrite_process)
         docker_rm(QDRANT_CONTAINER)
         docker_rm(PG_CONTAINER)
