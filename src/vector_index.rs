@@ -1635,6 +1635,12 @@ impl HnswBaselineVectorIndex {
             .max(HNSW_FILTER_EXACT_CROSSOVER_MIN)
     }
 
+    fn should_prefer_filtered_exact_scan(&self, allowed_count: usize) -> bool {
+        self.should_prefer_exact_scan()
+            || allowed_count <= self.filtered_exact_crossover_limit()
+            || allowed_count.saturating_mul(2) >= self.chunk_ids.len()
+    }
+
     fn should_prefer_exact_scan(&self) -> bool {
         self.chunk_ids.len() <= self.exact_crossover_limit()
     }
@@ -1684,7 +1690,6 @@ impl HnswBaselineVectorIndex {
             return Ok(Vec::new());
         }
         self.validate_dimension(query_embedding)?;
-        self.ensure_graph()?;
 
         let mut allowed_positions = allowed_ids
             .iter()
@@ -1696,12 +1701,11 @@ impl HnswBaselineVectorIndex {
         allowed_positions.sort_unstable();
 
         let query_normalized = normalize_embedding(query_embedding);
-        if self.should_prefer_exact_scan()
-            || allowed_positions.len() <= self.filtered_exact_crossover_limit()
-        {
+        if self.should_prefer_filtered_exact_scan(allowed_positions.len()) {
             return Ok(self.exact_scan_positions(&query_normalized, &allowed_positions, limit));
         }
 
+        self.ensure_graph()?;
         let ef_search = self.ef_search.max(limit);
         let graph = self.graph.borrow();
         let Some(graph) = graph.as_ref() else {
@@ -2300,6 +2304,43 @@ mod tests {
         let found = index.query_filtered(&[1.0, 0.0, 0.0], 1, &allowed)?;
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].chunk_id, "beta-top");
+        Ok(())
+    }
+
+    #[test]
+    fn hnsw_baseline_high_selectivity_filter_prefers_exact_scan_without_graph() -> Result<()> {
+        let mut index =
+            HnswBaselineVectorIndex::new_with_options(VectorStorageKind::F32, Default::default());
+        let total = 2_050usize;
+        let mut allowed = HashSet::new();
+        for idx in 0..total {
+            let tenant = if idx % 2 == 0 { "tenant-a" } else { "tenant-b" };
+            let chunk_id = format!("{tenant}-{idx}");
+            if idx % 2 == 0 {
+                allowed.insert(chunk_id.clone());
+            }
+            let embedding = if idx % 4 == 0 {
+                [1.0, 0.0, 0.0]
+            } else if idx % 4 == 2 {
+                [0.92, 0.08, 0.0]
+            } else {
+                [0.0, 1.0, 0.0]
+            };
+            index.upsert(&chunk_id, &embedding)?;
+        }
+
+        let found = index.query_filtered(&[1.0, 0.0, 0.0], 10, &allowed)?;
+        assert_eq!(found.len(), 10);
+        assert!(
+            found
+                .iter()
+                .all(|candidate| candidate.chunk_id.starts_with("tenant-a-")),
+            "filtered exact fallback should only return allowed ids"
+        );
+        assert!(
+            !index.graph_ready(),
+            "large high-selectivity filtered HNSW queries should use exact fallback without building the graph"
+        );
         Ok(())
     }
 

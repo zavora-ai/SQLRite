@@ -22,9 +22,10 @@ run_and_log() {
 }
 
 run_and_log "$QUALITY_LOG" cargo fmt --all --check
-run_and_log "$QUALITY_LOG" cargo test benchmark_args_parse_tenant_filter_flags -- --nocapture
-run_and_log "$QUALITY_LOG" cargo test filtered_chunk_ids_uses_in_memory_doc_and_metadata_index -- --nocapture
-run_and_log "$QUALITY_LOG" cargo test hnsw_vector_search_applies_metadata_filter -- --nocapture
+run_and_log "$QUALITY_LOG" env RUSTC_WRAPPER= cargo test benchmark_args_parse_tenant_filter_flags -- --nocapture
+run_and_log "$QUALITY_LOG" env RUSTC_WRAPPER= cargo test benchmark_args_parse_filter_mode -- --nocapture
+run_and_log "$QUALITY_LOG" env RUSTC_WRAPPER= cargo test filtered_chunk_ids_uses_in_memory_doc_and_metadata_index -- --nocapture
+run_and_log "$QUALITY_LOG" env RUSTC_WRAPPER= cargo test hnsw_vector_search_applies_metadata_filter -- --nocapture
 
 run_and_log "$SUITE_LOG" env RUSTC_WRAPPER= cargo run --bin sqlrite-bench -- --corpus 5000 --queries 150 --warmup 30 --embedding-dim 64 --candidate-limit 200 --top-k 10 --tenant-filters --tenant-count 4 --index-mode brute_force --storage-kind f32 --output "$BRUTE_JSON"
 run_and_log "$SUITE_LOG" env RUSTC_WRAPPER= cargo run --bin sqlrite-bench -- --corpus 5000 --queries 150 --warmup 30 --embedding-dim 64 --candidate-limit 200 --top-k 10 --tenant-filters --tenant-count 4 --index-mode hnsw_baseline --storage-kind f32 --output "$HNSW_JSON"
@@ -43,6 +44,7 @@ summary = {
     "suite": "p8_filtered_benchmark",
     "tenant_filters": brute.get("use_tenant_filters", False) and hnsw.get("use_tenant_filters", False),
     "tenant_count": brute.get("tenant_count", 0),
+    "filter_mode": brute.get("filter_mode", "unknown"),
     "brute_force": {
         "qps": brute["qps"],
         "p95_ms": brute["latency"]["p95_ms"],
@@ -61,7 +63,7 @@ summary = {
 summary_json.write_text(json.dumps(summary, indent=2) + "\n")
 summary_md.write_text(
     "# P8 Filtered Benchmark Report\n\n"
-    f"Tenant filters enabled: `{summary['tenant_filters']}` with `{summary['tenant_count']}` tenants.\n\n"
+    f"Tenant filters enabled: `{summary['tenant_filters']}` with `{summary['tenant_count']}` tenants and filter mode `{summary['filter_mode']}`.\n\n"
     "| Mode | QPS | p95 ms | Top1 hit rate |\n"
     "|---|---:|---:|---:|\n"
     f"| brute_force | {summary['brute_force']['qps']:.2f} | {summary['brute_force']['p95_ms']:.4f} | {summary['brute_force']['top1_hit_rate']:.4f} |\n"

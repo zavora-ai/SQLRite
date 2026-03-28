@@ -1,16 +1,16 @@
 
 $ env RUSTC_WRAPPER= cargo run --bin sqlrite-bench -- --corpus 5000 --queries 150 --warmup 30 --embedding-dim 64 --candidate-limit 200 --top-k 10 --tenant-filters --tenant-count 4 --index-mode brute_force --storage-kind f32 --output /Users/jameskaranja/Developer/projects/SQLRight/project_plan/reports/p8_filtered_benchmark_bruteforce_f32.json
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.20s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.09s
      Running `target/debug/sqlrite-bench --corpus 5000 --queries 150 --warmup 30 --embedding-dim 64 --candidate-limit 200 --top-k 10 --tenant-filters --tenant-count 4 --index-mode brute_force --storage-kind f32 --output /Users/jameskaranja/Developer/projects/SQLRight/project_plan/reports/p8_filtered_benchmark_bruteforce_f32.json`
-SQLRite benchmark: corpus=5000, queries=150, concurrency=1, index=brute_force, fusion=weighted, query_profile=balanced, tenant_filters=true, tenant_count=4
-ingest_ms=296.58, query_ms=875.60, qps=171.31, top1_hit_rate=1.0000
-ingest_chunks_per_sec=16858.89, dataset_payload_bytes=1539515, index_estimated_bytes=1550000, approx_working_set_bytes=3089515
-latency_ms: avg=5.8026, p50=4.7117, p95=16.0142, p99=22.3186, min=2.9975, max=24.5319
+SQLRite benchmark: corpus=5000, queries=150, concurrency=1, index=brute_force, fusion=weighted, query_profile=balanced, tenant_filters=true, tenant_count=4, filter_mode=tenant
+ingest_ms=206.94, query_ms=413.46, qps=362.79, top1_hit_rate=1.0000
+ingest_chunks_per_sec=24161.73, dataset_payload_bytes=1539515, index_estimated_bytes=1550000, approx_working_set_bytes=3089515
+latency_ms: avg=2.7486, p50=2.6082, p95=3.4637, p99=3.7312, min=2.5231, max=5.3605
 
 $ env RUSTC_WRAPPER= cargo run --bin sqlrite-bench -- --corpus 5000 --queries 150 --warmup 30 --embedding-dim 64 --candidate-limit 200 --top-k 10 --tenant-filters --tenant-count 4 --index-mode hnsw_baseline --storage-kind f32 --output /Users/jameskaranja/Developer/projects/SQLRight/project_plan/reports/p8_filtered_benchmark_hnsw_f32.json
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.19s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.12s
      Running `target/debug/sqlrite-bench --corpus 5000 --queries 150 --warmup 30 --embedding-dim 64 --candidate-limit 200 --top-k 10 --tenant-filters --tenant-count 4 --index-mode hnsw_baseline --storage-kind f32 --output /Users/jameskaranja/Developer/projects/SQLRight/project_plan/reports/p8_filtered_benchmark_hnsw_f32.json`
-SQLRite benchmark: corpus=5000, queries=150, concurrency=1, index=hnsw_baseline, fusion=weighted, query_profile=balanced, tenant_filters=true, tenant_count=4
-ingest_ms=286.91, query_ms=493.29, qps=304.08, top1_hit_rate=1.0000
-ingest_chunks_per_sec=17427.06, dataset_payload_bytes=1539515, index_estimated_bytes=2830000, approx_working_set_bytes=4369515
-latency_ms: avg=3.2762, p50=2.7310, p95=6.0075, p99=8.2017, min=2.3355, max=8.9113
+SQLRite benchmark: corpus=5000, queries=150, concurrency=1, index=hnsw_baseline, fusion=weighted, query_profile=balanced, tenant_filters=true, tenant_count=4, filter_mode=tenant
+ingest_ms=195.44, query_ms=343.85, qps=436.23, top1_hit_rate=1.0000
+ingest_chunks_per_sec=25582.77, dataset_payload_bytes=1539515, index_estimated_bytes=2830000, approx_working_set_bytes=4369515
+latency_ms: avg=2.2839, p50=2.2265, p95=2.7437, p99=2.9178, min=2.1277, max=3.0428

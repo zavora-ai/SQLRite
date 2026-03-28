@@ -124,6 +124,7 @@ Make metadata and tenant filters prune before vector scoring.
 - allow-list planning for `doc_id` and metadata filters
 - filtered vector query path for brute force, LSH, and HNSW modes
 - end-to-end filtered HNSW validation
+- selectivity-aware filtered exact fallback for `hnsw_baseline`, so high-selectivity filters can stay on the cheaper exact path without building the ANN graph first
 
 ## Phase 4: SIMD Vector Kernels
 
@@ -320,14 +321,34 @@ Make performance work measurable and defensible.
 
 On the internal 5k/150 tenant-filtered benchmark with `4` tenants and `f32` storage:
 
-- `brute_force`: `171.31 QPS`, `p95=16.0142 ms`, `top1=1.0`
-- `hnsw_baseline`: `304.08 QPS`, `p95=6.0075 ms`, `top1=1.0`
+- `brute_force`: `362.79 QPS`, `p95=3.4637 ms`, `top1=1.0`
+- `hnsw_baseline`: `436.23 QPS`, `p95=2.7437 ms`, `top1=1.0`
+
+### Filtered sweep result
+
+On the internal 5k/100 filtered sweep:
+
+- tenant-count sweep:
+  - `2` tenants: `brute_force` leads by `+14.16 QPS`; this is the current low-selectivity crossover region where exact filtered scan is still cheaper
+  - `4` tenants: `hnsw_baseline` leads by `+42.67 QPS`, but p95 is still slightly worse
+  - `8` tenants: `hnsw_baseline` leads by `+170.09 QPS` and improves p95 by `0.6643 ms`
+  - `16` tenants: `hnsw_baseline` leads by `+262.77 QPS` and improves p95 by `0.6995 ms`
+- filter-mode sweep at `8` tenants:
+  - `tenant`: `hnsw_baseline` leads by `+170.09 QPS`
+  - `topic`: `hnsw_baseline` leads by `+153.54 QPS`
+  - `tenant_and_topic`: `hnsw_baseline` leads by `+136.61 QPS`
+
+These sweeps are reproducible via:
+
+- `/Users/jameskaranja/Developer/projects/SQLRight/scripts/run-p8-filtered-sweep-suite.sh`
 
 ### Conclusion
 
 - the filtered-workload path is now measured directly instead of inferred from unfiltered results
-- `hnsw_baseline` is already materially better than `brute_force` on this filtered workload
-- the next work is broader comparator discipline and more filtered workload shapes, not blind crossover guessing
+- `hnsw_baseline` is already materially better than `brute_force` on mid-to-high selectivity filtered workloads
+- the current crossover region is clearly at the low-selectivity end of the tenant sweep, around the 50% filter case
+- the engine now exploits that by preferring exact filtered scan before graph build on high-selectivity filtered requests
+- the next work is broader comparator discipline and concurrency sweeps, not another blind exact-vs-ANN threshold rewrite
 
 ### Required benchmark matrix
 

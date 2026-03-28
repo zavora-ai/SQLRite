@@ -1,0 +1,98 @@
+{
+  "suite": "p8_filtered_sweep",
+  "tenant_count_sweep": [
+    {
+      "tenant_count": 2,
+      "brute_force": {
+        "qps": 302.0627867708582,
+        "p95_ms": 3.557833
+      },
+      "hnsw_baseline": {
+        "qps": 287.9027579644699,
+        "p95_ms": 3.812834
+      },
+      "delta_qps": -14.160028806388311,
+      "delta_p95_ms": -0.25500100000000003
+    },
+    {
+      "tenant_count": 4,
+      "brute_force": {
+        "qps": 354.1051408984356,
+        "p95_ms": 3.161167
+      },
+      "hnsw_baseline": {
+        "qps": 396.77927753246746,
+        "p95_ms": 3.286958
+      },
+      "delta_qps": 42.67413663403187,
+      "delta_p95_ms": -0.125791
+    },
+    {
+      "tenant_count": 8,
+      "brute_force": {
+        "qps": 429.41561365906654,
+        "p95_ms": 2.57675
+      },
+      "hnsw_baseline": {
+        "qps": 599.5075057830143,
+        "p95_ms": 1.912417
+      },
+      "delta_qps": 170.09189212394773,
+      "delta_p95_ms": 0.6643330000000001
+    },
+    {
+      "tenant_count": 16,
+      "brute_force": {
+        "qps": 467.2922657139338,
+        "p95_ms": 2.2260829999999996
+      },
+      "hnsw_baseline": {
+        "qps": 730.0628949183972,
+        "p95_ms": 1.526625
+      },
+      "delta_qps": 262.77062920446343,
+      "delta_p95_ms": 0.6994579999999997
+    }
+  ],
+  "filter_mode_sweep": [
+    {
+      "filter_mode": "tenant",
+      "brute_force": {
+        "qps": 429.41561365906654,
+        "p95_ms": 2.57675
+      },
+      "hnsw_baseline": {
+        "qps": 599.5075057830143,
+        "p95_ms": 1.912417
+      },
+      "delta_qps": 170.09189212394773,
+      "delta_p95_ms": 0.6643330000000001
+    },
+    {
+      "filter_mode": "tenant_and_topic",
+      "brute_force": {
+        "qps": 395.9103129798507,
+        "p95_ms": 2.788916
+      },
+      "hnsw_baseline": {
+        "qps": 532.5217701556162,
+        "p95_ms": 2.0170000000000003
+      },
+      "delta_qps": 136.6114571757655,
+      "delta_p95_ms": 0.7719159999999996
+    },
+    {
+      "filter_mode": "topic",
+      "brute_force": {
+        "qps": 433.18828745508375,
+        "p95_ms": 2.4635830000000003
+      },
+      "hnsw_baseline": {
+        "qps": 586.7306475315496,
+        "p95_ms": 1.900625
+      },
+      "delta_qps": 153.54236007646585,
+      "delta_p95_ms": 0.5629580000000003
+    }
+  ]
+}

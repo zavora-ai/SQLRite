@@ -16,7 +16,9 @@ mod sql_semantics;
 mod vector_index;
 
 pub use adapter::{SqlRiteToolAdapter, ToolRequest, ToolResponse, ToolSpec};
-pub use bench::{BenchmarkConfig, BenchmarkLatency, BenchmarkReport, run_benchmark};
+pub use bench::{
+    BenchmarkConfig, BenchmarkFilterMode, BenchmarkLatency, BenchmarkReport, run_benchmark,
+};
 pub use error::{Result, SqlRiteError};
 pub use eval::{
     EvalDataset, EvalMetricsAtK, EvalQuery, EvalReport, EvalSummary, QueryEvalResult,

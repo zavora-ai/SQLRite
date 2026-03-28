@@ -2,18 +2,19 @@
   "suite": "p8_filtered_benchmark",
   "tenant_filters": true,
   "tenant_count": 4,
+  "filter_mode": "tenant",
   "brute_force": {
-    "qps": 171.31156562924664,
-    "p95_ms": 16.014166,
+    "qps": 362.7899276823265,
+    "p95_ms": 3.4637499999999997,
     "top1_hit_rate": 1.0
   },
   "hnsw_baseline": {
-    "qps": 304.0815085050625,
-    "p95_ms": 6.007499999999999,
+    "qps": 436.2306516874134,
+    "p95_ms": 2.743709,
     "top1_hit_rate": 1.0
   },
   "delta_hnsw_vs_bruteforce": {
-    "qps": 132.76994287581587,
-    "p95_ms": 10.006666
+    "qps": 73.4407240050869,
+    "p95_ms": 0.7200409999999997
   }
 }

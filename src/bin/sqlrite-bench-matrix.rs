@@ -1,6 +1,6 @@
 use sqlrite::{
-    BenchmarkConfig, BenchmarkReport, DurabilityProfile, FusionStrategy, QueryProfile,
-    RuntimeConfig, VectorIndexMode, run_benchmark,
+    BenchmarkConfig, BenchmarkFilterMode, BenchmarkReport, DurabilityProfile, FusionStrategy,
+    QueryProfile, RuntimeConfig, VectorIndexMode, run_benchmark,
 };
 use std::fs;
 use std::path::PathBuf;
@@ -204,6 +204,7 @@ fn profile_to_config(profile: &str) -> Result<BenchmarkConfig, String> {
             batch_size: 256,
             use_tenant_filters: false,
             tenant_count: 1,
+            filter_mode: BenchmarkFilterMode::None,
         },
         "10k" => BenchmarkConfig {
             corpus_size: 10_000,
@@ -219,6 +220,7 @@ fn profile_to_config(profile: &str) -> Result<BenchmarkConfig, String> {
             batch_size: 500,
             use_tenant_filters: false,
             tenant_count: 1,
+            filter_mode: BenchmarkFilterMode::None,
         },
         "100k" => BenchmarkConfig {
             corpus_size: 100_000,
@@ -234,6 +236,7 @@ fn profile_to_config(profile: &str) -> Result<BenchmarkConfig, String> {
             batch_size: 1000,
             use_tenant_filters: false,
             tenant_count: 1,
+            filter_mode: BenchmarkFilterMode::None,
         },
         "1m" => BenchmarkConfig {
             corpus_size: 1_000_000,
@@ -249,6 +252,7 @@ fn profile_to_config(profile: &str) -> Result<BenchmarkConfig, String> {
             batch_size: 2000,
             use_tenant_filters: false,
             tenant_count: 1,
+            filter_mode: BenchmarkFilterMode::None,
         },
         "10m" => BenchmarkConfig {
             corpus_size: 10_000_000,
@@ -264,6 +268,7 @@ fn profile_to_config(profile: &str) -> Result<BenchmarkConfig, String> {
             batch_size: 4000,
             use_tenant_filters: false,
             tenant_count: 1,
+            filter_mode: BenchmarkFilterMode::None,
         },
         other => {
             return Err(format!(

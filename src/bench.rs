@@ -21,6 +21,16 @@ const TOPIC_KEYWORDS: &[&[&str]] = &[
     &["security", "audit", "compliance", "governance"],
 ];
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum BenchmarkFilterMode {
+    #[default]
+    None,
+    Tenant,
+    Topic,
+    TenantAndTopic,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BenchmarkConfig {
     pub corpus_size: usize,
@@ -36,6 +46,7 @@ pub struct BenchmarkConfig {
     pub batch_size: usize,
     pub use_tenant_filters: bool,
     pub tenant_count: usize,
+    pub filter_mode: BenchmarkFilterMode,
 }
 
 impl Default for BenchmarkConfig {
@@ -54,6 +65,7 @@ impl Default for BenchmarkConfig {
             batch_size: 500,
             use_tenant_filters: false,
             tenant_count: 1,
+            filter_mode: BenchmarkFilterMode::None,
         }
     }
 }
@@ -83,6 +95,7 @@ pub struct BenchmarkReport {
     pub fusion_strategy: String,
     pub use_tenant_filters: bool,
     pub tenant_count: usize,
+    pub filter_mode: String,
     pub vector_index_mode: String,
     pub vector_storage_kind: String,
     pub sqlite_mmap_size_bytes: i64,
@@ -208,6 +221,7 @@ pub fn run_benchmark(
             fusion_strategy: fusion_label(config.fusion_strategy),
             use_tenant_filters: config.use_tenant_filters,
             tenant_count: config.tenant_count,
+            filter_mode: benchmark_filter_mode_label(config.filter_mode),
             vector_index_mode: vector_index_mode_label(runtime_config.vector_index_mode),
             vector_storage_kind,
             sqlite_mmap_size_bytes: runtime_config.sqlite_mmap_size_bytes,
@@ -441,14 +455,7 @@ fn synthetic_query(config: &BenchmarkConfig, query_index: usize) -> (SearchReque
         query_index as u64 + 1337,
     );
 
-    let metadata_filters = if config.use_tenant_filters {
-        HashMap::from([(
-            "tenant".to_string(),
-            tenant_for(target_index, config.tenant_count),
-        )])
-    } else {
-        HashMap::new()
-    };
+    let metadata_filters = synthetic_metadata_filters(config, target_index, topic);
 
     (
         SearchRequest {
@@ -480,6 +487,42 @@ fn tenant_for(index: usize, tenant_count: usize) -> String {
     } else {
         format!("bench-{:02}", index % tenant_count)
     }
+}
+
+fn synthetic_metadata_filters(
+    config: &BenchmarkConfig,
+    target_index: usize,
+    topic: usize,
+) -> HashMap<String, String> {
+    let mut filters = HashMap::new();
+    let filter_mode =
+        if config.use_tenant_filters && config.filter_mode == BenchmarkFilterMode::None {
+            BenchmarkFilterMode::Tenant
+        } else {
+            config.filter_mode
+        };
+
+    match filter_mode {
+        BenchmarkFilterMode::None => {}
+        BenchmarkFilterMode::Tenant => {
+            filters.insert(
+                "tenant".to_string(),
+                tenant_for(target_index, config.tenant_count),
+            );
+        }
+        BenchmarkFilterMode::Topic => {
+            filters.insert("topic".to_string(), format!("topic_{topic}"));
+        }
+        BenchmarkFilterMode::TenantAndTopic => {
+            filters.insert(
+                "tenant".to_string(),
+                tenant_for(target_index, config.tenant_count),
+            );
+            filters.insert("topic".to_string(), format!("topic_{topic}"));
+        }
+    }
+
+    filters
 }
 
 fn topic_embedding(topic: usize, index: usize, dim: usize) -> Vec<f32> {
@@ -571,6 +614,15 @@ fn vector_index_mode_label(mode: crate::VectorIndexMode) -> String {
     }
 }
 
+fn benchmark_filter_mode_label(mode: BenchmarkFilterMode) -> String {
+    match mode {
+        BenchmarkFilterMode::None => "none".to_string(),
+        BenchmarkFilterMode::Tenant => "tenant".to_string(),
+        BenchmarkFilterMode::Topic => "topic".to_string(),
+        BenchmarkFilterMode::TenantAndTopic => "tenant_and_topic".to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -592,6 +644,7 @@ mod tests {
                 batch_size: 64,
                 use_tenant_filters: false,
                 tenant_count: 1,
+                filter_mode: BenchmarkFilterMode::None,
             },
             RuntimeConfig::default(),
         )?;

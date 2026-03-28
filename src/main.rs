@@ -5,12 +5,12 @@ use rusqlite::types::ValueRef;
 use serde::Serialize;
 use serde_json::{Map, Value, json};
 use sqlrite::{
-    ApiFirstSourceKind, ApiJsonlMigrationConfig, BenchmarkConfig, ChunkInput, CompactionOptions,
-    DurabilityProfile, FailoverMode, FusionStrategy, GrpcServerConfig, HaRuntimeProfile,
-    McpServerConfig, MigrationEmbeddingFormat, PgvectorJsonlMigrationConfig, QueryProfile,
-    RbacPolicy, RecoveryConfig, ReplicationConfig, RuntimeConfig, SearchRequest, ServerConfig,
-    ServerRole, ServerSecurityConfig, SqlRite, SqliteMigrationConfig, VectorIndexMode,
-    VectorStorageKind, backup_file, build_health_report, create_backup_snapshot,
+    ApiFirstSourceKind, ApiJsonlMigrationConfig, BenchmarkConfig, BenchmarkFilterMode, ChunkInput,
+    CompactionOptions, DurabilityProfile, FailoverMode, FusionStrategy, GrpcServerConfig,
+    HaRuntimeProfile, McpServerConfig, MigrationEmbeddingFormat, PgvectorJsonlMigrationConfig,
+    QueryProfile, RbacPolicy, RecoveryConfig, ReplicationConfig, RuntimeConfig, SearchRequest,
+    ServerConfig, ServerRole, ServerSecurityConfig, SqlRite, SqliteMigrationConfig,
+    VectorIndexMode, VectorStorageKind, backup_file, build_health_report, create_backup_snapshot,
     list_backup_snapshots, mcp_tools_manifest_document, migrate_api_jsonl, migrate_pgvector_jsonl,
     migrate_sqlite, prune_backup_snapshots, restore_backup_file, restore_backup_file_verified,
     run_benchmark, run_grpc_server, run_stdio_mcp_server, select_backup_snapshot_for_time,
@@ -2455,7 +2455,7 @@ fn cmd_benchmark(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     let report = run_benchmark(args.config, runtime)?;
 
     println!(
-        "SQLRite benchmark: corpus={}, queries={}, concurrency={}, index={}, fusion={}, query_profile={}, tenant_filters={}, tenant_count={}",
+        "SQLRite benchmark: corpus={}, queries={}, concurrency={}, index={}, fusion={}, query_profile={}, tenant_filters={}, tenant_count={}, filter_mode={}",
         report.corpus_size,
         report.query_count,
         report.concurrency,
@@ -2463,7 +2463,8 @@ fn cmd_benchmark(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         report.fusion_strategy,
         report.query_profile,
         report.use_tenant_filters,
-        report.tenant_count
+        report.tenant_count,
+        report.filter_mode
     );
     println!(
         "runtime: storage={}, mmap_size_bytes={}, cache_size_kib={}",
@@ -2540,10 +2541,19 @@ fn parse_benchmark_args(args: &[String]) -> Result<BenchmarkArgs, String> {
             }
             "--tenant-filters" => {
                 config.use_tenant_filters = true;
+                config.filter_mode = BenchmarkFilterMode::Tenant;
             }
             "--tenant-count" => {
                 i += 1;
                 config.tenant_count = parse_usize(args, i, "--tenant-count")?;
+            }
+            "--filter-mode" => {
+                i += 1;
+                config.filter_mode = parse_benchmark_filter_mode(&parse_string(args, i, "--filter-mode")?)?;
+                config.use_tenant_filters = matches!(
+                    config.filter_mode,
+                    BenchmarkFilterMode::Tenant | BenchmarkFilterMode::TenantAndTopic
+                );
             }
             "--alpha" => {
                 i += 1;
@@ -2574,11 +2584,11 @@ fn parse_benchmark_args(args: &[String]) -> Result<BenchmarkArgs, String> {
                 output_path = Some(PathBuf::from(parse_string(args, i, "--output")?));
             }
             "--help" | "-h" => {
-                return Err("usage: sqlrite benchmark [--corpus N] [--queries N] [--warmup N] [--concurrency N] [--embedding-dim N] [--top-k N] [--candidate-limit N] [--query-profile balanced|latency|recall] [--batch-size N] [--tenant-filters] [--tenant-count N] [--alpha F] [--fusion weighted|rrf] [--rrf-k F] [--profile balanced|durable|fast_unsafe] [--durability balanced|durable|fast_unsafe] [--index-mode brute_force|lsh_ann|hnsw_baseline|disabled] [--output PATH]".to_string())
+                return Err("usage: sqlrite benchmark [--corpus N] [--queries N] [--warmup N] [--concurrency N] [--embedding-dim N] [--top-k N] [--candidate-limit N] [--query-profile balanced|latency|recall] [--batch-size N] [--tenant-filters] [--tenant-count N] [--filter-mode none|tenant|topic|tenant_and_topic] [--alpha F] [--fusion weighted|rrf] [--rrf-k F] [--profile balanced|durable|fast_unsafe] [--durability balanced|durable|fast_unsafe] [--index-mode brute_force|lsh_ann|hnsw_baseline|disabled] [--output PATH]".to_string())
             }
             other => {
                 return Err(format!(
-                    "unknown argument `{other}`\nusage: sqlrite benchmark [--corpus N] [--queries N] [--warmup N] [--concurrency N] [--embedding-dim N] [--top-k N] [--candidate-limit N] [--query-profile balanced|latency|recall] [--batch-size N] [--tenant-filters] [--tenant-count N] [--alpha F] [--fusion weighted|rrf] [--rrf-k F] [--profile balanced|durable|fast_unsafe] [--durability balanced|durable|fast_unsafe] [--index-mode brute_force|lsh_ann|hnsw_baseline|disabled] [--output PATH]"
+                    "unknown argument `{other}`\nusage: sqlrite benchmark [--corpus N] [--queries N] [--warmup N] [--concurrency N] [--embedding-dim N] [--top-k N] [--candidate-limit N] [--query-profile balanced|latency|recall] [--batch-size N] [--tenant-filters] [--tenant-count N] [--filter-mode none|tenant|topic|tenant_and_topic] [--alpha F] [--fusion weighted|rrf] [--rrf-k F] [--profile balanced|durable|fast_unsafe] [--durability balanced|durable|fast_unsafe] [--index-mode brute_force|lsh_ann|hnsw_baseline|disabled] [--output PATH]"
                 ))
             }
         }
@@ -2593,6 +2603,18 @@ fn parse_benchmark_args(args: &[String]) -> Result<BenchmarkArgs, String> {
         index_mode,
         output_path,
     })
+}
+
+fn parse_benchmark_filter_mode(raw: &str) -> Result<BenchmarkFilterMode, String> {
+    match raw {
+        "none" => Ok(BenchmarkFilterMode::None),
+        "tenant" => Ok(BenchmarkFilterMode::Tenant),
+        "topic" => Ok(BenchmarkFilterMode::Topic),
+        "tenant_and_topic" | "tenant-topic" => Ok(BenchmarkFilterMode::TenantAndTopic),
+        other => Err(format!(
+            "invalid --filter-mode `{other}`; expected none|tenant|topic|tenant_and_topic"
+        )),
+    }
 }
 
 fn cmd_doctor(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
@@ -5678,6 +5700,24 @@ ORDER BY hybrid_score DESC, chunk_id ASC;",
         let parsed = parse_benchmark_args(&args).map_err(std::io::Error::other)?;
         assert!(parsed.config.use_tenant_filters);
         assert_eq!(parsed.config.tenant_count, 16);
+        Ok(())
+    }
+
+    #[test]
+    fn benchmark_args_parse_filter_mode() -> Result<(), Box<dyn std::error::Error>> {
+        let args = vec![
+            "--filter-mode".to_string(),
+            "tenant_and_topic".to_string(),
+            "--tenant-count".to_string(),
+            "8".to_string(),
+        ];
+        let parsed = parse_benchmark_args(&args).map_err(std::io::Error::other)?;
+        assert_eq!(
+            parsed.config.filter_mode,
+            BenchmarkFilterMode::TenantAndTopic
+        );
+        assert!(parsed.config.use_tenant_filters);
+        assert_eq!(parsed.config.tenant_count, 8);
         Ok(())
     }
 
