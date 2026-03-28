@@ -153,16 +153,20 @@ pub fn run_benchmark(
             let _ = db.search(request)?;
         }
 
-        let query_start = Instant::now();
-        let (latencies_ms, top1_hits) = if config.concurrency > 1 {
+        let (latencies_ms, top1_hits, query_duration_ms) = if config.concurrency > 1 {
             let path = benchmark_path.as_ref().ok_or_else(|| {
                 SqlRiteError::InvalidBenchmarkConfig("missing benchmark path".to_string())
             })?;
             run_parallel_query_phase(path, &runtime_config, &config)?
         } else {
-            run_single_query_phase(&db, &config)?
+            let query_start = Instant::now();
+            let (latencies_ms, top1_hits) = run_single_query_phase(&db, &config)?;
+            (
+                latencies_ms,
+                top1_hits,
+                query_start.elapsed().as_secs_f64() * 1000.0,
+            )
         };
-        let query_duration = query_start.elapsed();
         let total_duration = total_start.elapsed();
 
         let latency = summarize_latencies(&latencies_ms);
@@ -176,8 +180,8 @@ pub fn run_benchmark(
         .0
         .resolve_query_profile()
         .candidate_limit;
-        let qps = if query_duration.as_secs_f64() > 0.0 {
-            config.query_count as f64 / query_duration.as_secs_f64()
+        let qps = if query_duration_ms > 0.0 {
+            config.query_count as f64 / (query_duration_ms / 1000.0)
         } else {
             0.0
         };
@@ -227,7 +231,7 @@ pub fn run_benchmark(
             sqlite_mmap_size_bytes: runtime_config.sqlite_mmap_size_bytes,
             sqlite_cache_size_kib: runtime_config.sqlite_cache_size_kib,
             ingest_duration_ms: ingest_duration.as_secs_f64() * 1000.0,
-            query_duration_ms: query_duration.as_secs_f64() * 1000.0,
+            query_duration_ms,
             total_duration_ms: total_duration.as_secs_f64() * 1000.0,
             qps,
             top1_hit_rate,
@@ -270,13 +274,14 @@ fn run_single_query_phase(db: &SqlRite, config: &BenchmarkConfig) -> Result<(Vec
 struct QueryWorkerStats {
     latencies_ms: Vec<f64>,
     top1_hits: usize,
+    query_duration_ms: f64,
 }
 
 fn run_parallel_query_phase(
     db_path: &Path,
     runtime_config: &RuntimeConfig,
     config: &BenchmarkConfig,
-) -> Result<(Vec<f64>, usize)> {
+) -> Result<(Vec<f64>, usize, f64)> {
     let worker_outputs = (0..config.concurrency)
         .into_par_iter()
         .map(|worker_idx| -> Result<QueryWorkerStats> {
@@ -284,6 +289,7 @@ fn run_parallel_query_phase(
             let mut latencies_ms =
                 Vec::with_capacity(config.query_count.div_ceil(config.concurrency).max(1));
             let mut top1_hits = 0usize;
+            let query_started = Instant::now();
 
             let mut query_idx = worker_idx;
             while query_idx < config.query_count {
@@ -303,18 +309,21 @@ fn run_parallel_query_phase(
             Ok(QueryWorkerStats {
                 latencies_ms,
                 top1_hits,
+                query_duration_ms: query_started.elapsed().as_secs_f64() * 1000.0,
             })
         })
         .collect::<Vec<_>>();
 
     let mut merged_latencies = Vec::with_capacity(config.query_count);
     let mut merged_top1_hits = 0usize;
+    let mut max_worker_duration_ms = 0.0f64;
     for worker in worker_outputs {
         let worker = worker?;
         merged_top1_hits += worker.top1_hits;
         merged_latencies.extend(worker.latencies_ms);
+        max_worker_duration_ms = max_worker_duration_ms.max(worker.query_duration_ms);
     }
-    Ok((merged_latencies, merged_top1_hits))
+    Ok((merged_latencies, merged_top1_hits, max_worker_duration_ms))
 }
 
 fn unique_benchmark_db_path() -> PathBuf {

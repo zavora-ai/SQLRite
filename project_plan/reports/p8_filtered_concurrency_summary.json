@@ -1,0 +1,122 @@
+{
+  "suite": "p8_filtered_concurrency",
+  "filter_mode": "tenant",
+  "scenarios": [
+    {
+      "scenario": "low_selectivity",
+      "tenant_count": 2,
+      "runs": [
+        {
+          "concurrency": 1,
+          "brute_force": {
+            "qps": 158.1857805702454,
+            "p95_ms": 14.988958
+          },
+          "hnsw_baseline": {
+            "qps": 162.12191944870702,
+            "p95_ms": 13.024375
+          },
+          "delta_qps": 3.9361388784616054,
+          "delta_p95_ms": 1.964583000000001
+        },
+        {
+          "concurrency": 2,
+          "brute_force": {
+            "qps": 284.0601426336991,
+            "p95_ms": 8.989708
+          },
+          "hnsw_baseline": {
+            "qps": 435.42124624364135,
+            "p95_ms": 6.075208
+          },
+          "delta_qps": 151.36110360994223,
+          "delta_p95_ms": 2.9145000000000003
+        },
+        {
+          "concurrency": 4,
+          "brute_force": {
+            "qps": 535.2110320373979,
+            "p95_ms": 9.849833
+          },
+          "hnsw_baseline": {
+            "qps": 992.7303227106929,
+            "p95_ms": 4.9062079999999995
+          },
+          "delta_qps": 457.519290673295,
+          "delta_p95_ms": 4.943625000000001
+        },
+        {
+          "concurrency": 8,
+          "brute_force": {
+            "qps": 690.5178256184064,
+            "p95_ms": 14.408583
+          },
+          "hnsw_baseline": {
+            "qps": 1175.1442305926766,
+            "p95_ms": 8.684125
+          },
+          "delta_qps": 484.62640497427026,
+          "delta_p95_ms": 5.724458
+        }
+      ]
+    },
+    {
+      "scenario": "high_selectivity",
+      "tenant_count": 8,
+      "runs": [
+        {
+          "concurrency": 1,
+          "brute_force": {
+            "qps": 355.88745303080805,
+            "p95_ms": 3.699417
+          },
+          "hnsw_baseline": {
+            "qps": 548.5385175141801,
+            "p95_ms": 2.387958
+          },
+          "delta_qps": 192.651064483372,
+          "delta_p95_ms": 1.3114590000000002
+        },
+        {
+          "concurrency": 2,
+          "brute_force": {
+            "qps": 259.35732874919256,
+            "p95_ms": 11.149625
+          },
+          "hnsw_baseline": {
+            "qps": 1127.5652002596669,
+            "p95_ms": 2.0416250000000002
+          },
+          "delta_qps": 868.2078715104743,
+          "delta_p95_ms": 9.108
+        },
+        {
+          "concurrency": 4,
+          "brute_force": {
+            "qps": 1057.4608775495067,
+            "p95_ms": 4.846625
+          },
+          "hnsw_baseline": {
+            "qps": 2089.225165928874,
+            "p95_ms": 2.193083
+          },
+          "delta_qps": 1031.7642883793674,
+          "delta_p95_ms": 2.6535420000000003
+        },
+        {
+          "concurrency": 8,
+          "brute_force": {
+            "qps": 1116.9342945949106,
+            "p95_ms": 8.670209
+          },
+          "hnsw_baseline": {
+            "qps": 1457.3143518139009,
+            "p95_ms": 6.462458
+          },
+          "delta_qps": 340.38005721899026,
+          "delta_p95_ms": 2.207751
+        }
+      ]
+    }
+  ]
+}

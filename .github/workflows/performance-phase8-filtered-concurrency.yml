@@ -1,0 +1,25 @@
+name: performance-phase8-filtered-concurrency
+
+on:
+  push:
+    paths:
+      - ".github/workflows/performance-phase8-filtered-concurrency.yml"
+      - "scripts/run-p8-filtered-concurrency-suite.sh"
+      - "src/bench.rs"
+      - "src/lib.rs"
+      - "src/main.rs"
+      - "src/vector_index.rs"
+      - "src/bin/sqlrite-bench.rs"
+      - "src/bin/sqlrite-bench-suite.rs"
+      - "src/bin/sqlrite-bench-matrix.rs"
+  workflow_dispatch:
+
+jobs:
+  filtered-concurrency:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Run filtered concurrency suite
+        run: bash scripts/run-p8-filtered-concurrency-suite.sh

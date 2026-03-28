@@ -312,10 +312,19 @@ Make performance work measurable and defensible.
   - `/Users/jameskaranja/Developer/projects/SQLRight/src/bench.rs`
   - `/Users/jameskaranja/Developer/projects/SQLRight/src/main.rs`
   - `/Users/jameskaranja/Developer/projects/SQLRight/src/bin/sqlrite-bench.rs`
+- the benchmark harness now supports explicit filter modes:
+  - `tenant`
+  - `topic`
+  - `tenant_and_topic`
+- the parallel benchmark path now measures steady-state query-loop time instead of charging per-worker database open/rebuild cost into concurrent QPS
 - the filtered benchmark suite is reproducible via:
   - `/Users/jameskaranja/Developer/projects/SQLRight/scripts/run-p8-filtered-benchmark-suite.sh`
+- the filtered concurrency suite is reproducible via:
+  - `/Users/jameskaranja/Developer/projects/SQLRight/scripts/run-p8-filtered-concurrency-suite.sh`
 - CI coverage for the filtered suite now exists in:
   - `/Users/jameskaranja/Developer/projects/SQLRight/.github/workflows/performance-phase8-filtered-benchmarks.yml`
+- CI coverage for the filtered concurrency suite now exists in:
+  - `/Users/jameskaranja/Developer/projects/SQLRight/.github/workflows/performance-phase8-filtered-concurrency.yml`
 
 ### Initial measured result
 
@@ -342,13 +351,33 @@ These sweeps are reproducible via:
 
 - `/Users/jameskaranja/Developer/projects/SQLRight/scripts/run-p8-filtered-sweep-suite.sh`
 
+### Filtered concurrency result
+
+On the internal 5k/80 tenant-filtered concurrency sweep:
+
+- low selectivity (`tenant_count=2`)
+  - `concurrency=1`: `hnsw_baseline` leads by `+3.94 QPS`
+  - `concurrency=2`: `hnsw_baseline` leads by `+151.36 QPS`
+  - `concurrency=4`: `hnsw_baseline` leads by `+457.52 QPS`
+  - `concurrency=8`: `hnsw_baseline` leads by `+484.63 QPS`
+- high selectivity (`tenant_count=8`)
+  - `concurrency=1`: `hnsw_baseline` leads by `+192.65 QPS`
+  - `concurrency=2`: `hnsw_baseline` leads by `+868.21 QPS`
+  - `concurrency=4`: `hnsw_baseline` leads by `+1031.76 QPS`
+  - `concurrency=8`: `hnsw_baseline` leads by `+340.38 QPS`
+
+These concurrency runs are reproducible via:
+
+- `/Users/jameskaranja/Developer/projects/SQLRight/scripts/run-p8-filtered-concurrency-suite.sh`
+
 ### Conclusion
 
 - the filtered-workload path is now measured directly instead of inferred from unfiltered results
 - `hnsw_baseline` is already materially better than `brute_force` on mid-to-high selectivity filtered workloads
 - the current crossover region is clearly at the low-selectivity end of the tenant sweep, around the 50% filter case
 - the engine now exploits that by preferring exact filtered scan before graph build on high-selectivity filtered requests
-- the next work is broader comparator discipline and concurrency sweeps, not another blind exact-vs-ANN threshold rewrite
+- after correcting the concurrency timing model, HNSW also holds the advantage under filtered parallel load
+- the next work is broader comparator discipline and runtime analysis of ANN ingest/open cost, not another blind exact-vs-ANN threshold rewrite
 
 ### Required benchmark matrix
 
