@@ -12,7 +12,7 @@ Typical output:
 
 ```text
 sqlrite doctor
-- version=1.0.0
+- version=1.0.1
 - integrity_ok=true
 - schema_version=3
 - chunk_count=3

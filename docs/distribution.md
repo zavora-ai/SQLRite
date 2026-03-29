@@ -7,28 +7,28 @@ This guide covers the packaging and shipping paths that are current today.
 | Artifact | Command | Notes |
 |---|---|---|
 | source install | `cargo install --path .` | installs full CLI toolchain |
-| release archive | `bash scripts/create-release-archive.sh --version 1.0.0` | packages `sqlrite` |
-| release installer | `bash scripts/sqlrite-install.sh --version 1.0.0` | installs `sqlrite` |
+| release archive | `bash scripts/create-release-archive.sh --version 1.0.1` | packages `sqlrite` |
+| release installer | `bash scripts/sqlrite-install.sh --version 1.0.1` | installs `sqlrite` |
 | Docker image | `docker build -t sqlrite:local .` | service deployment baseline |
 | seeded Docker Compose demo | `docker compose -f deploy/docker-compose.seeded-demo.yml up --build` | seeded local demo server |
 
 ## Release archive
 
 ```bash
-bash scripts/create-release-archive.sh --version 1.0.0
+bash scripts/create-release-archive.sh --version 1.0.1
 ```
 
 Outputs:
 
-- `dist/sqlrite-v1.0.0-<target>.tar.gz`
-- `dist/sqlrite-v1.0.0-<target>.sha256`
+- `dist/sqlrite-v1.0.1-<target>.tar.gz`
+- `dist/sqlrite-v1.0.1-<target>.sha256`
 
 ## Linux packages
 
 When `nfpm` is installed:
 
 ```bash
-bash scripts/package-linux.sh --version 1.0.0
+bash scripts/package-linux.sh --version 1.0.1
 ```
 
 ## Docker

@@ -28,7 +28,28 @@ These numbers are strongest in embedded mode, which is the main SQLRite deployme
 
 ## Install
 
-### Option 1: Install from source with Cargo
+### Option 1: Install from crates.io
+
+This is the fastest way to get the main `sqlrite` CLI on your machine.
+
+```bash
+cargo install sqlrite
+```
+
+Verify the install:
+
+```bash
+sqlrite --help
+sqlrite init --db sqlrite_verify.db --seed-demo
+sqlrite query --db sqlrite_verify.db --text "local memory" --top-k 1
+```
+
+Important detail:
+
+- `cargo install sqlrite` installs the main `sqlrite` binary
+- if you want the companion tools too, use the source install path below
+
+### Option 2: Install from source with Cargo
 
 This is the best path if you want the full CLI toolchain.
 
@@ -88,7 +109,7 @@ If Cargo's bin directory is not on your `PATH`, add it:
 - macOS / Linux: `export PATH="$HOME/.cargo/bin:$PATH"`
 - Windows: add `%USERPROFILE%\.cargo\bin` to your user `Path`
 
-### Option 2: Install from this repo with the helper script
+### Option 3: Install from this repo with the helper script
 
 ```bash
 bash scripts/sqlrite-global-install.sh
@@ -96,10 +117,10 @@ bash scripts/sqlrite-global-install.sh
 
 This is a Unix-oriented convenience flow for local checkouts.
 
-### Option 3: Install from a GitHub release
+### Option 4: Install from a GitHub release
 
 ```bash
-bash scripts/sqlrite-install.sh --version 1.0.0
+bash scripts/sqlrite-install.sh --version 1.0.1
 ```
 
 Important detail:
@@ -297,7 +318,7 @@ See `/Users/jameskaranja/Developer/projects/SQLRight/docs/security.md`.
 ### Release archive
 
 ```bash
-bash scripts/create-release-archive.sh --version 1.0.0
+bash scripts/create-release-archive.sh --version 1.0.1
 ```
 
 ### Docker

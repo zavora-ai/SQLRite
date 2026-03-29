@@ -4,7 +4,13 @@ This guide takes you from install to a working local database.
 
 ## Best Install Path
 
-For most developers, use Cargo:
+For most developers, install from crates.io:
+
+```bash
+cargo install sqlrite
+```
+
+If you want the full companion CLI toolchain, install from a source checkout:
 
 ```bash
 git clone https://github.com/zavora-ai/SQLRite.git
@@ -25,9 +31,10 @@ sqlrite query --db sqlrite_verify.db --text "local memory" --top-k 1
 
 | Option | Command | Notes |
 |---|---|---|
-| Cargo | `cargo install --path .` | installs `sqlrite` plus companion binaries |
+| crates.io | `cargo install sqlrite` | installs the main `sqlrite` binary |
+| Cargo source install | `cargo install --path .` | installs `sqlrite` plus companion binaries |
 | Repo helper | `bash scripts/sqlrite-global-install.sh` | local checkout convenience |
-| Release installer | `bash scripts/sqlrite-install.sh --version 1.0.0` | installs `sqlrite` only |
+| Release installer | `bash scripts/sqlrite-install.sh --version 1.0.1` | installs `sqlrite` only |
 
 ## First Working Flow
 

@@ -1,3 +1,29 @@
+//! Shared request and response contracts for SQLRite SDKs and service clients.
+//!
+//! This crate is intentionally small and dependency-light. It exists so Rust,
+//! TypeScript, Python, and service-facing integrations can agree on stable query
+//! and SQL envelope shapes without depending on the full SQLRite engine crate.
+//!
+//! Typical consumers:
+//!
+//! - SDK implementations
+//! - service adapters
+//! - thin client applications that only need request and response types
+//!
+//! # Example
+//!
+//! ```rust
+//! use sqlrite_sdk_core::{QueryRequest, DEFAULT_TOP_K};
+//!
+//! let request = QueryRequest {
+//!     query_text: Some("agent memory".to_string()),
+//!     top_k: Some(DEFAULT_TOP_K),
+//!     ..QueryRequest::default()
+//! };
+//!
+//! assert!(request.validate().is_ok());
+//! ```
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use thiserror::Error;

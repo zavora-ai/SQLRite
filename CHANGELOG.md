@@ -6,6 +6,12 @@ The changelog is intentionally product-facing. Internal sprint reports, benchmar
 
 ## Unreleased
 
+No unreleased changes yet.
+
+## 1.0.1 - 2026-03-29
+
+Patch release focused on publication quality, install reliability, and Rust 2024 compatibility.
+
 ### Changed
 
 - Repositioned SQLRite around its primary embedded use case.
@@ -13,11 +19,23 @@ The changelog is intentionally product-facing. Internal sprint reports, benchmar
 - Streamlined `README.md` so install, embedded usage, querying, SQL, server mode, security, and distribution are current and easier to follow.
 - Removed duplicate documentation trees and old public-facing project-history references.
 - Updated example defaults so security rotation fixtures write to neutral local paths instead of internal report folders.
+- Published crates.io-ready package metadata for `sqlrite` and `sqlrite-sdk-core`.
+- Added docs.rs metadata and crate-level documentation for both published crates.
+- Added a dedicated `README.md` for `sqlrite-sdk-core`.
+- Updated public install and distribution examples to `1.0.1`.
 
 ### Performance
 
 - Improved embedded filtered retrieval performance substantially through compact numeric filter paths, sidecar-backed vector persistence, and lower-overhead compact HTTP responses.
 - Current benchmark snapshot is documented in `/Users/jameskaranja/Developer/projects/SQLRight/docs/performance.md`.
+
+### Fixed
+
+- Vendored `protoc` in the build so CI and docs.rs-style package verification do not rely on a system protobuf installation.
+- Simplified CI to one practical quality job with lint, test, CLI smoke, and benchmark smoke coverage.
+- Fixed Rust 2024 `unsafe_op_in_unsafe_fn` failures in AVX2 hot paths.
+- Removed `ripgrep` as an implicit dependency from install smoke scripts.
+- Fixed `sqlrite-global-update.sh` quick mode on macOS Bash when no extra installer arguments are passed.
 
 ## 1.0.0 - 2026-03-28
 

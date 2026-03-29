@@ -1,3 +1,27 @@
+//! SQLRite is an embedded, SQLite-based retrieval engine for AI-agent memory and
+//! retrieval-augmented generation workloads.
+//!
+//! The crate is optimized for local, in-process use around a single database file,
+//! with optional HTTP, compact HTTP, gRPC, and MCP surfaces when a service boundary
+//! is needed.
+//!
+//! # Primary entry points
+//!
+//! - [`SqlRite`] for direct embedded use
+//! - [`run_benchmark`] for synthetic retrieval benchmarking
+//! - [`run_grpc_server`] and [`serve_health_endpoints`] for service mode
+//! - [`execute_sdk_query`] and [`execute_sdk_sql`] for SDK-facing envelopes
+//!
+//! # Example
+//!
+//! ```no_run
+//! use sqlrite::SqlRite;
+//!
+//! let db = SqlRite::open("sqlrite.db")?;
+//! println!("chunks={}", db.chunk_count()?);
+//! # Ok::<(), sqlrite::SqlRiteError>(())
+//! ```
+
 mod adapter;
 mod bench;
 mod error;
