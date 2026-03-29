@@ -109,7 +109,7 @@ if [[ "$SKIP_TESTS" -eq 0 ]]; then
 
   "$INSTALL_PATH" init --db "$TMP_DB" --seed-demo --profile balanced --index-mode brute_force >/dev/null
   QUERY_OUTPUT="$($INSTALL_PATH query --db "$TMP_DB" --text "local" --top-k 1)"
-  if ! printf "%s" "$QUERY_OUTPUT" | rg -q "results="; then
+  if ! printf "%s" "$QUERY_OUTPUT" | grep -q "results="; then
     echo "smoke query did not return expected output" >&2
     exit 1
   fi
@@ -127,7 +127,7 @@ if [[ "$IS_WINDOWS" -eq 1 ]]; then
   PATH_SEP=';'
 fi
 
-if printf '%s' "$PATH" | tr "$PATH_SEP" '\n' | rg -qx "$PREFIX"; then
+if printf '%s' "$PATH" | tr "$PATH_SEP" '\n' | grep -Fxq "$PREFIX"; then
   :
 else
   echo "[install] note: '$PREFIX' is not in PATH"
