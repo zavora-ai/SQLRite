@@ -3,7 +3,16 @@ name = "sqlrite-sdk-core"
 version = "1.0.0"
 edition = "2024"
 description = "Shared protocol contracts for SQLRite SDKs"
+authors = ["James Karanja Maina <james.karanja@zavora.ai>"]
 license = "MIT"
+homepage = "https://github.com/zavora-ai/SQLRite"
+repository = "https://github.com/zavora-ai/SQLRite"
+readme = "../../README.md"
+keywords = ["sdk", "rag", "sqlite", "retrieval", "ai-agents"]
+categories = ["api-bindings", "database"]
+
+[package.metadata.sqlrite]
+company = "Zavora Technologies Ltd"
 
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
