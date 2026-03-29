@@ -61,6 +61,10 @@ else
 fi
 
 echo "[update] rebuilding/reinstalling global sqlrite with smoke tests..."
-"$INSTALL_SCRIPT" "${INSTALL_ARGS[@]}"
+if [[ ${#INSTALL_ARGS[@]} -gt 0 ]]; then
+  "$INSTALL_SCRIPT" "${INSTALL_ARGS[@]}"
+else
+  "$INSTALL_SCRIPT"
+fi
 
 echo "[update] global sqlrite update complete"
