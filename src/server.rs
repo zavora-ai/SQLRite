@@ -1883,10 +1883,10 @@ fn build_response(
                     .runtime
                     .step_down_to_replica(Some(heartbeat.leader_id.clone()));
             }
-            if let Some(leader_last_log_index) = heartbeat.leader_last_log_index {
-                if leader_last_log_index > control.runtime.last_log_index {
-                    control.runtime.mark_failover_started();
-                }
+            if let Some(leader_last_log_index) = heartbeat.leader_last_log_index
+                && leader_last_log_index > control.runtime.last_log_index
+            {
+                control.runtime.mark_failover_started();
             }
             control.runtime.mark_heartbeat(
                 Some(heartbeat.leader_id.clone()),

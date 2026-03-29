@@ -40,12 +40,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         parsed.db_path.display(),
         parsed.auth_token.is_some()
     );
-    let mut runtime = RuntimeConfig::default();
-    runtime.durability_profile = parsed.profile;
-    runtime.vector_index_mode = parsed.index_mode;
     run_stdio_mcp_server(McpServerConfig {
         db_path: parsed.db_path,
-        runtime,
+        runtime: RuntimeConfig {
+            durability_profile: parsed.profile,
+            vector_index_mode: parsed.index_mode,
+            ..RuntimeConfig::default()
+        },
         auth_token: parsed.auth_token,
     })
     .map_err(|error| error.into())

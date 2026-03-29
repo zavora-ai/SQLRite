@@ -287,10 +287,9 @@ impl HaRuntimeState {
             return false;
         }
 
-        let candidate_up_to_date = candidate_last_log_term > self.last_log_term
+        candidate_last_log_term > self.last_log_term
             || (candidate_last_log_term == self.last_log_term
-                && candidate_last_log_index >= self.last_log_index);
-        candidate_up_to_date
+                && candidate_last_log_index >= self.last_log_index)
     }
 
     pub fn note_log_position(&mut self, last_log_index: u64, last_log_term: u64) {
@@ -494,10 +493,10 @@ impl ReplicationLog {
                 ));
             }
 
-            if let Some(existing) = self.entry_at(incoming.index) {
-                if existing.term != incoming.term || existing.checksum != incoming.checksum {
-                    self.truncate_from(incoming.index);
-                }
+            if let Some(existing) = self.entry_at(incoming.index)
+                && (existing.term != incoming.term || existing.checksum != incoming.checksum)
+            {
+                self.truncate_from(incoming.index);
             }
             if self.entry_at(incoming.index).is_none() {
                 self.entries.push(incoming.clone());

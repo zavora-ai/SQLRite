@@ -16,12 +16,13 @@ pub struct McpServerConfig {
 
 impl Default for McpServerConfig {
     fn default() -> Self {
-        let mut runtime = RuntimeConfig::default();
-        runtime.durability_profile = DurabilityProfile::Balanced;
-        runtime.vector_index_mode = VectorIndexMode::BruteForce;
         Self {
             db_path: PathBuf::from("sqlrite.db"),
-            runtime,
+            runtime: RuntimeConfig {
+                durability_profile: DurabilityProfile::Balanced,
+                vector_index_mode: VectorIndexMode::BruteForce,
+                ..RuntimeConfig::default()
+            },
             auth_token: None,
         }
     }

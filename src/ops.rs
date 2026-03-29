@@ -275,9 +275,7 @@ fn discover_snapshots_without_catalog(backup_dir: &Path) -> Result<Vec<BackupSna
             continue;
         }
         let metadata = entry.metadata()?;
-        let modified = metadata
-            .modified()
-            .unwrap_or_else(|_| SystemTime::UNIX_EPOCH);
+        let modified = metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);
         let created_unix_ms = modified
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap_or(Duration::from_secs(0))

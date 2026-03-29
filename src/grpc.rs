@@ -49,6 +49,7 @@ impl QueryServiceRuntime {
         }
     }
 
+    #[allow(clippy::result_large_err)]
     fn open_db(&self) -> Result<SqlRite, Status> {
         SqlRite::open_with_config(&self.db_path, self.runtime.clone())
             .map_err(|error| Status::internal(format!("failed to open database: {error}")))
