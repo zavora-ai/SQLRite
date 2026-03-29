@@ -12,9 +12,9 @@ Typical output:
 
 ```text
 sqlrite doctor
-- version=1.0.1
+- version=1.0.2
 - integrity_ok=true
-- schema_version=3
+- schema_version=4
 - chunk_count=3
 - index_mode=brute_force
 - vector_storage=f32

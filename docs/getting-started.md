@@ -34,7 +34,7 @@ sqlrite query --db sqlrite_verify.db --text "local memory" --top-k 1
 | crates.io | `cargo install sqlrite` | installs the main `sqlrite` binary |
 | Cargo source install | `cargo install --path .` | installs `sqlrite` plus companion binaries |
 | Repo helper | `bash scripts/sqlrite-global-install.sh` | local checkout convenience |
-| Release installer | `bash scripts/sqlrite-install.sh --version 1.0.1` | installs `sqlrite` only |
+| Release installer | `bash scripts/sqlrite-install.sh --version 1.0.2` | installs `sqlrite` only |
 
 ## First Working Flow
 
@@ -49,7 +49,7 @@ Expected output:
 ```text
 initialized SQLRite database
 - path=sqlrite_demo.db
-- schema_version=3
+- schema_version=4
 - chunk_count=3
 - profile=balanced
 - index_mode=brute_force

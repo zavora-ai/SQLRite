@@ -2,6 +2,6 @@
 
 from .client import SqlRiteApiError, SqlRiteClient
 
-__version__ = "1.0.1"
+__version__ = "1.0.2"
 
 __all__ = ["SqlRiteClient", "SqlRiteApiError"]

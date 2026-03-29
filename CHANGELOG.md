@@ -6,6 +6,12 @@ The changelog is intentionally product-facing. Internal sprint reports, benchmar
 
 ## Unreleased
 
+No unreleased changes yet.
+
+## 1.0.2 - 2026-03-29
+
+Patch release focused on embedded integration ergonomics, publication quality, install reliability, and Rust 2024 compatibility.
+
 ### Added
 
 - Added `SqlRiteHandle`, a cloneable, `Send` + `Sync` connection-opening handle for concurrent async integration without wrapping `SqlRite` itself in a process-wide mutex.
@@ -21,14 +27,6 @@ The changelog is intentionally product-facing. Internal sprint reports, benchmar
 
 ### Changed
 
-- Vector-index rebuild and load paths now skip text-only chunks with no embedding material instead of treating them as invalid vectors.
-
-## 1.0.1 - 2026-03-29
-
-Patch release focused on publication quality, install reliability, and Rust 2024 compatibility.
-
-### Changed
-
 - Repositioned SQLRite around its primary embedded use case.
 - Consolidated the public documentation into a single `docs/` tree.
 - Streamlined `README.md` so install, embedded usage, querying, SQL, server mode, security, and distribution are current and easier to follow.
@@ -37,7 +35,8 @@ Patch release focused on publication quality, install reliability, and Rust 2024
 - Published crates.io-ready package metadata for `sqlrite` and `sqlrite-sdk-core`.
 - Added docs.rs metadata and crate-level documentation for both published crates.
 - Added a dedicated `README.md` for `sqlrite-sdk-core`.
-- Updated public install and distribution examples to `1.0.1`.
+- Updated public install and distribution examples to `1.0.2`.
+- Vector-index rebuild and load paths now skip text-only chunks with no embedding material instead of treating them as invalid vectors.
 
 ### Performance
 

@@ -1,6 +1,6 @@
 [package]
 name = "sqlrite-sdk-core"
-version = "1.0.1"
+version = "1.0.2"
 edition = "2024"
 description = "Shared protocol contracts for SQLRite SDKs"
 authors = ["James Karanja Maina <james.karanja@zavora.ai>"]

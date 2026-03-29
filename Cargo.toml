@@ -1,6 +1,6 @@
 [package]
 name = "sqlrite"
-version = "1.0.1"
+version = "1.0.2"
 edition = "2024"
 description = "RAG-oriented SQLite wrapper for AI agent workloads"
 authors = ["James Karanja Maina <james.karanja@zavora.ai>"]
@@ -32,7 +32,7 @@ half = "2.4"
 hnsw_rs = "0.3.4"
 memmap2 = "0.9"
 roaring = "0.10"
-sqlrite-sdk-core = { version = "1.0.1", path = "crates/sqlrite-sdk-core" }
+sqlrite-sdk-core = { version = "1.0.2", path = "crates/sqlrite-sdk-core" }
 tokio = { version = "1.43", features = ["macros", "rt-multi-thread", "sync"] }
 tonic = { version = "0.12", features = ["transport"] }
 prost = "0.13"

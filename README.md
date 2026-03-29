@@ -48,6 +48,7 @@ Important detail:
 
 - `cargo install sqlrite` installs the main `sqlrite` binary
 - if you want the companion tools too, use the source install path below
+- if you are embedding SQLRite in a Rust application instead of installing the CLI, use `cargo add sqlrite`
 
 ### Option 2: Install from source with Cargo
 
@@ -120,7 +121,7 @@ This is a Unix-oriented convenience flow for local checkouts.
 ### Option 4: Install from a GitHub release
 
 ```bash
-bash scripts/sqlrite-install.sh --version 1.0.1
+bash scripts/sqlrite-install.sh --version 1.0.2
 ```
 
 Important detail:
@@ -151,7 +152,7 @@ Expected output:
 ```text
 initialized SQLRite database
 - path=sqlrite_demo.db
-- schema_version=3
+- schema_version=4
 - chunk_count=3
 - profile=balanced
 - index_mode=brute_force
@@ -186,7 +187,13 @@ Look for:
 
 ## Embedded Rust Example
 
-The embedded path is the core product. This is the smallest real example:
+The embedded path is the core product. Use `SqlRite` directly for simple in-process cases:
+
+Add the crate to your project:
+
+```bash
+cargo add sqlrite
+```
 
 ```rust
 use serde_json::json;
@@ -216,7 +223,47 @@ fn main() -> Result<()> {
 }
 ```
 
-See `/Users/jameskaranja/Developer/projects/SQLRight/examples/basic_search.rs` and `/Users/jameskaranja/Developer/projects/SQLRight/docs/embedded.md` for fuller embedded flows.
+For concurrent async applications, prefer `SqlRiteHandle` so each operation opens its own short-lived connection instead of sharing one `SqlRite` behind a global mutex:
+
+```rust
+use sqlrite::{DocumentIngestOptions, Result, SearchRequest, SqlRiteHandle};
+
+fn main() -> Result<()> {
+    let db = SqlRiteHandle::open("app.db")?;
+
+    db.ingest_document_text(
+        "doc-rust",
+        "Rust and SQLite work well for local-first retrieval.",
+        DocumentIngestOptions::default(),
+    )?;
+
+    let results = db.search(SearchRequest::text_only("local-first retrieval", 3))?;
+    let diagnostics = db.diagnostics()?;
+
+    println!("results={}", results.len());
+    println!("documents={}", diagnostics.document_count);
+    Ok(())
+}
+```
+
+If your embedding provider is external, ingest text first and backfill vectors later:
+
+```rust
+use sqlrite::{Result, SqlRite, TextChunkInput};
+
+fn main() -> Result<()> {
+    let db = SqlRite::open_in_memory()?;
+    db.ingest_text_chunk(&TextChunkInput::new(
+        "c1",
+        "doc-rust",
+        "Text first, embeddings later.",
+    ))?;
+    db.update_chunk_embedding("c1", vec![1.0, 0.0])?;
+    Ok(())
+}
+```
+
+See [`examples/basic_search.rs`](examples/basic_search.rs) and [`docs/embedded.md`](docs/embedded.md) for fuller embedded flows.
 
 ## Common Query Patterns
 
@@ -271,7 +318,7 @@ FROM SEARCH(
 ORDER BY hybrid_score DESC, chunk_id ASC;"
 ```
 
-See `/Users/jameskaranja/Developer/projects/SQLRight/docs/sql.md` for operators, helper functions, and index DDL.
+See [`docs/sql.md`](docs/sql.md) for operators, helper functions, and index DDL.
 
 ## Server Mode
 
@@ -311,14 +358,14 @@ sqlrite-security init-policy --path .sqlrite/rbac-policy.json
 sqlrite-security add-key --registry .sqlrite/tenant_keys.json --tenant demo --key-id k1 --key-material demo-secret --active
 ```
 
-See `/Users/jameskaranja/Developer/projects/SQLRight/docs/security.md`.
+See [`docs/security.md`](docs/security.md).
 
 ## Distribution
 
 ### Release archive
 
 ```bash
-bash scripts/create-release-archive.sh --version 1.0.1
+bash scripts/create-release-archive.sh --version 1.0.2
 ```
 
 ### Docker
@@ -338,21 +385,22 @@ docker compose -f deploy/docker-compose.seeded-demo.yml up --build
 
 | Topic | Path |
 |---|---|
-| Detailed project guide | `/Users/jameskaranja/Developer/projects/SQLRight/PROJECT_README.md` |
-| Docs home | `/Users/jameskaranja/Developer/projects/SQLRight/docs/README.md` |
-| Getting started | `/Users/jameskaranja/Developer/projects/SQLRight/docs/getting-started.md` |
-| Embedded usage | `/Users/jameskaranja/Developer/projects/SQLRight/docs/embedded.md` |
-| Query patterns | `/Users/jameskaranja/Developer/projects/SQLRight/docs/querying.md` |
-| SQL retrieval | `/Users/jameskaranja/Developer/projects/SQLRight/docs/sql.md` |
-| Ingestion and reindexing | `/Users/jameskaranja/Developer/projects/SQLRight/docs/ingestion.md` |
-| Server, gRPC, MCP | `/Users/jameskaranja/Developer/projects/SQLRight/docs/server-api.md` |
-| Security | `/Users/jameskaranja/Developer/projects/SQLRight/docs/security.md` |
-| Migrations | `/Users/jameskaranja/Developer/projects/SQLRight/docs/migrations.md` |
-| Operations | `/Users/jameskaranja/Developer/projects/SQLRight/docs/operations.md` |
-| Performance | `/Users/jameskaranja/Developer/projects/SQLRight/docs/performance.md` |
-| Examples | `/Users/jameskaranja/Developer/projects/SQLRight/docs/examples.md` |
-| Distribution | `/Users/jameskaranja/Developer/projects/SQLRight/docs/distribution.md` |
-| Release policy | `/Users/jameskaranja/Developer/projects/SQLRight/docs/release_policy.md` |
+| Detailed project guide | [`PROJECT_README.md`](PROJECT_README.md) |
+| Docs home | [`docs/README.md`](docs/README.md) |
+| Getting started | [`docs/getting-started.md`](docs/getting-started.md) |
+| Embedded usage | [`docs/embedded.md`](docs/embedded.md) |
+| Query patterns | [`docs/querying.md`](docs/querying.md) |
+| SQL retrieval | [`docs/sql.md`](docs/sql.md) |
+| Ingestion and reindexing | [`docs/ingestion.md`](docs/ingestion.md) |
+| Server, gRPC, MCP | [`docs/server-api.md`](docs/server-api.md) |
+| Security | [`docs/security.md`](docs/security.md) |
+| Migrations | [`docs/migrations.md`](docs/migrations.md) |
+| Operations | [`docs/operations.md`](docs/operations.md) |
+| Performance | [`docs/performance.md`](docs/performance.md) |
+| Examples | [`docs/examples.md`](docs/examples.md) |
+| Distribution | [`docs/distribution.md`](docs/distribution.md) |
+| Release policy | [`docs/release_policy.md`](docs/release_policy.md) |
+| API docs | [`docs.rs/sqlrite`](https://docs.rs/sqlrite) |
 
 ## Examples
 
@@ -369,10 +417,10 @@ docker compose -f deploy/docker-compose.seeded-demo.yml up --build
 
 | Path | Purpose |
 |---|---|
-| `/Users/jameskaranja/Developer/projects/SQLRight/src` | core engine and CLI |
-| `/Users/jameskaranja/Developer/projects/SQLRight/src/bin` | companion binaries |
-| `/Users/jameskaranja/Developer/projects/SQLRight/examples` | runnable examples |
-| `/Users/jameskaranja/Developer/projects/SQLRight/sdk/python` | Python SDK |
-| `/Users/jameskaranja/Developer/projects/SQLRight/sdk/typescript` | TypeScript SDK |
-| `/Users/jameskaranja/Developer/projects/SQLRight/docs` | public documentation |
-| `/Users/jameskaranja/Developer/projects/SQLRight/deploy` | Docker and deployment assets |
+| `src` | core engine and CLI |
+| `src/bin` | companion binaries |
+| `examples` | runnable examples |
+| `sdk/python` | Python SDK |
+| `sdk/typescript` | TypeScript SDK |
+| `docs` | public documentation |
+| `deploy` | Docker and deployment assets |
