@@ -2560,14 +2560,20 @@ unsafe fn dot_product_avx2(left: &[f32], right: &[f32]) -> f32 {
     let mut i = 0usize;
     let mut acc: __m256 = _mm256_setzero_ps();
     while i + 8 <= len {
-        let left_vec = _mm256_loadu_ps(left.as_ptr().add(i));
-        let right_vec = _mm256_loadu_ps(right.as_ptr().add(i));
+        let (left_vec, right_vec) = unsafe {
+            (
+                _mm256_loadu_ps(left.as_ptr().add(i)),
+                _mm256_loadu_ps(right.as_ptr().add(i)),
+            )
+        };
         acc = _mm256_add_ps(acc, _mm256_mul_ps(left_vec, right_vec));
         i += 8;
     }
 
     let mut lanes = [0.0f32; 8];
-    _mm256_storeu_ps(lanes.as_mut_ptr(), acc);
+    unsafe {
+        _mm256_storeu_ps(lanes.as_mut_ptr(), acc);
+    }
     let mut total = lanes.iter().sum::<f32>();
     while i < len {
         total += left[i] * right[i];
@@ -2591,13 +2597,15 @@ unsafe fn l2_norm_avx2(values: &[f32]) -> f32 {
     let mut i = 0usize;
     let mut acc: __m256 = _mm256_setzero_ps();
     while i + 8 <= values.len() {
-        let vec = _mm256_loadu_ps(values.as_ptr().add(i));
+        let vec = unsafe { _mm256_loadu_ps(values.as_ptr().add(i)) };
         acc = _mm256_add_ps(acc, _mm256_mul_ps(vec, vec));
         i += 8;
     }
 
     let mut lanes = [0.0f32; 8];
-    _mm256_storeu_ps(lanes.as_mut_ptr(), acc);
+    unsafe {
+        _mm256_storeu_ps(lanes.as_mut_ptr(), acc);
+    }
     let mut total = lanes.iter().sum::<f32>();
     while i < values.len() {
         total += values[i] * values[i];
