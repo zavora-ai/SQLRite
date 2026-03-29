@@ -1,0 +1,78 @@
+{
+  "generated_at_unix": 1774749168,
+  "workload": {
+    "corpus_size": 20000,
+    "query_count": 200,
+    "embedding_dim": 32,
+    "tenants": 8,
+    "top_k": 10,
+    "warmup": 20,
+    "seed": 20260308,
+    "metric": "cosine",
+    "filter": "tenant exact match"
+  },
+  "scenarios": {
+    "exact_filtered_cosine": {
+      "results": [
+        {
+          "system": "SQLRite brute_force compact_http",
+          "qps": 771.2054705105992,
+          "p50_ms": 1.1936250011785887,
+          "p95_ms": 1.8663208022189783,
+          "top1_hit_rate": 1.0,
+          "recall_at_k": 1.0,
+          "setup_seconds": 0.5741928339994047
+        },
+        {
+          "system": "Qdrant exact",
+          "qps": 1914.2886204763204,
+          "p50_ms": 0.41841700294753537,
+          "p95_ms": 1.1595166462939213,
+          "top1_hit_rate": 1.0,
+          "recall_at_k": 1.0,
+          "setup_seconds": 0.5426988750114106
+        },
+        {
+          "system": "pgvector exact",
+          "qps": 600.2326741766811,
+          "p50_ms": 1.068791505531408,
+          "p95_ms": 3.1686002970673144,
+          "top1_hit_rate": 1.0,
+          "recall_at_k": 1.0,
+          "setup_seconds": 0.2397637499962002
+        }
+      ]
+    },
+    "approx_filtered_cosine": {
+      "results": [
+        {
+          "system": "SQLRite hnsw_baseline compact_http",
+          "qps": 34.115219686975486,
+          "p50_ms": 27.86897899932228,
+          "p95_ms": 35.94352884538234,
+          "top1_hit_rate": 0.9944444444444445,
+          "recall_at_k": 0.9816666666666671,
+          "setup_seconds": 0.5741928339994047
+        },
+        {
+          "system": "Qdrant HNSW",
+          "qps": 2561.2521677196555,
+          "p50_ms": 0.34208350552944466,
+          "p95_ms": 0.5357812580768939,
+          "top1_hit_rate": 1.0,
+          "recall_at_k": 1.0,
+          "setup_seconds": 0.5426988750114106
+        },
+        {
+          "system": "pgvector HNSW",
+          "qps": 2122.256725330478,
+          "p50_ms": 0.4102910024812445,
+          "p95_ms": 0.807453507150056,
+          "top1_hit_rate": 1.0,
+          "recall_at_k": 0.5861111111111109,
+          "setup_seconds": 0.2397637499962002
+        }
+      ]
+    }
+  }
+}

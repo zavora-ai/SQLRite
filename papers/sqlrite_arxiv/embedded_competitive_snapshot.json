@@ -1,0 +1,36 @@
+{
+  "generated_at_unix": 1774749600,
+  "source": "repository benchmark snapshot used by the March 2026 paper rewrite",
+  "workload": {
+    "name": "deterministic filtered cosine workload",
+    "corpus_size": 5000,
+    "query_count": 120,
+    "embedding_dim": 64,
+    "tenants": 8,
+    "top_k": 10,
+    "filter": "tenant exact match"
+  },
+  "sqlrite": {
+    "embedded": {
+      "brute_force": {"qps": 3380.07, "p95_ms": 0.3543, "recall_at_10": 1.0},
+      "hnsw_baseline": {"qps": 3530.96, "p95_ms": 0.3327, "recall_at_10": 1.0}
+    },
+    "compact_http": {
+      "brute_force": {"qps": 1807.27, "p95_ms": 0.7538, "recall_at_10": 1.0},
+      "hnsw_baseline": {"qps": 1828.17, "p95_ms": 0.7070, "recall_at_10": 1.0}
+    }
+  },
+  "comparators": {
+    "exact_filtered": [
+      {"system": "sqlite-vec exact", "qps": 3163.27},
+      {"system": "Qdrant exact", "qps": 2576.75},
+      {"system": "pgvector exact", "qps": 1739.64},
+      {"system": "LanceDB exact", "qps": 1063.08}
+    ],
+    "approx_filtered": [
+      {"system": "Qdrant HNSW", "qps": 2661.91, "recall_at_10": 1.0},
+      {"system": "pgvector HNSW", "qps": 1924.01, "recall_at_10": 0.5740},
+      {"system": "LanceDB IVF_FLAT", "qps": 1331.18, "recall_at_10": 0.9510}
+    ]
+  }
+}

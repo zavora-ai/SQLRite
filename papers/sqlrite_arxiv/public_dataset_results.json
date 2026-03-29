@@ -1,0 +1,71 @@
+{
+  "generated_at_unix": 1774749086,
+  "workload": {
+    "dataset": "BEIR/SciFact",
+    "corpus_size": 5183,
+    "query_count": 100,
+    "embedding_dim": 128,
+    "top_k": 10,
+    "warmup": 10,
+    "hybrid_alpha": 0.5,
+    "embedding_model": "deterministic-hash-v1"
+  },
+  "vector_exact": {
+    "results": [
+      {
+        "system": "SQLRite brute_force compact_http",
+        "qps": 204.75501851481474,
+        "p50_ms": 4.018146006274037,
+        "p95_ms": 6.772553950577276,
+        "recall_at_k": 0.22777777777777777,
+        "mrr_at_k": 0.1423589065255732,
+        "ndcg_at_k": 0.15940829381713142,
+        "setup_seconds": 0.9183801250037504
+      },
+      {
+        "system": "sqlite-vec exact",
+        "qps": 2297.8307840160955,
+        "p50_ms": 0.39535449468530715,
+        "p95_ms": 0.5194437449972609,
+        "recall_at_k": 0.22777777777777777,
+        "mrr_at_k": 0.1423589065255732,
+        "ndcg_at_k": 0.15940829381713142,
+        "setup_seconds": 0.05575099999259692
+      },
+      {
+        "system": "pgvector exact",
+        "qps": 569.7554799351562,
+        "p50_ms": 1.5210834972094744,
+        "p95_ms": 3.458091600623447,
+        "recall_at_k": 0.22777777777777777,
+        "mrr_at_k": 0.1423589065255732,
+        "ndcg_at_k": 0.15940829381713142,
+        "setup_seconds": 1.0578345420071855
+      }
+    ]
+  },
+  "hybrid": {
+    "results": [
+      {
+        "system": "SQLRite hybrid compact_http",
+        "qps": 55.59748676844273,
+        "p50_ms": 16.295854497002438,
+        "p95_ms": 19.511464552488174,
+        "recall_at_k": 0.4027777777777778,
+        "mrr_at_k": 0.40555555555555556,
+        "ndcg_at_k": 0.39727163841833596,
+        "setup_seconds": 0.9183801250037504
+      },
+      {
+        "system": "pgvector hybrid",
+        "qps": 23.65786313771594,
+        "p50_ms": 30.009937509021256,
+        "p95_ms": 112.77813994820458,
+        "recall_at_k": 0.22777777777777777,
+        "mrr_at_k": 0.14421075837742506,
+        "ndcg_at_k": 0.16086306885681428,
+        "setup_seconds": 1.0578345420071855
+      }
+    ]
+  }
+}
