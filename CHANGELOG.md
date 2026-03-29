@@ -6,7 +6,22 @@ The changelog is intentionally product-facing. Internal sprint reports, benchmar
 
 ## Unreleased
 
-No unreleased changes yet.
+### Added
+
+- Added `SqlRiteHandle`, a cloneable, `Send` + `Sync` connection-opening handle for concurrent async integration without wrapping `SqlRite` itself in a process-wide mutex.
+- Added text-first ingestion APIs:
+  - `TextChunkInput`
+  - `SqlRite::ingest_text_chunk`
+  - `SqlRite::ingest_text_chunks`
+  - `SqlRite::ingest_document_text`
+  - `SqlRite::update_chunk_embedding`
+- Added built-in chunking helpers through `DocumentIngestOptions` and `SqlRite::chunk_text`.
+- Added public `document_count`, `delete_by_doc_id`, and `diagnostics` APIs for dashboards and health endpoints.
+- Added discoverable search convenience constructors `SearchRequest::text_only` and `SearchRequest::vector_only`.
+
+### Changed
+
+- Vector-index rebuild and load paths now skip text-only chunks with no embedding material instead of treating them as invalid vectors.
 
 ## 1.0.1 - 2026-03-29
 

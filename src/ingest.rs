@@ -841,6 +841,13 @@ fn chunk_content(text: &str, strategy: &ChunkingStrategy) -> Vec<Segment> {
     }
 }
 
+pub(crate) fn chunk_text_for_ingest(text: &str, strategy: &ChunkingStrategy) -> Vec<String> {
+    chunk_content(text, strategy)
+        .into_iter()
+        .map(|segment| segment.content)
+        .collect()
+}
+
 fn chunk_fixed(text: &str, max_chars: usize, overlap_chars: usize) -> Vec<Segment> {
     if text.is_empty() {
         return Vec::new();

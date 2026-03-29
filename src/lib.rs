@@ -102,7 +102,9 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-const LATEST_SCHEMA_VERSION: i64 = 3;
+use crate::ingest::chunk_text_for_ingest;
+
+const LATEST_SCHEMA_VERSION: i64 = 4;
 const HYBRID_FTS_SCORE_LOOKUP_SKIP_CANDIDATE_LIMIT: usize = 512;
 const QUERY_PROFILE_LATENCY_MIN_CANDIDATE_LIMIT: usize = 32;
 const QUERY_PROFILE_LATENCY_TOP_K_MULTIPLIER: usize = 8;
@@ -148,7 +150,7 @@ const MIGRATIONS: &[Migration] = &[
                 content TEXT NOT NULL,
                 metadata TEXT NOT NULL DEFAULT '{}',
                 embedding BLOB NOT NULL,
-                embedding_dim INTEGER NOT NULL CHECK (embedding_dim > 0),
+                embedding_dim INTEGER NOT NULL CHECK (embedding_dim >= 0),
                 created_at TEXT NOT NULL DEFAULT (datetime('now')),
                 FOREIGN KEY (doc_id) REFERENCES documents(id) ON DELETE CASCADE
             );
@@ -194,6 +196,34 @@ const MIGRATIONS: &[Migration] = &[
             FROM retrieval_indexes;
         ",
     },
+    Migration {
+        version: 4,
+        name: "allow_text_only_chunks",
+        sql: "
+            ALTER TABLE chunks RENAME TO chunks_legacy_v3;
+
+            CREATE TABLE chunks (
+                rowid INTEGER PRIMARY KEY AUTOINCREMENT,
+                id TEXT NOT NULL UNIQUE,
+                doc_id TEXT NOT NULL,
+                content TEXT NOT NULL,
+                metadata TEXT NOT NULL DEFAULT '{}',
+                embedding BLOB NOT NULL,
+                embedding_dim INTEGER NOT NULL CHECK (embedding_dim >= 0),
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                FOREIGN KEY (doc_id) REFERENCES documents(id) ON DELETE CASCADE
+            );
+
+            INSERT INTO chunks (rowid, id, doc_id, content, metadata, embedding, embedding_dim, created_at)
+            SELECT rowid, id, doc_id, content, metadata, embedding, embedding_dim, created_at
+            FROM chunks_legacy_v3;
+
+            DROP TABLE chunks_legacy_v3;
+
+            CREATE INDEX IF NOT EXISTS idx_chunks_doc_id ON chunks(doc_id);
+            CREATE INDEX IF NOT EXISTS idx_chunks_created_at ON chunks(created_at DESC, rowid DESC);
+        ",
+    },
 ];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -232,6 +262,89 @@ impl ChunkInput {
         self.source = Some(source.into());
         self
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TextChunkInput {
+    pub id: String,
+    pub doc_id: String,
+    pub content: String,
+    pub metadata: Value,
+    pub source: Option<String>,
+}
+
+impl TextChunkInput {
+    pub fn new(
+        id: impl Into<String>,
+        doc_id: impl Into<String>,
+        content: impl Into<String>,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            doc_id: doc_id.into(),
+            content: content.into(),
+            metadata: Value::Object(serde_json::Map::new()),
+            source: None,
+        }
+    }
+
+    pub fn with_metadata(mut self, metadata: Value) -> Self {
+        self.metadata = metadata;
+        self
+    }
+
+    pub fn with_source(mut self, source: impl Into<String>) -> Self {
+        self.source = Some(source.into());
+        self
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct DocumentIngestOptions {
+    pub chunking: ChunkingStrategy,
+    pub metadata: Value,
+    pub source: Option<String>,
+    pub chunk_id_prefix: Option<String>,
+}
+
+impl Default for DocumentIngestOptions {
+    fn default() -> Self {
+        Self {
+            chunking: ChunkingStrategy::default(),
+            metadata: Value::Object(serde_json::Map::new()),
+            source: None,
+            chunk_id_prefix: None,
+        }
+    }
+}
+
+impl DocumentIngestOptions {
+    pub fn with_chunking(mut self, chunking: ChunkingStrategy) -> Self {
+        self.chunking = chunking;
+        self
+    }
+
+    pub fn with_metadata(mut self, metadata: Value) -> Self {
+        self.metadata = metadata;
+        self
+    }
+
+    pub fn with_source(mut self, source: impl Into<String>) -> Self {
+        self.source = Some(source.into());
+        self
+    }
+
+    pub fn with_chunk_id_prefix(mut self, prefix: impl Into<String>) -> Self {
+        self.chunk_id_prefix = Some(prefix.into());
+        self
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DocumentIngestReport {
+    pub doc_id: String,
+    pub chunk_ids: Vec<String>,
+    pub chunk_count: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -293,6 +406,7 @@ pub enum QueryProfile {
 }
 
 impl SearchRequest {
+    /// Convenience constructor for text-only retrieval with default fusion and payloads enabled.
     pub fn text(query_text: impl Into<String>, top_k: usize) -> Self {
         Self {
             query_text: Some(query_text.into()),
@@ -301,6 +415,12 @@ impl SearchRequest {
         }
     }
 
+    /// Alias for [`SearchRequest::text`] that is easier to discover on docs.rs.
+    pub fn text_only(query_text: impl Into<String>, top_k: usize) -> Self {
+        Self::text(query_text, top_k)
+    }
+
+    /// Convenience constructor for vector-only retrieval with payloads enabled.
     pub fn vector(query_embedding: Vec<f32>, top_k: usize) -> Self {
         Self {
             query_embedding: Some(query_embedding),
@@ -309,6 +429,12 @@ impl SearchRequest {
         }
     }
 
+    /// Alias for [`SearchRequest::vector`] that is easier to discover on docs.rs.
+    pub fn vector_only(query_embedding: Vec<f32>, top_k: usize) -> Self {
+        Self::vector(query_embedding, top_k)
+    }
+
+    /// Convenience constructor for hybrid retrieval with default fusion and payloads enabled.
     pub fn hybrid(query_text: impl Into<String>, query_embedding: Vec<f32>, top_k: usize) -> Self {
         Self {
             query_text: Some(query_text.into()),
@@ -552,6 +678,16 @@ pub struct VectorIndexStats {
     pub estimated_memory_bytes: usize,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SqlRiteDiagnostics {
+    pub chunk_count: usize,
+    pub document_count: usize,
+    pub integrity_check_ok: bool,
+    pub schema_version: i64,
+    pub vector_index: Option<VectorIndexStats>,
+    pub fts_enabled: bool,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct CompactionOptions {
     pub dedupe_by_content_hash: bool,
@@ -601,6 +737,12 @@ pub struct SqlRite {
     vector_index: Option<RefCell<BuiltinVectorIndex>>,
     filter_index: RefCell<ChunkFilterIndex>,
     db_path: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SqlRiteHandle {
+    db_path: PathBuf,
+    runtime_config: RuntimeConfig,
 }
 
 #[derive(Debug)]
@@ -782,6 +924,93 @@ fn extract_filterable_metadata_pairs(metadata: &Value) -> Vec<(String, String)> 
         .collect()
 }
 
+impl SqlRiteHandle {
+    pub fn open(path: impl AsRef<Path>) -> Result<Self> {
+        Self::open_with_config(path, RuntimeConfig::default())
+    }
+
+    pub fn open_with_config(path: impl AsRef<Path>, runtime_config: RuntimeConfig) -> Result<Self> {
+        let path = path.as_ref().to_path_buf();
+        let _ = SqlRite::open_with_config(&path, runtime_config.clone())?;
+        Ok(Self {
+            db_path: path,
+            runtime_config,
+        })
+    }
+
+    pub fn db_path(&self) -> &Path {
+        &self.db_path
+    }
+
+    pub fn runtime_config(&self) -> &RuntimeConfig {
+        &self.runtime_config
+    }
+
+    pub fn connect(&self) -> Result<SqlRite> {
+        SqlRite::open_with_config(&self.db_path, self.runtime_config.clone())
+    }
+
+    pub fn with_db<T>(&self, f: impl FnOnce(&SqlRite) -> Result<T>) -> Result<T> {
+        let db = self.connect()?;
+        f(&db)
+    }
+
+    pub fn search(&self, request: SearchRequest) -> Result<Vec<SearchResult>> {
+        self.with_db(|db| db.search(request))
+    }
+
+    pub fn chunk_count(&self) -> Result<usize> {
+        self.with_db(SqlRite::chunk_count)
+    }
+
+    pub fn document_count(&self) -> Result<usize> {
+        self.with_db(SqlRite::document_count)
+    }
+
+    pub fn diagnostics(&self) -> Result<SqlRiteDiagnostics> {
+        self.with_db(SqlRite::diagnostics)
+    }
+
+    pub fn ingest_chunk(&self, chunk: &ChunkInput) -> Result<()> {
+        self.with_db(|db| db.ingest_chunk(chunk))
+    }
+
+    pub fn ingest_chunks(&self, chunks: &[ChunkInput]) -> Result<()> {
+        self.with_db(|db| db.ingest_chunks(chunks))
+    }
+
+    pub fn ingest_text_chunk(&self, chunk: &TextChunkInput) -> Result<()> {
+        self.with_db(|db| db.ingest_text_chunk(chunk))
+    }
+
+    pub fn ingest_text_chunks(&self, chunks: &[TextChunkInput]) -> Result<()> {
+        self.with_db(|db| db.ingest_text_chunks(chunks))
+    }
+
+    pub fn ingest_document_text(
+        &self,
+        doc_id: impl Into<String>,
+        content: impl AsRef<str>,
+        options: DocumentIngestOptions,
+    ) -> Result<DocumentIngestReport> {
+        let doc_id = doc_id.into();
+        let content = content.as_ref().to_string();
+        self.with_db(|db| db.ingest_document_text(doc_id, &content, options))
+    }
+
+    pub fn update_chunk_embedding(&self, chunk_id: &str, embedding: Vec<f32>) -> Result<()> {
+        self.with_db(|db| db.update_chunk_embedding(chunk_id, embedding))
+    }
+
+    pub fn delete_by_doc_id(&self, doc_id: &str) -> Result<usize> {
+        self.with_db(|db| db.delete_by_doc_id(doc_id))
+    }
+
+    pub fn compact(&self, options: CompactionOptions) -> Result<CompactionReport> {
+        self.with_db(|db| db.compact(options))
+    }
+}
+
 impl SqlRite {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
@@ -814,11 +1043,31 @@ impl SqlRite {
         Ok(count as usize)
     }
 
+    pub fn document_count(&self) -> Result<usize> {
+        let count = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM documents", [], |row| {
+                row.get::<_, i64>(0)
+            })?;
+        Ok(count as usize)
+    }
+
     pub fn integrity_check_ok(&self) -> Result<bool> {
         let result: String = self
             .conn
             .query_row("PRAGMA integrity_check;", [], |row| row.get(0))?;
         Ok(result.eq_ignore_ascii_case("ok"))
+    }
+
+    pub fn diagnostics(&self) -> Result<SqlRiteDiagnostics> {
+        Ok(SqlRiteDiagnostics {
+            chunk_count: self.chunk_count()?,
+            document_count: self.document_count()?,
+            integrity_check_ok: self.integrity_check_ok()?,
+            schema_version: self.schema_version(),
+            vector_index: self.vector_index_stats(),
+            fts_enabled: self.fts_enabled,
+        })
     }
 
     pub fn compact(&self, options: CompactionOptions) -> Result<CompactionReport> {
@@ -923,6 +1172,24 @@ impl SqlRite {
         Ok(deleted)
     }
 
+    pub fn delete_by_doc_id(&self, doc_id: &str) -> Result<usize> {
+        let deleted = self
+            .conn
+            .execute("DELETE FROM chunks WHERE doc_id = ?1", params![doc_id])?;
+        self.conn.execute(
+            "DELETE FROM documents
+             WHERE id = ?1
+             AND NOT EXISTS (SELECT 1 FROM chunks WHERE chunks.doc_id = documents.id)",
+            params![doc_id],
+        )?;
+        if deleted > 0 {
+            self.rebuild_vector_index()?;
+            self.rebuild_filter_index()?;
+            self.persist_vector_index_artifacts_if_enabled()?;
+        }
+        Ok(deleted)
+    }
+
     pub fn list_chunks_page(
         &self,
         offset: usize,
@@ -1017,6 +1284,14 @@ impl SqlRite {
         self.ingest_chunks(std::slice::from_ref(chunk))
     }
 
+    pub fn chunk_text(content: &str, strategy: &ChunkingStrategy) -> Vec<String> {
+        chunk_text_for_ingest(content, strategy)
+    }
+
+    pub fn ingest_text_chunk(&self, chunk: &TextChunkInput) -> Result<()> {
+        self.ingest_text_chunks(std::slice::from_ref(chunk))
+    }
+
     pub fn ingest_chunks(&self, chunks: &[ChunkInput]) -> Result<()> {
         if chunks.is_empty() {
             return Ok(());
@@ -1082,6 +1357,126 @@ impl SqlRite {
         }
 
         self.persist_vector_index_artifacts_if_enabled()?;
+        Ok(())
+    }
+
+    pub fn ingest_text_chunks(&self, chunks: &[TextChunkInput]) -> Result<()> {
+        if chunks.is_empty() {
+            return Ok(());
+        }
+
+        let tx = self.conn.unchecked_transaction()?;
+        {
+            let mut doc_stmt = tx.prepare(DOC_UPSERT_SQL)?;
+            let mut chunk_stmt = tx.prepare(CHUNK_UPSERT_SQL)?;
+
+            for chunk in chunks {
+                let metadata_json = serde_json::to_string(&chunk.metadata)?;
+                doc_stmt.execute(params![chunk.doc_id, chunk.source.as_deref()])?;
+                chunk_stmt.execute(params![
+                    chunk.id,
+                    chunk.doc_id,
+                    chunk.content,
+                    metadata_json,
+                    Vec::<u8>::new(),
+                    0i64
+                ])?;
+            }
+        }
+        tx.commit()?;
+
+        let chunk_keys = self.fetch_chunk_keys_by_ids(
+            &chunks
+                .iter()
+                .map(|chunk| chunk.id.clone())
+                .collect::<Vec<_>>(),
+        )?;
+        {
+            let mut filter_index = self.filter_index.borrow_mut();
+            for chunk in chunks {
+                if let Some(chunk_key) = chunk_keys.get(&chunk.id).copied() {
+                    filter_index.upsert_chunk(chunk_key, &chunk.id, &chunk.doc_id, &chunk.metadata);
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn ingest_document_text(
+        &self,
+        doc_id: impl Into<String>,
+        content: impl AsRef<str>,
+        options: DocumentIngestOptions,
+    ) -> Result<DocumentIngestReport> {
+        let doc_id = doc_id.into();
+        let DocumentIngestOptions {
+            chunking,
+            metadata,
+            source,
+            chunk_id_prefix,
+        } = options;
+        let chunk_bodies = chunk_text_for_ingest(content.as_ref(), &chunking);
+        if chunk_bodies.is_empty() {
+            return Ok(DocumentIngestReport {
+                doc_id,
+                chunk_ids: Vec::new(),
+                chunk_count: 0,
+            });
+        }
+
+        let chunk_prefix = chunk_id_prefix.unwrap_or_else(|| format!("{doc_id}:chunk"));
+        let chunks = chunk_bodies
+            .into_iter()
+            .enumerate()
+            .map(|(idx, body)| {
+                let mut chunk = TextChunkInput::new(format!("{chunk_prefix}-{idx}"), &doc_id, body)
+                    .with_metadata(metadata.clone());
+                if let Some(source) = &source {
+                    chunk = chunk.with_source(source.clone());
+                }
+                chunk
+            })
+            .collect::<Vec<_>>();
+        let chunk_ids = chunks
+            .iter()
+            .map(|chunk| chunk.id.clone())
+            .collect::<Vec<_>>();
+        self.ingest_text_chunks(&chunks)?;
+        Ok(DocumentIngestReport {
+            doc_id,
+            chunk_count: chunk_ids.len(),
+            chunk_ids,
+        })
+    }
+
+    pub fn update_chunk_embedding(&self, chunk_id: &str, embedding: Vec<f32>) -> Result<()> {
+        if embedding.is_empty() {
+            return Err(SqlRiteError::EmptyEmbedding);
+        }
+
+        let chunk_key = self.conn.query_row(
+            "SELECT rowid FROM chunks WHERE id = ?1",
+            params![chunk_id],
+            |row| row.get::<_, i64>(0),
+        )? as ChunkKey;
+        let embedding_dim = embedding.len() as i64;
+        let embedding_blob = encode_embedding(&embedding);
+
+        self.conn.execute(
+            "UPDATE chunks SET embedding = ?1, embedding_dim = ?2 WHERE id = ?3",
+            params![embedding_blob, embedding_dim, chunk_id],
+        )?;
+
+        if let Some(index) = &self.vector_index {
+            index.borrow_mut().upsert_records(&[VectorEntryRecord {
+                chunk_key,
+                chunk_id: chunk_id.to_string(),
+                embedding,
+            }])?;
+            self.persist_vector_index_artifacts_if_enabled()?;
+        }
+
         Ok(())
     }
 
@@ -1640,6 +2035,9 @@ impl SqlRite {
                 let chunk_id: String = row.get(0)?;
                 let embedding_blob: Vec<u8> = row.get(1)?;
                 let embedding_dim: i64 = row.get(2)?;
+                if embedding_dim <= 0 || embedding_blob.is_empty() {
+                    return Ok((chunk_id, Vec::new()));
+                }
                 let embedding =
                     decode_embedding(&embedding_blob, embedding_dim as usize).map_err(|e| {
                         rusqlite::Error::FromSqlConversionFailure(
@@ -1986,15 +2384,6 @@ impl SqlRite {
         Ok(scores)
     }
 
-    fn document_count(&self) -> Result<usize> {
-        let count = self
-            .conn
-            .query_row("SELECT COUNT(*) FROM documents", [], |row| {
-                row.get::<_, i64>(0)
-            })?;
-        Ok(count as usize)
-    }
-
     fn database_file_size_bytes(&self) -> Option<u64> {
         self.db_path
             .as_ref()
@@ -2079,6 +2468,9 @@ impl SqlRite {
             let id: String = row.get(1)?;
             let embedding_blob: Vec<u8> = row.get(2)?;
             let embedding_dim: i64 = row.get(3)?;
+            if embedding_dim <= 0 || embedding_blob.is_empty() {
+                return Ok(None);
+            }
             let embedding =
                 decode_embedding(&embedding_blob, embedding_dim as usize).map_err(|e| {
                     rusqlite::Error::FromSqlConversionFailure(
@@ -2087,16 +2479,18 @@ impl SqlRite {
                         Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
                     )
                 })?;
-            Ok(VectorEntryRecord {
+            Ok(Some(VectorEntryRecord {
                 chunk_key: chunk_key as ChunkKey,
                 chunk_id: id,
                 embedding,
-            })
+            }))
         })?;
 
         let mut batch: Vec<VectorEntryRecord> = Vec::with_capacity(1024);
         for row in rows {
-            batch.push(row?);
+            if let Some(record) = row? {
+                batch.push(record);
+            }
             if batch.len() >= 1024 {
                 index.upsert_records(&batch)?;
                 batch.clear();
@@ -2509,6 +2903,9 @@ fn load_vector_index(
         let id: String = row.get(1)?;
         let embedding_blob: Vec<u8> = row.get(2)?;
         let embedding_dim: i64 = row.get(3)?;
+        if embedding_dim <= 0 || embedding_blob.is_empty() {
+            return Ok(None);
+        }
         let embedding = decode_embedding(&embedding_blob, embedding_dim as usize).map_err(|e| {
             rusqlite::Error::FromSqlConversionFailure(
                 2,
@@ -2516,16 +2913,18 @@ fn load_vector_index(
                 Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
             )
         })?;
-        Ok(VectorEntryRecord {
+        Ok(Some(VectorEntryRecord {
             chunk_key: chunk_key as ChunkKey,
             chunk_id: id,
             embedding,
-        })
+        }))
     })?;
 
     let mut batch: Vec<VectorEntryRecord> = Vec::with_capacity(1024);
     for row in rows {
-        batch.push(row?);
+        if let Some(record) = row? {
+            batch.push(record);
+        }
         if batch.len() >= 1024 {
             index.upsert_records(&batch)?;
             batch.clear();
@@ -4746,6 +5145,104 @@ mod tests {
                     row.get::<_, i64>(0)
                 })? as ChunkKey;
         assert!(filtered.contains(&chunk_key));
+        Ok(())
+    }
+
+    #[test]
+    fn sqlrite_handle_is_send_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<SqlRiteHandle>();
+    }
+
+    #[test]
+    fn text_only_ingest_supports_text_search_and_diagnostics() -> Result<()> {
+        let db = SqlRite::open_in_memory()?;
+        db.ingest_text_chunks(&[
+            TextChunkInput::new("chunk-1", "doc-1", "local agent memory for retrieval")
+                .with_metadata(serde_json::json!({"tenant":"acme"}))
+                .with_source("notes.md"),
+            TextChunkInput::new("chunk-2", "doc-1", "secondary note").with_source("notes.md"),
+        ])?;
+
+        let results = db.search(SearchRequest::text_only("agent memory", 2))?;
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].chunk_id, "chunk-1");
+        assert_eq!(db.chunk_count()?, 2);
+        assert_eq!(db.document_count()?, 1);
+
+        let diagnostics = db.diagnostics()?;
+        assert_eq!(diagnostics.chunk_count, 2);
+        assert_eq!(diagnostics.document_count, 1);
+        assert!(diagnostics.integrity_check_ok);
+        assert_eq!(diagnostics.schema_version, LATEST_SCHEMA_VERSION);
+        Ok(())
+    }
+
+    #[test]
+    fn ingest_document_text_applies_builtin_chunking() -> Result<()> {
+        let db = SqlRite::open_in_memory()?;
+        let report = db.ingest_document_text(
+            "doc-chunked",
+            "abcdefghijABCDEFGHIJ1234567890",
+            DocumentIngestOptions::default().with_chunking(ChunkingStrategy::Fixed {
+                max_chars: 8,
+                overlap_chars: 2,
+            }),
+        )?;
+
+        assert!(report.chunk_count > 1);
+        assert_eq!(report.chunk_count, report.chunk_ids.len());
+        assert_eq!(db.document_count()?, 1);
+        assert_eq!(db.chunk_count()?, report.chunk_count);
+        Ok(())
+    }
+
+    #[test]
+    fn update_chunk_embedding_backfills_vector_search_for_text_only_chunk() -> Result<()> {
+        let db = SqlRite::open_in_memory_with_config(
+            RuntimeConfig::default().with_vector_index_mode(VectorIndexMode::BruteForce),
+        )?;
+        db.ingest_text_chunk(&TextChunkInput::new(
+            "chunk-1",
+            "doc-1",
+            "text only until embeddings arrive",
+        ))?;
+        db.update_chunk_embedding("chunk-1", vec![1.0, 0.0])?;
+
+        let results = db.search(SearchRequest::vector_only(vec![1.0, 0.0], 1))?;
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].chunk_id, "chunk-1");
+        Ok(())
+    }
+
+    #[test]
+    fn delete_by_doc_id_removes_chunks_and_document() -> Result<()> {
+        let db = SqlRite::open_in_memory()?;
+        db.ingest_text_chunks(&[
+            TextChunkInput::new("chunk-1", "doc-1", "alpha"),
+            TextChunkInput::new("chunk-2", "doc-1", "beta"),
+        ])?;
+
+        let deleted = db.delete_by_doc_id("doc-1")?;
+        assert_eq!(deleted, 2);
+        assert_eq!(db.chunk_count()?, 0);
+        assert_eq!(db.document_count()?, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn sqlrite_handle_supports_concurrent_friendly_access_pattern() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let path = temp.path().join("handle.db");
+        let handle = SqlRiteHandle::open(&path)?;
+        handle.ingest_text_chunk(&TextChunkInput::new(
+            "chunk-1",
+            "doc-1",
+            "gateway request handlers need shared access",
+        ))?;
+        let results = handle.search(SearchRequest::text_only("shared access", 1))?;
+        assert_eq!(results.len(), 1);
+        assert_eq!(handle.document_count()?, 1);
         Ok(())
     }
 }
